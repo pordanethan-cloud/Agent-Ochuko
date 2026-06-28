@@ -207,15 +207,16 @@ export const Dashboard: React.FC = () => {
   const handleScroll = () => {
     const container = scrollContainerRef.current
     if (container) {
-      const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60
+      const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100
       isAutoScrollEnabledRef.current = isAtBottom
     }
   }
 
   // Auto-scroll on new content only if user is already at the bottom
   useEffect(() => {
-    if (isAutoScrollEnabledRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = scrollContainerRef.current
+    if (container && isAutoScrollEnabledRef.current) {
+      container.scrollTop = container.scrollHeight
     }
   }, [messages])
 
@@ -237,6 +238,8 @@ export const Dashboard: React.FC = () => {
 
     const userMessage = input.trim()
     setInput('')
+    // Force focus back to input immediately so user can type ahead while streaming
+    setTimeout(() => inputRef.current?.focus(), 0)
 
     // Add user message + empty assistant placeholder immediately — zero perceived latency
     const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }]
