@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe } from 'lucide-react'
+import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -191,6 +191,9 @@ export const Dashboard: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const isAutoScrollEnabledRef = useRef<boolean>(true)
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null)
+  const [editingMessageText, setEditingMessageText] = useState("")
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -232,20 +235,20 @@ export const Dashboard: React.FC = () => {
     } catch (_) {}
   }
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim() || isStreaming) return
+  const triggerStream = async (history: Message[], newUserMessage: string) => {
+    // 1. Abort any active stream before launching a new one
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
 
-    const userMessage = input.trim()
-    setInput('')
-    // Force focus back to input immediately so user can type ahead while streaming
-    setTimeout(() => inputRef.current?.focus(), 0)
-
-    // Add user message + empty assistant placeholder immediately — zero perceived latency
-    const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }]
-    setMessages([...newMessages, { role: 'assistant', content: '' }])
     setIsStreaming(true)
     setWebSearchStatus('idle')
+
+    // Append the new user message and an assistant placeholder
+    const nextMessages: Message[] = [...history, { role: 'user', content: newUserMessage }]
+    setMessages([...nextMessages, { role: 'assistant', content: '' }])
 
     try {
       const session = await supabase.auth.getSession()
@@ -260,8 +263,9 @@ export const Dashboard: React.FC = () => {
         body: JSON.stringify({
           conversation_id: '00000000-0000-0000-0000-000000000000',
           mode,
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
+          messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
+        signal: abortController.signal,
       })
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
@@ -296,6 +300,7 @@ export const Dashboard: React.FC = () => {
               throw new Error(`Agent error: ${data.error}`)
             }
           } catch (err: any) {
+            if (err.name === 'AbortError') return
             // Only re-throw real errors, not JSON parse errors on partial chunks
             if (err.message && !err.message.startsWith('Unexpected') && !err.message.includes('JSON')) {
               throw err
@@ -304,6 +309,7 @@ export const Dashboard: React.FC = () => {
         }
       }
     } catch (err: any) {
+      if (err.name === 'AbortError') return // silently exit
       // Write error into the placeholder bubble
       setMessages((prev) => {
         const updated = [...prev]
@@ -311,11 +317,38 @@ export const Dashboard: React.FC = () => {
         return updated
       })
     } finally {
-      setIsStreaming(false)
-      setWebSearchStatus('idle')
-      // Return focus to input so user can type the next message immediately
-      setTimeout(() => inputRef.current?.focus(), 0)
+      if (abortControllerRef.current === abortController) {
+        setIsStreaming(false)
+        setWebSearchStatus('idle')
+        abortControllerRef.current = null
+        // Return focus to input so user can type the next message immediately
+        setTimeout(() => inputRef.current?.focus(), 0)
+      }
     }
+  }
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!input.trim()) return
+
+    const userMessage = input.trim()
+    setInput('')
+    // Force focus back to input immediately so user can type ahead while streaming
+    setTimeout(() => inputRef.current?.focus(), 0)
+
+    await triggerStream(messages, userMessage)
+  }
+
+  const handleEditSubmit = async (index: number) => {
+    const newText = editingMessageText.trim()
+    if (!newText) return
+
+    setEditingMessageIndex(null)
+    setEditingMessageText("")
+
+    // Truncate messages list up to the edited user message
+    const truncatedHistory = messages.slice(0, index)
+    await triggerStream(truncatedHistory, newText)
   }
 
   return (
@@ -484,11 +517,50 @@ export const Dashboard: React.FC = () => {
                       </button>
                     )}
 
+                    {/* Edit button — user message only, hover reveal */}
+                    {msg.role === 'user' && editingMessageIndex !== i && (
+                      <button
+                        onClick={() => {
+                          setEditingMessageIndex(i)
+                          setEditingMessageText(msg.content)
+                        }}
+                        title="Edit prompt"
+                        className="absolute top-3 right-3 p-1.5 rounded-md border border-[#1e2025] bg-black/40 text-brand-muted opacity-0 group-hover:opacity-100 hover:text-brand-text hover:border-[#c5a880]/25 transition-all duration-200"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    )}
+
                     {/* Content */}
                     {msg.role === 'user' ? (
-                      <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium">
-                        {msg.content}
-                      </p>
+                      editingMessageIndex === i ? (
+                        <div className="space-y-3 pt-1">
+                          <textarea
+                            value={editingMessageText}
+                            onChange={(e) => setEditingMessageText(e.target.value)}
+                            className="w-full bg-[#0d0f11] border border-[#1a1d20] focus:border-[#c5a880]/40 rounded-lg p-3 text-[13.5px] text-brand-text focus:outline-none resize-none font-sans"
+                            rows={Math.max(2, editingMessageText.split('\n').length)}
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              onClick={() => setEditingMessageIndex(null)}
+                              className="px-3 py-1.5 border border-[#1e2025] hover:border-[#252830] hover:bg-white/5 rounded-lg text-[11px] font-semibold text-brand-muted hover:text-brand-text transition duration-150"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleEditSubmit(i)}
+                              className="px-3 py-1.5 bg-[#c5a880] text-[#08090a] hover:bg-[#d4b990] rounded-lg text-[11px] font-bold transition duration-150 shadow-md shadow-[#c5a880]/5"
+                            >
+                              Save & Submit
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium">
+                          {msg.content}
+                        </p>
+                      )
                     ) : msg.content === '' && isStreaming ? (
                       // Typing / searching indicator — appears immediately before first token
                       <div className="flex items-center gap-2 h-6">
@@ -550,23 +622,6 @@ export const Dashboard: React.FC = () => {
               )
             })}
 
-            {/* Divider */}
-            <div className="w-px h-4 bg-[#1e2025] mx-1" />
-
-            {/* Web Search Toggle */}
-            <button
-              type="button"
-              onClick={() => setUseWebSearch((prev) => !prev)}
-              title={useWebSearch ? 'Web search on — click to disable' : 'Enable real-time web search'}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all duration-200 active:scale-95 tracking-widest uppercase ${
-                useWebSearch
-                  ? 'bg-[#c5a880]/10 border-[#c5a880]/50 text-[#c5a880] shadow-md shadow-[#c5a880]/5'
-                  : 'bg-transparent border-[#1a1d20] text-brand-muted hover:border-[#252830] hover:text-brand-text/60'
-              }`}
-            >
-              <Globe className="w-3 h-3" />
-              <span>Web</span>
-            </button>
           </div>
 
           {/* Input */}
