@@ -46,9 +46,17 @@ app = FastAPI(
 )
 
 # CORS Middleware setup
-# We load ALLOWED_ORIGINS dynamically from configuration cache
 origins_str = _CONFIG_CACHE.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")
 origins = [origin.strip() for origin in origins_str.split(",") if origin.strip()]
+
+# Auto-include production deployed storage static website domains
+prod_origins = [
+    "https://agentochukostore.z1.web.core.windows.net",
+    "https://agentochukoadmin.z1.web.core.windows.net"
+]
+for po in prod_origins:
+    if po not in origins:
+        origins.append(po)
 
 app.add_middleware(
     CORSMiddleware,
