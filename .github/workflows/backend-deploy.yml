@@ -60,43 +60,14 @@ jobs:
             --username ${{ secrets.DOCKER_USERNAME }} \
             --password ${{ secrets.DOCKER_PASSWORD }}
 
-      # ── 7. Deploy new image + set all environment variables ───────────
+      # ── 7. Deploy new image (env vars are set once on the Container App
+      #        via az CLI and persist — do not overwrite them here) ────────
       - name: Deploy to Azure Container Apps
         run: |
           az containerapp update \
             --name agent-ochuko-api \
             --resource-group rg-ochuko \
-            --image ${{ steps.tag.outputs.IMAGE }} \
-            --set-env-vars \
-              "ENVIRONMENT=production" \
-              "ALLOWED_ORIGINS=https://agentochukostore.z1.web.core.windows.net,https://agentochukoadmin.z1.web.core.windows.net,http://localhost:5173,http://localhost:3000" \
-              "AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
-              "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" \
-              "AZURE_OPENAI_API_VERSION=${{ secrets.AZURE_OPENAI_API_VERSION }}" \
-              "THINK_MODEL_DEPLOYMENT=${{ secrets.THINK_MODEL_DEPLOYMENT }}" \
-              "SOLVE_MODEL_DEPLOYMENT=${{ secrets.SOLVE_MODEL_DEPLOYMENT }}" \
-              "NANO_MODEL_DEPLOYMENT=${{ secrets.NANO_MODEL_DEPLOYMENT }}" \
-              "COMPACTION_MODEL_DEPLOYMENT=${{ secrets.COMPACTION_MODEL_DEPLOYMENT }}" \
-              "AZURE_SPEECH_KEY=${{ secrets.AZURE_SPEECH_KEY }}" \
-              "AZURE_SPEECH_REGION=${{ secrets.AZURE_SPEECH_REGION }}" \
-              "SPEECH_VOICE_NAME=${{ secrets.SPEECH_VOICE_NAME }}" \
-              "GROQ_API_KEYS=${{ secrets.GROQ_API_KEYS }}" \
-              "HUGGINGFACE_API_KEYS=${{ secrets.HUGGINGFACE_API_KEYS }}" \
-              "HUGGINGFACE_IMAGE_MODEL=${{ secrets.HUGGINGFACE_IMAGE_MODEL }}" \
-              "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=${{ secrets.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT }}" \
-              "AZURE_DOCUMENT_INTELLIGENCE_KEY=${{ secrets.AZURE_DOCUMENT_INTELLIGENCE_KEY }}" \
-              "AZURE_VISION_ENDPOINT=${{ secrets.AZURE_VISION_ENDPOINT }}" \
-              "AZURE_VISION_KEY=${{ secrets.AZURE_VISION_KEY }}" \
-              "AZURE_STORAGE_ACCOUNT_NAME=${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
-              "AZURE_STORAGE_CONNECTION_STRING=${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
-              "AZURE_QUEUE_NAME=${{ secrets.AZURE_QUEUE_NAME }}" \
-              "AZURE_APP_CONFIG_CONNECTION_STRING=${{ secrets.AZURE_APP_CONFIG_CONNECTION_STRING }}" \
-              "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" \
-              "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" \
-              "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-              "SUPABASE_JWT_SECRET=${{ secrets.SUPABASE_JWT_SECRET }}" \
-              "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" \
-              "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}"
+            --image ${{ steps.tag.outputs.IMAGE }}
 
       # ── 8. Health check — wait for new revision to be healthy ──────────
       - name: Wait for health check
