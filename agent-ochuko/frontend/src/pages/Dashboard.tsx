@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check } from 'lucide-react'
+import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -186,12 +186,19 @@ export const Dashboard: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isSidebarHovered, setIsSidebarHovered] = useState(false)
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
+  const [webSearchStatus, setWebSearchStatus] = useState<'idle' | 'searching' | 'done'>('idle')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) setUserEmail(user.email || 'User')
     })
+  }, [])
+
+  // Auto-focus input on mount
+  useEffect(() => {
+    inputRef.current?.focus()
   }, [])
 
   // Auto-scroll on new content
@@ -222,6 +229,7 @@ export const Dashboard: React.FC = () => {
     const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }]
     setMessages([...newMessages, { role: 'assistant', content: '' }])
     setIsStreaming(true)
+    setWebSearchStatus('idle')
 
     try {
       const session = await supabase.auth.getSession()
@@ -266,6 +274,8 @@ export const Dashboard: React.FC = () => {
                 updated[updated.length - 1] = { role: 'assistant', content: accumulatedText }
                 return updated
               })
+            } else if (data.type === 'web_search_status') {
+              setWebSearchStatus(data.status === 'searching' ? 'searching' : 'done')
             } else if (data.type === 'error') {
               throw new Error(`Agent error: ${data.error}`)
             }
@@ -286,6 +296,9 @@ export const Dashboard: React.FC = () => {
       })
     } finally {
       setIsStreaming(false)
+      setWebSearchStatus('idle')
+      // Return focus to input so user can type the next message immediately
+      setTimeout(() => inputRef.current?.focus(), 0)
     }
   }
 
@@ -458,15 +471,24 @@ export const Dashboard: React.FC = () => {
                         {msg.content}
                       </p>
                     ) : msg.content === '' && isStreaming ? (
-                      // Typing indicator — appears immediately before first token
-                      <div className="flex items-center gap-1.5 h-6 py-1">
-                        {[0, 150, 300].map((delay, d) => (
-                          <span
-                            key={d}
-                            className="w-1.5 h-1.5 rounded-full bg-[#c5a880]/50 animate-bounce"
-                            style={{ animationDelay: `${delay}ms`, animationDuration: '900ms' }}
-                          />
-                        ))}
+                      // Typing / searching indicator — appears immediately before first token
+                      <div className="flex items-center gap-2 h-6">
+                        {webSearchStatus === 'searching' ? (
+                          <>
+                            <Globe className="w-3.5 h-3.5 text-[#c5a880] animate-pulse" />
+                            <span className="text-[11px] text-[#c5a880]/70 font-semibold tracking-wide">
+                              Searching the web...
+                            </span>
+                          </>
+                        ) : (
+                          [0, 150, 300].map((delay, d) => (
+                            <span
+                              key={d}
+                              className="w-1.5 h-1.5 rounded-full bg-[#c5a880]/50 animate-bounce"
+                              style={{ animationDelay: `${delay}ms`, animationDuration: '900ms' }}
+                            />
+                          ))
+                        )}
                       </div>
                     ) : (
                       // Rendered markdown
@@ -484,8 +506,8 @@ export const Dashboard: React.FC = () => {
 
         {/* Input area */}
         <div className="shrink-0 px-5 md:px-10 pb-6 pt-3 border-t border-[#141618] bg-gradient-to-t from-brand-bg to-transparent relative z-10">
-          {/* Mode selector */}
-          <div className="max-w-2xl mx-auto mb-3 flex gap-1.5">
+          {/* Mode selector + Web Search toggle */}
+          <div className="max-w-2xl mx-auto mb-3 flex gap-1.5 items-center">
             {([
               { id: 'think', label: 'Think', icon: Brain },
               { id: 'solve', label: 'Solve', icon: Cpu },
@@ -508,17 +530,35 @@ export const Dashboard: React.FC = () => {
                 </button>
               )
             })}
+
+            {/* Divider */}
+            <div className="w-px h-4 bg-[#1e2025] mx-1" />
+
+            {/* Web Search Toggle */}
+            <button
+              type="button"
+              onClick={() => setUseWebSearch((prev) => !prev)}
+              title={useWebSearch ? 'Web search on — click to disable' : 'Enable real-time web search'}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all duration-200 active:scale-95 tracking-widest uppercase ${
+                useWebSearch
+                  ? 'bg-[#c5a880]/10 border-[#c5a880]/50 text-[#c5a880] shadow-md shadow-[#c5a880]/5'
+                  : 'bg-transparent border-[#1a1d20] text-brand-muted hover:border-[#252830] hover:text-brand-text/60'
+              }`}
+            >
+              <Globe className="w-3 h-3" />
+              <span>Web</span>
+            </button>
           </div>
 
           {/* Input */}
           <form onSubmit={handleSend} className="max-w-2xl mx-auto relative">
             <input
+              ref={inputRef}
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Submit an inquiry..."
-              disabled={isStreaming}
-              className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150 disabled:opacity-40"
+              className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150"
             />
             <button
               type="submit"

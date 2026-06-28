@@ -13,6 +13,15 @@ from openai import AsyncAzureOpenAI
 logger = logging.getLogger("app.api.v1.endpoints.chat")
 router = APIRouter()
 
+# Hard rule prepended to every system prompt at the API level.
+# This is the canonical no-emoji enforcement — applied regardless of what
+# App Configuration or default prompts say.
+_NO_EMOJI_RULE = (
+    "ABSOLUTE RULE: Never use emojis in any response, under any circumstance, "
+    "even if the user explicitly asks for one. Respond as Ochuko — precise, calm, "
+    "and emoji-free at all times. "
+)
+
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
 _openai_client: Optional[AsyncAzureOpenAI] = None
 
@@ -65,6 +74,7 @@ async def chat_stream_generator(
 
     Emits SSE events:
       - routing_info:        model deployment and routing mode metadata
+      - web_search_status:   "searching" when web search starts, "done" when complete
       - content_block_delta: incremental text chunk
       - response_id:         the response ID to persist and pass on next turn
       - [DONE]:              stream termination signal
@@ -83,19 +93,24 @@ async def chat_stream_generator(
     )
 
     try:
+        # Prepend the absolute no-emoji rule to every system prompt
+        full_system = _NO_EMOJI_RULE + system_prompt
+
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
+            # Web search is always available — model decides via tool_choice:auto
+            "tools": [{"type": "web_search_preview"}],
+            "tool_choice": "auto",
         }
 
         if previous_response_id:
             # Stateful multi-turn: Azure holds full history — send only the new message
             stream_kwargs["previous_response_id"] = previous_response_id
-            # Extract the last user message only
             user_messages = [m for m in messages if m.get("role") == "user"]
             stream_kwargs["input"] = user_messages[-1:] if user_messages else messages
         else:
             # First turn or fresh conversation: prepend system prompt + full input list
-            input_list = [{"role": "system", "content": system_prompt}] + messages
+            input_list = [{"role": "system", "content": full_system}] + messages
             stream_kwargs["input"] = input_list
 
         async with client.responses.stream(**stream_kwargs) as stream:
@@ -105,6 +120,23 @@ async def chat_stream_generator(
                     yield (
                         "data: "
                         + json.dumps({"type": "content_block_delta", "delta": {"text": event.delta}})
+                        + "\n\n"
+                    )
+
+                # Web search lifecycle events → forward status to frontend
+                elif event.type in (
+                    "response.web_search_call.in_progress",
+                    "response.web_search_call.searching",
+                ):
+                    yield (
+                        "data: "
+                        + json.dumps({"type": "web_search_status", "status": "searching"})
+                        + "\n\n"
+                    )
+                elif event.type == "response.web_search_call.completed":
+                    yield (
+                        "data: "
+                        + json.dumps({"type": "web_search_status", "status": "done"})
                         + "\n\n"
                     )
 
