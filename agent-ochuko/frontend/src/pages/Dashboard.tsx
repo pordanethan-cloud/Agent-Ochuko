@@ -189,6 +189,8 @@ export const Dashboard: React.FC = () => {
   const [webSearchStatus, setWebSearchStatus] = useState<'idle' | 'searching' | 'done'>('idle')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const isAutoScrollEnabledRef = useRef<boolean>(true)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -201,9 +203,20 @@ export const Dashboard: React.FC = () => {
     inputRef.current?.focus()
   }, [])
 
-  // Auto-scroll on new content
+  // Check scroll position to determine if we should stay locked to the bottom
+  const handleScroll = () => {
+    const container = scrollContainerRef.current
+    if (container) {
+      const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60
+      isAutoScrollEnabledRef.current = isAtBottom
+    }
+  }
+
+  // Auto-scroll on new content only if user is already at the bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (isAutoScrollEnabledRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages])
 
   const handleSignOut = async () => {
@@ -397,8 +410,11 @@ export const Dashboard: React.FC = () => {
         {/* Ambient glow */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[300px] bg-[#c5a880]/[0.012] rounded-full blur-[200px] pointer-events-none" />
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto py-8 px-5 md:px-10 relative z-10">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto py-8 px-5 md:px-10 relative z-10"
+        >
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center max-w-lg mx-auto text-center space-y-7">
               <div className="w-16 h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
