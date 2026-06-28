@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, User } from 'lucide-react'
+import { LogOut, Send } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -25,84 +25,6 @@ export const Dashboard: React.FC = () => {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
-  }
-
-  const runTestScaffold = async () => {
-    if (isStreaming) return
-    
-    // Add user test message
-    const newMessages: Message[] = [...messages, { role: 'user', content: '__test_scaffold__' }]
-    setMessages(newMessages)
-    setIsStreaming(true)
-
-    try {
-      const session = await supabase.auth.getSession()
-      const token = session.data.session?.access_token
-
-      const response = await fetch(`${API_BASE}/v1/responses/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          conversation_id: '00000000-0000-0000-0000-000000000000',
-          mode: 'discuss',
-          messages: [{ role: 'user', content: '__test_scaffold__' }]
-        })
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const reader = response.body?.getReader()
-      const decoder = new TextDecoder()
-      if (!reader) throw new Error('No body reader available')
-
-      // Add empty assistant message to append stream to
-      setMessages((prev) => [...prev, { role: 'assistant', content: '' }])
-
-      let accumulatedText = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n')
-        
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6).trim()
-            if (dataStr === '[DONE]') continue
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.type === 'content_block_delta') {
-                const text = data.delta.text
-                accumulatedText += text
-                // Update last assistant message
-                setMessages((prev) => {
-                  const updated = [...prev]
-                  if (updated.length > 0) {
-                    updated[updated.length - 1] = {
-                      role: 'assistant',
-                      content: accumulatedText
-                    }
-                  }
-                  return updated
-                })
-              }
-            } catch (err) {
-              // Parse error on incomplete chunks, ignore
-            }
-          }
-        }
-      }
-    } catch (err: any) {
-      setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
-    } finally {
-      setIsStreaming(false)
-    }
   }
 
   const handleSend = async (e: React.FormEvent) => {
@@ -188,12 +110,12 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="flex h-screen bg-brand-bg text-brand-text font-sans antialiased overflow-hidden">
       
-      {/* Sidebar - High Altitude Warm Gray */}
+      {/* Sidebar */}
       <aside className="w-64 bg-brand-surface/40 border-r border-brand-border flex flex-col justify-between p-4 z-10 backdrop-blur-md">
         <div>
           <div className="flex items-center gap-3 px-2 py-3 mb-6">
             <div className="w-8 h-8 flex items-center justify-center rounded-lg overflow-hidden border border-brand-border/60">
-              <img src="/favicon.png" alt="Agent Ochuko Logo" className="w-full h-full object-cover" />
+              <img src="/favicon.png" alt="Agent Ochuko" className="w-full h-full object-cover" fetchPriority="high" />
             </div>
             <span className="font-medium tracking-wide">Agent Ochuko</span>
           </div>
@@ -209,8 +131,8 @@ export const Dashboard: React.FC = () => {
         {/* User profile footer */}
         <div className="border-t border-brand-border/60 pt-4 space-y-3">
           <div className="flex items-center gap-3 px-2">
-            <div className="w-8 h-8 bg-brand-card border border-brand-border flex items-center justify-center rounded-full text-brand-muted">
-              <User className="w-4 h-4" />
+            <div className="w-8 h-8 bg-brand-card border border-brand-border flex items-center justify-center rounded-full overflow-hidden">
+              <img src="/favicon.png" alt="User" className="w-full h-full object-cover" />
             </div>
             <span className="text-xs text-brand-muted truncate max-w-[140px]">{userEmail}</span>
           </div>
@@ -233,22 +155,15 @@ export const Dashboard: React.FC = () => {
         <div className="flex-1 overflow-y-auto p-6 md:p-12 space-y-6 relative z-10">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center max-w-lg mx-auto text-center space-y-6 mt-16 md:mt-24">
-              <div className="w-16 h-16 bg-brand-surface border border-brand-border rounded-2xl flex items-center justify-center text-brand-accent shadow-xl overflow-hidden">
-                <img src="/favicon.png" alt="Agent Ochuko" className="w-full h-full object-cover" />
+              <div className="w-16 h-16 bg-brand-surface border border-brand-border rounded-2xl flex items-center justify-center shadow-xl overflow-hidden">
+                <img src="/favicon.png" alt="Agent Ochuko" className="w-full h-full object-cover" fetchPriority="high" />
               </div>
               <div className="space-y-2">
-                <h2 className="text-2xl font-medium tracking-tight">Agent Ochuko Scaffold</h2>
+                <h2 className="text-2xl font-medium tracking-tight">Agent Ochuko</h2>
                 <p className="text-sm text-brand-muted leading-relaxed">
-                  Your secure environment is ready. Click the test button to run the endpoint verification smoke test.
+                  Your secure AI assistant is ready. Ask me anything.
                 </p>
               </div>
-              <button
-                onClick={runTestScaffold}
-                disabled={isStreaming}
-                className="h-10 px-5 bg-brand-surface border border-brand-border hover:border-brand-accent/50 hover:bg-brand-surface/80 text-brand-accent text-sm font-medium rounded-lg transition duration-150 active:scale-[0.98]"
-              >
-                Run Smoke Test
-              </button>
             </div>
           ) : (
             <div className="max-w-3xl mx-auto space-y-6">
@@ -261,14 +176,8 @@ export const Dashboard: React.FC = () => {
                       : 'bg-brand-card/50 border-brand-border mr-12'
                   }`}
                 >
-                  <div className={`w-8 h-8 rounded-lg border border-brand-border flex items-center justify-center shrink-0 overflow-hidden ${
-                    msg.role === 'user' ? 'bg-brand-card text-brand-muted' : ''
-                  }`}>
-                    {msg.role === 'user' ? (
-                      <User className="w-4 h-4" />
-                    ) : (
-                      <img src="/favicon.png" alt="Agent Ochuko" className="w-full h-full object-cover" />
-                    )}
+                  <div className="w-8 h-8 rounded-lg border border-brand-border flex items-center justify-center shrink-0 overflow-hidden">
+                    <img src="/favicon.png" alt="Agent Ochuko" className="w-full h-full object-cover" />
                   </div>
                   <div className="text-sm leading-relaxed whitespace-pre-wrap flex-1 self-center text-brand-text/95">
                     {msg.content}
