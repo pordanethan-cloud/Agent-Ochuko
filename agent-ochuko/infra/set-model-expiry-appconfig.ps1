@@ -40,21 +40,25 @@ param (
     [string]$Label = "production",
 
     # ── THINK model (gpt-5.4) ─────────────────────────────────────────────────
-    # Find expiry in Azure AI Foundry → Deployments → gpt-5.4 → Expiry date
-    [string]$ThinkExpiry   = "YYYY-MM-DD",
-    [string]$ThinkFallback = "gpt-5.4-fallback",
+    # Retirement: Mar 5, 2027 (source: Azure AI Foundry → Deployments → gpt-5.4)
+    # Fallback: update this to whatever replacement model you deploy before expiry
+    [string]$ThinkExpiry   = "2027-03-05",
+    [string]$ThinkFallback = "gpt-5.4",
 
     # ── SOLVE model (gpt-5.4-mini) ────────────────────────────────────────────
-    [string]$SolveExpiry   = "YYYY-MM-DD",
-    [string]$SolveFallback = "gpt-5.4-mini-fallback",
+    # Retirement: Mar 18, 2027 (source: Azure AI Foundry → Deployments → gpt-5.4-mini)
+    [string]$SolveExpiry   = "2027-03-18",
+    [string]$SolveFallback = "gpt-5.4-mini",
 
     # ── NANO / DISCUSS model (gpt-5.4-nano) ───────────────────────────────────
-    [string]$NanoExpiry    = "YYYY-MM-DD",
-    [string]$NanoFallback  = "gpt-5.4-nano-fallback",
+    # Retirement: Mar 18, 2027 (source: Azure AI Foundry → Deployments → gpt-5.4-nano)
+    [string]$NanoExpiry    = "2027-03-18",
+    [string]$NanoFallback  = "gpt-5.4-nano",
 
     # ── COMPACTION model (o4-mini) ────────────────────────────────────────────
-    [string]$CompactionExpiry    = "YYYY-MM-DD",
-    [string]$CompactionFallback  = "o4-mini-fallback"
+    # Retirement: Oct 16, 2026 — SOONEST EXPIRY, monitor will alert ~30 days before
+    [string]$CompactionExpiry    = "2026-10-16",
+    [string]$CompactionFallback  = "o4-mini"
 )
 
 Set-StrictMode -Version Latest
@@ -74,6 +78,14 @@ foreach ($d in $allExpiries) {
         }
         break
     }
+}
+
+# ── Warn if o4-mini expiry is within 120 days ──────────────────────────────────
+$compactionDate = [datetime]::ParseExact($CompactionExpiry, "yyyy-MM-dd", $null)
+$daysToCompaction = ($compactionDate - (Get-Date)).Days
+if ($daysToCompaction -le 120) {
+    Write-Warning "NOTICE: o4-mini (COMPACTION) retires in $daysToCompaction days ($CompactionExpiry)."
+    Write-Warning "Deploy a replacement model in Azure AI Foundry and update -CompactionFallback before then."
 }
 
 # ── Check az CLI is available ─────────────────────────────────────────────────
