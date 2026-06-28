@@ -92,13 +92,19 @@ export const Dashboard: React.FC = () => {
                   return updated
                 })
               } else if (data.type === 'error') {
-                throw new Error(data.error)
+                // Re-throw so the outer catch can display the error
+                throw new Error(`Agent error: ${data.error}`)
               }
-            } catch (err) {
-              // Parse error on incomplete chunks, ignore
+            } catch (err: any) {
+              // Only re-throw real errors (not JSON parse errors on partial chunks)
+              if (err.message && !err.message.includes('JSON')) {
+                throw err
+              }
+              // Otherwise: parse error on incomplete SSE chunk, ignore and continue
             }
           }
         }
+
       }
     } catch (err: any) {
       setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
