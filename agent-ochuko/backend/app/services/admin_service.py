@@ -29,10 +29,11 @@ def list_users(page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
     current_period = datetime.now(timezone.utc).strftime("%Y-%m")
     current_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    # Query profiles using existing columns (display_name instead of full_name, omit email)
     response = (
         db.table("profiles")
         .select(
-            "id, email, full_name, role, is_active, created_at, last_seen, google_sub, "
+            "id, display_name, role, is_active, created_at, last_seen, google_sub, "
             "token_budgets(tokens_used, budget_limit, period), "
             "agent_quotas(ocr_pages_used, vision_calls_used, speech_seconds_used, image_gen_used, period)"
         )
@@ -41,8 +42,35 @@ def list_users(page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
         .execute()
     )
 
+    # Fetch auth users to resolve emails
+    auth_users_res = []
+    try:
+        auth_users_res = db.auth.admin.list_users()
+    except Exception as e:
+        logger.error("Failed to list auth users in admin_service: %s", e)
+
+    email_map = {}
+    users_list = []
+    if isinstance(auth_users_res, list):
+        users_list = auth_users_res
+    elif hasattr(auth_users_res, "users"):
+        users_list = auth_users_res.users
+    elif auth_users_res:
+        users_list = getattr(auth_users_res, "data", [])
+
+    for u in users_list:
+        uid = getattr(u, "id", None) or u.get("id")
+        email = getattr(u, "email", None) or u.get("email")
+        if uid and email:
+            email_map[uid] = email
+
     users = response.data or []
     for u in users:
+        # Resolve email
+        u["email"] = email_map.get(u["id"]) or "unknown@domain.com"
+        # Map display_name to full_name for the admin UI
+        u["full_name"] = u.get("display_name") or u["email"].split("@")[0]
+
         # Sum agent calls for the current month period (YYYY-MM)
         quotas = u.get("agent_quotas") or []
         current_quota = next((q for q in quotas if q.get("period") == current_period), None)
@@ -77,12 +105,22 @@ def get_user(user_id: str) -> Optional[Dict[str, Any]]:
     db = get_supabase_admin()
     response = (
         db.table("profiles")
-        .select("id, email, full_name, role, is_active, google_sub, created_at, last_seen")
+        .select("id, display_name, role, is_active, google_sub, created_at, last_seen")
         .eq("id", user_id)
         .maybe_single()
         .execute()
     )
-    return response.data
+    u = response.data
+    if u:
+        try:
+            auth_user = db.auth.admin.get_user_by_id(user_id)
+            user_obj = getattr(auth_user, "user", auth_user)
+            u["email"] = getattr(user_obj, "email", None) or user_obj.get("email") or "unknown@domain.com"
+        except Exception as e:
+            logger.error("Failed to get auth user by id: %s", e)
+            u["email"] = "unknown@domain.com"
+        u["full_name"] = u.get("display_name") or u["email"].split("@")[0]
+    return u
 
 
 def block_user(user_id: str, google_sub: str, admin_id: str) -> None:

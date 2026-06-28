@@ -502,35 +502,6 @@ export const Dashboard: React.FC = () => {
                         : 'bg-[#0c0e10]/90 border-[#1a1d20] shadow-lg shadow-black/30'
                     }`}
                   >
-                    {/* Copy button — assistant only, hover reveal */}
-                    {msg.role === 'assistant' && msg.content.length > 0 && (
-                      <button
-                        onClick={() => handleCopy(msg.content, i)}
-                        title="Copy response"
-                        className="absolute top-3 right-3 p-1.5 rounded-md border border-[#1e2025] bg-black/40 text-brand-muted opacity-0 group-hover:opacity-100 hover:text-brand-text hover:border-[#c5a880]/25 transition-all duration-200"
-                      >
-                        {copiedIndex === i ? (
-                          <Check className="w-3 h-3 text-[#c5a880]" />
-                        ) : (
-                          <Copy className="w-3 h-3" />
-                        )}
-                      </button>
-                    )}
-
-                    {/* Edit button — user message only, hover reveal */}
-                    {msg.role === 'user' && editingMessageIndex !== i && (
-                      <button
-                        onClick={() => {
-                          setEditingMessageIndex(i)
-                          setEditingMessageText(msg.content)
-                        }}
-                        title="Edit prompt"
-                        className="absolute top-3 right-3 p-1.5 rounded-md border border-[#1e2025] bg-black/40 text-brand-muted opacity-0 group-hover:opacity-100 hover:text-brand-text hover:border-[#c5a880]/25 transition-all duration-200"
-                      >
-                        <Pencil className="w-3 h-3" />
-                      </button>
-                    )}
-
                     {/* Content */}
                     {msg.role === 'user' ? (
                       editingMessageIndex === i ? (
@@ -585,6 +556,45 @@ export const Dashboard: React.FC = () => {
                       // Rendered markdown
                       <div className="space-y-0.5">
                         {renderMarkdown(msg.content)}
+                      </div>
+                    )}
+
+                    {/* Actions Row at the bottom of the bubble, visible on hover */}
+                    {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (
+                      <div className="flex justify-end items-center mt-3 pt-2 border-t border-[#1a1d20]/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        {msg.role === 'assistant' && msg.content.length > 0 && (
+                          <button
+                            onClick={() => handleCopy(msg.content, i)}
+                            title="Copy response"
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#1e2025] bg-black/40 text-[10px] font-bold text-brand-muted hover:text-brand-text hover:border-[#c5a880]/25 transition duration-150 tracking-wide uppercase"
+                          >
+                            {copiedIndex === i ? (
+                              <>
+                                <Check className="w-3 h-3 text-[#c5a880]" />
+                                <span className="text-[#c5a880]">Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+
+                        {msg.role === 'user' && editingMessageIndex !== i && (
+                          <button
+                            onClick={() => {
+                              setEditingMessageIndex(i)
+                              setEditingMessageText(msg.content)
+                            }}
+                            title="Edit prompt"
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#1e2025] bg-black/40 text-[10px] font-bold text-brand-muted hover:text-brand-text hover:border-[#c5a880]/25 transition duration-150 tracking-wide uppercase"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
