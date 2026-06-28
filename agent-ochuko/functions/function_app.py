@@ -325,16 +325,16 @@ def conversation_summarizer(myTimer: func.TimerRequest) -> None:
                     content = m.get("content") or ""
                     text_history += f"{role.upper()}: {content}\n"
                 
-                # Generate summary
+                # Generate summary via Azure OpenAI Responses API (ADR-002)
                 logger.info(f"Requesting summary for conversation {conv_id} using model {compaction_model}...")
-                chat_res = openai_client.chat.completions.create(
+                response = openai_client.responses.create(
                     model=compaction_model,
-                    messages=[
+                    input=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": text_history}
                     ]
                 )
-                summary_content = chat_res.choices[0].message.content
+                summary_content = response.output_text
                 
                 # 3. DB Transaction Logic (Atomic inserts/updates)
                 # a. Insert system summary message
