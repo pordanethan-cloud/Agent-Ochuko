@@ -36,15 +36,27 @@ function AuthCallback() {
 
   useEffect(() => {
     // Exchange hash fragment tokens for a proper session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) {
         navigate("/", { replace: true });
         return;
       }
-      const role =
+      let role =
         session.user.app_metadata?.role ||
         session.user.user_metadata?.role;
-      if (ADMIN_ROLES.has(role)) {
+      
+      if (!role || !ADMIN_ROLES.has(role)) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+        if (data?.role) {
+          role = data.role;
+        }
+      }
+
+      if (role && ADMIN_ROLES.has(role)) {
         navigate("/users", { replace: true });
       } else {
         navigate("/not-authorized", { replace: true });
@@ -69,23 +81,45 @@ export default function App() {
         setAuthState("unauthenticated");
         return;
       }
-      const role =
+      let role =
         session.user.app_metadata?.role ||
         session.user.user_metadata?.role;
-      setAuthState(ADMIN_ROLES.has(role) ? "authorized" : "unauthorized");
+      
+      if (!role || !ADMIN_ROLES.has(role)) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+        if (data?.role) {
+          role = data.role;
+        }
+      }
+      setAuthState(role && ADMIN_ROLES.has(role) ? "authorized" : "unauthorized");
     };
 
     checkSession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!session) {
         setAuthState("unauthenticated");
         return;
       }
-      const role =
+      let role =
         session.user.app_metadata?.role ||
         session.user.user_metadata?.role;
-      setAuthState(ADMIN_ROLES.has(role) ? "authorized" : "unauthorized");
+      
+      if (!role || !ADMIN_ROLES.has(role)) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+        if (data?.role) {
+          role = data.role;
+        }
+      }
+      setAuthState(role && ADMIN_ROLES.has(role) ? "authorized" : "unauthorized");
     });
 
     return () => subscription.unsubscribe();
