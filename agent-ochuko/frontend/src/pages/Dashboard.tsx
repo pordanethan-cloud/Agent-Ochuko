@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, User, Sparkles } from 'lucide-react'
+import { LogOut, Send, User } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
