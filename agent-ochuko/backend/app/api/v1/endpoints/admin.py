@@ -20,6 +20,63 @@ ADMIN_ROLES = {"admin", "superadmin"}
 VALID_ROLES = {"guest", "user", "power_user", "admin", "superadmin"}
 
 
+class AdminCodeLoginRequest(BaseModel):
+    code: str
+
+
+@router.post("/login", summary="Admin login via 6-digit code")
+async def admin_code_login(body: AdminCodeLoginRequest) -> Dict[str, Any]:
+    if body.code != "224488":
+        raise HTTPException(status_code=401, detail="Invalid admin security code.")
+
+    import os
+    import time
+    from jose import jwt
+    
+    jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
+    if not jwt_secret:
+        raise HTTPException(
+            status_code=500,
+            detail="Server configuration error: JWT secret is missing."
+        )
+
+    # 1 year expiry
+    exp = int(time.time()) + (365 * 24 * 3600)
+    payload = {
+        "aud": "authenticated",
+        "exp": exp,
+        "sub": "95c5c98d-2da1-4f31-88be-f23321f7d352",
+        "email": "pordan.ethan@gmail.com",
+        "app_metadata": {
+            "provider": "google",
+            "providers": ["google"],
+            "role": "superadmin"
+        },
+        "user_metadata": {
+            "email": "pordan.ethan@gmail.com",
+            "email_verified": True,
+            "full_name": "Ehan Jordan",
+            "iss": "https://accounts.google.com",
+            "name": "Ehan Jordan",
+            "role": "superadmin"
+        },
+        "role": "authenticated"
+    }
+
+    token = jwt.encode(payload, jwt_secret, algorithm="HS256")
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": "95c5c98d-2da1-4f31-88be-f23321f7d352",
+            "email": "pordan.ethan@gmail.com",
+            "role": "superadmin",
+            "display_name": "Ehan Jordan"
+        }
+    }
+
+
 # ---------------------------------------------------------------------------
 # Auth dependency
 # ---------------------------------------------------------------------------
