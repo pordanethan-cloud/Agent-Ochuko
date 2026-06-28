@@ -494,79 +494,82 @@ export const Dashboard: React.FC = () => {
                     />
                   </div>
 
-                  {/* Bubble */}
-                  <div
-                    className={`flex-1 relative rounded-xl px-5 py-4 border min-w-0 ${
-                      msg.role === 'user'
-                        ? 'bg-[#0f1113]/60 border-[#1e2025]/80'
-                        : 'bg-[#0c0e10]/90 border-[#1a1d20] shadow-lg shadow-black/30'
-                    }`}
-                  >
-                    {/* Content */}
-                    {msg.role === 'user' ? (
-                      editingMessageIndex === i ? (
-                        <div className="space-y-3 pt-1">
-                          <textarea
-                            value={editingMessageText}
-                            onChange={(e) => setEditingMessageText(e.target.value)}
-                            className="w-full bg-[#0d0f11] border border-[#1a1d20] focus:border-[#c5a880]/40 rounded-lg p-3 text-[13.5px] text-brand-text focus:outline-none resize-none font-sans"
-                            rows={Math.max(2, editingMessageText.split('\n').length)}
-                          />
-                          <div className="flex gap-2 justify-end">
-                            <button
-                              onClick={() => setEditingMessageIndex(null)}
-                              className="px-3 py-1.5 border border-[#1e2025] hover:border-[#252830] hover:bg-white/5 rounded-lg text-[11px] font-semibold text-brand-muted hover:text-brand-text transition duration-150"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              onClick={() => handleEditSubmit(i)}
-                              className="px-3 py-1.5 bg-[#c5a880] text-[#08090a] hover:bg-[#d4b990] rounded-lg text-[11px] font-bold transition duration-150 shadow-md shadow-[#c5a880]/5"
-                            >
-                              Save & Submit
-                            </button>
+                  {/* Right side container: Bubble + Actions */}
+                  <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                    {/* Bubble */}
+                    <div
+                      className={`relative rounded-xl px-5 py-4 border min-w-0 ${
+                        msg.role === 'user'
+                          ? 'bg-[#0f1113]/60 border-[#1e2025]/80'
+                          : 'bg-[#0c0e10]/90 border-[#1a1d20] shadow-lg shadow-black/30'
+                      }`}
+                    >
+                      {/* Content */}
+                      {msg.role === 'user' ? (
+                        editingMessageIndex === i ? (
+                          <div className="space-y-3 pt-1">
+                            <textarea
+                              value={editingMessageText}
+                              onChange={(e) => setEditingMessageText(e.target.value)}
+                              className="w-full bg-[#0d0f11] border border-[#1a1d20] focus:border-[#c5a880]/40 rounded-lg p-3 text-[13.5px] text-brand-text focus:outline-none resize-none font-sans"
+                              rows={Math.max(2, editingMessageText.split('\n').length)}
+                            />
+                            <div className="flex gap-2 justify-end">
+                              <button
+                                onClick={() => setEditingMessageIndex(null)}
+                                className="px-3 py-1.5 border border-[#1e2025] hover:border-[#252830] hover:bg-white/5 rounded-lg text-[11px] font-semibold text-brand-muted hover:text-brand-text transition duration-150"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => handleEditSubmit(i)}
+                                className="px-3 py-1.5 bg-[#c5a880] text-[#08090a] hover:bg-[#d4b990] rounded-lg text-[11px] font-bold transition duration-150 shadow-md shadow-[#c5a880]/5"
+                              >
+                                Save & Submit
+                              </button>
+                            </div>
                           </div>
+                        ) : (
+                          <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium">
+                            {msg.content}
+                          </p>
+                        )
+                      ) : msg.content === '' && isStreaming ? (
+                        // Typing / searching indicator — appears immediately before first token
+                        <div className="flex items-center gap-2 h-6">
+                          {webSearchStatus === 'searching' ? (
+                            <>
+                              <Globe className="w-3.5 h-3.5 text-[#c5a880] animate-pulse" />
+                              <span className="text-[11px] text-[#c5a880]/70 font-semibold tracking-wide">
+                                Searching the web...
+                              </span>
+                            </>
+                          ) : (
+                            [0, 150, 300].map((delay, d) => (
+                              <span
+                                key={d}
+                                className="w-1.5 h-1.5 rounded-full bg-[#c5a880]/50 animate-bounce"
+                                style={{ animationDelay: `${delay}ms`, animationDuration: '900ms' }}
+                              />
+                            ))
+                          )}
                         </div>
                       ) : (
-                        <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium">
-                          {msg.content}
-                        </p>
-                      )
-                    ) : msg.content === '' && isStreaming ? (
-                      // Typing / searching indicator — appears immediately before first token
-                      <div className="flex items-center gap-2 h-6">
-                        {webSearchStatus === 'searching' ? (
-                          <>
-                            <Globe className="w-3.5 h-3.5 text-[#c5a880] animate-pulse" />
-                            <span className="text-[11px] text-[#c5a880]/70 font-semibold tracking-wide">
-                              Searching the web...
-                            </span>
-                          </>
-                        ) : (
-                          [0, 150, 300].map((delay, d) => (
-                            <span
-                              key={d}
-                              className="w-1.5 h-1.5 rounded-full bg-[#c5a880]/50 animate-bounce"
-                              style={{ animationDelay: `${delay}ms`, animationDuration: '900ms' }}
-                            />
-                          ))
-                        )}
-                      </div>
-                    ) : (
-                      // Rendered markdown
-                      <div className="space-y-0.5">
-                        {renderMarkdown(msg.content)}
-                      </div>
-                    )}
+                        // Rendered markdown
+                        <div className="space-y-0.5">
+                          {renderMarkdown(msg.content)}
+                        </div>
+                      )}
+                    </div>
 
-                    {/* Actions Row at the bottom of the bubble, visible on hover */}
+                    {/* Actions Row at the bottom (outside the bubble), visible on hover */}
                     {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (
-                      <div className="flex justify-end items-center mt-3 pt-2 border-t border-[#1a1d20]/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      <div className="flex items-center gap-3.5 pl-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                         {msg.role === 'assistant' && msg.content.length > 0 && (
                           <button
                             onClick={() => handleCopy(msg.content, i)}
                             title="Copy response"
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#1e2025] bg-black/40 text-[10px] font-bold text-brand-muted hover:text-brand-text hover:border-[#c5a880]/25 transition duration-150 tracking-wide uppercase"
+                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
                           >
                             {copiedIndex === i ? (
                               <>
@@ -589,7 +592,7 @@ export const Dashboard: React.FC = () => {
                               setEditingMessageText(msg.content)
                             }}
                             title="Edit prompt"
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#1e2025] bg-black/40 text-[10px] font-bold text-brand-muted hover:text-brand-text hover:border-[#c5a880]/25 transition duration-150 tracking-wide uppercase"
+                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
                           >
                             <Pencil className="w-3 h-3" />
                             <span>Edit</span>
