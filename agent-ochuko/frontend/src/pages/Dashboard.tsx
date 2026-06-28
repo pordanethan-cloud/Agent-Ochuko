@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send } from 'lucide-react'
+import { LogOut, Send, Brain, Cpu, MessageSquare } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -14,6 +14,7 @@ export const Dashboard: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
+  const [mode, setMode] = useState<'think' | 'solve' | 'discuss'>('discuss')
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -49,7 +50,7 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           conversation_id: '00000000-0000-0000-0000-000000000000',
-          mode: 'discuss',
+          mode: mode,
           messages: newMessages.map(m => ({ role: m.role, content: m.content }))
         })
       })
@@ -196,6 +197,32 @@ export const Dashboard: React.FC = () => {
 
         {/* Input Bar */}
         <div className="p-4 md:p-6 bg-gradient-to-t from-brand-bg via-brand-bg to-transparent relative z-10">
+          <div className="max-w-3xl mx-auto mb-3 flex gap-2 justify-center md:justify-start">
+            {[
+              { id: 'think', label: 'Think Mode', desc: 'Deep reasoning (GPT-5.4)', icon: Brain },
+              { id: 'solve', label: 'Solve Mode', desc: 'Precision logic (Mini)', icon: Cpu },
+              { id: 'discuss', label: 'Discuss Mode', desc: 'Conversational (Nano)', icon: MessageSquare },
+            ].map((m) => {
+              const Icon = m.icon
+              const isActive = mode === m.id
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setMode(m.id as 'think' | 'solve' | 'discuss')}
+                  title={m.desc}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-200 ${
+                    isActive
+                      ? 'bg-brand-accent/15 border-brand-accent text-brand-accent shadow-sm shadow-brand-accent/5'
+                      : 'bg-brand-surface/30 border-brand-border/60 text-brand-muted hover:border-brand-border hover:text-brand-text'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{m.label}</span>
+                </button>
+              )
+            })}
+          </div>
           <form onSubmit={handleSend} className="max-w-3xl mx-auto relative flex items-center">
             <input
               type="text"
