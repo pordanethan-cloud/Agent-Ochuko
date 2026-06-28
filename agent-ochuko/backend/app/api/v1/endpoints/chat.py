@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from app.core.jwt_validator import verify_jwt
 from app.core.config import get_config
+from app.core import model_router
 from openai import AsyncAzureOpenAI
 
 logger = logging.getLogger("app.api.v1.endpoints.chat")
@@ -50,6 +51,8 @@ async def mock_stream_generator():
 async def chat_stream_generator(
     messages: List[Dict[str, Any]],
     deployment: str,
+    system_prompt: str,
+    routing_mode: str,
     previous_response_id: Optional[str] = None,
 ):
     """
@@ -61,11 +64,24 @@ async def chat_stream_generator(
     message needs to be sent (no full message history resend).
 
     Emits SSE events:
+      - routing_info:        model deployment and routing mode metadata
       - content_block_delta: incremental text chunk
       - response_id:         the response ID to persist and pass on next turn
       - [DONE]:              stream termination signal
     """
     client = get_openai_client()
+
+    # Emit routing metadata so frontend knows which model was used
+    yield (
+        "data: "
+        + json.dumps({
+            "type": "routing_info",
+            "deployment": deployment,
+            "routing_mode": routing_mode,
+        })
+        + "\n\n"
+    )
+
     try:
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
@@ -78,8 +94,9 @@ async def chat_stream_generator(
             user_messages = [m for m in messages if m.get("role") == "user"]
             stream_kwargs["input"] = user_messages[-1:] if user_messages else messages
         else:
-            # First turn or fresh conversation: send full input list
-            stream_kwargs["input"] = messages
+            # First turn or fresh conversation: prepend system prompt + full input list
+            input_list = [{"role": "system", "content": system_prompt}] + messages
+            stream_kwargs["input"] = input_list
 
         async with client.responses.stream(**stream_kwargs) as stream:
             async for event in stream:
@@ -118,20 +135,18 @@ async def stream_chat(
     Streams chat completion responses using Server-Sent Events (SSE).
 
     Payload fields:
-      - messages (list):           Full message history (used on first turn or if no previous_response_id)
-      - previous_response_id (str, optional): Response ID from last turn — enables stateful
-                                               multi-turn without resending full history (ADR-002)
-      - conversation_id (str):     Used for quota/audit tracking
-      - model (str, optional):     Ignored here — deployment resolved by model_router (Phase 7)
+      - messages (list):              Full message history
+      - mode (str):                   "think", "solve", or "discuss" (default: "think")
+      - conversation_id (str):        For nano turn tracking and audit
+      - previous_response_id (str):   Response ID from last turn (stateful multi-turn)
     """
     messages = payload.get("messages", [])
+    mode = payload.get("mode", "think")
+    conversation_id: Optional[str] = payload.get("conversation_id")
     previous_response_id: Optional[str] = payload.get("previous_response_id")
 
     if not messages:
         raise HTTPException(status_code=400, detail="Messages list cannot be empty.")
-
-    # Default to DISCUSS mode deployment (gpt-5.4-nano) until model_router is wired in Phase 7
-    think_deployment = await get_config("THINK_MODEL_DEPLOYMENT", "gpt-5.4")
 
     # If user asks for test, return mock stream
     if messages[-1].get("content") == "__test_scaffold__":
@@ -140,8 +155,45 @@ async def stream_chat(
             media_type="text/event-stream"
         )
 
+    # Extract the latest user message text for routing analysis
+    last_user_msg = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            last_user_msg = m.get("content", "")
+            break
+
+    # Get nano turn count for this conversation (if tracked)
+    nano_turn_count = 0
+    # TODO: Fetch from Supabase conversations.nano_turn_count when
+    # Supabase service client is wired in (Phase 7 middleware)
+
+    # Route through the model router
+    decision = await model_router.route(
+        user_message=last_user_msg,
+        mode=mode,
+        conversation_id=conversation_id,
+        nano_turn_count=nano_turn_count,
+    )
+
+    logger.info(
+        f"ModelRouter decision: mode={decision.routing_mode}, "
+        f"deployment={decision.deployment}, "
+        f"reason={decision.routing_reason}"
+    )
+
+    # If nano interceptor fired, increment the turn counter
+    # TODO: Call Supabase RPC increment_nano_turns(conversation_id)
+    # when Supabase service client is wired in
+
     # Stream from Azure OpenAI Responses API
     return StreamingResponse(
-        chat_stream_generator(messages, think_deployment, previous_response_id),
+        chat_stream_generator(
+            messages,
+            decision.deployment,
+            decision.system_prompt,
+            decision.routing_mode,
+            previous_response_id,
+        ),
         media_type="text/event-stream"
     )
+

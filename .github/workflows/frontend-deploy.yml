@@ -1,0 +1,68 @@
+name: Deploy Frontend (Chat)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent-ochuko/frontend/**"
+      - ".github/workflows/frontend-deploy.yml"
+
+jobs:
+  deploy:
+    name: Build and Deploy Frontend Static Website
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Node.js ──────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: agent-ochuko/frontend/package-lock.json
+
+      # ── 3. Install dependencies ────────────────────────────────────────
+      - name: Install dependencies
+        working-directory: ./agent-ochuko/frontend
+        run: npm ci
+
+      # ── 4. Build ───────────────────────────────────────────────────────
+      - name: Build
+        working-directory: ./agent-ochuko/frontend
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+
+      # ── 5. Log in to Azure ─────────────────────────────────────────────
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── 6. Retrieve storage account key dynamically ────────────────────
+      - name: Get Storage Account Key
+        id: storage
+        run: |
+          KEY=$(az storage account keys list \
+            --resource-group rg-ochuko \
+            --account-name agentochukostore \
+            --query "[0].value" \
+            --output tsv)
+          echo "::add-mask::$KEY"
+          echo "key=$KEY" >> $GITHUB_OUTPUT
+
+      # ── 7. Deploy dist/ directly to $web container ─────────────────────
+      - name: Upload static website files
+        run: |
+          az storage blob upload-batch \
+            --account-name agentochukostore \
+            --account-key ${{ steps.storage.outputs.key }} \
+            --source agent-ochuko/frontend/dist \
+            --destination '$web' \
+            --overwrite true
