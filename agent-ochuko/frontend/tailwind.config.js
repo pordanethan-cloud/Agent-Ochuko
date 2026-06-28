@@ -10,13 +10,13 @@ export default {
       colors: {
         // High-altitude warm dark theme colors
         brand: {
-          bg: "#0b0c0e",         // Grounded deep carbon background
-          surface: "#141619",    // Warm slate surface
-          card: "#1b1d22",       // Warm charcoal card base
-          border: "#282b31",     // Clean muted border
-          accent: "#c084fc",     // Muted lavender accent (calm, warm)
-          text: "#f3f4f6",       // Crisp off-white primary text
-          muted: "#9ca3af",      // Muted slate secondary text
+          bg: "#08090a",         // Deep carbon obsidian
+          surface: "#0f1113",    // Refined slate surface
+          card: "#16181b",       // Dark charcoal base
+          border: "#202328",     // Premium low-contrast border
+          accent: "#c5a880",     // Muted gold/bronze (signals competence)
+          text: "#f3f4f6",       // Clean soft white
+          muted: "#8e95a2",      // Warm muted silver
         }
       },
       fontFamily: {
