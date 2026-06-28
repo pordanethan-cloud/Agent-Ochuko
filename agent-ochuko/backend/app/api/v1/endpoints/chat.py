@@ -16,11 +16,7 @@ router = APIRouter()
 # Hard rule prepended to every system prompt at the API level.
 # This is the canonical no-emoji enforcement — applied regardless of what
 # App Configuration or default prompts say.
-_NO_EMOJI_RULE = (
-    "ABSOLUTE RULE: Never use emojis in any response, under any circumstance, "
-    "even if the user explicitly asks for one. Respond as Ochuko — precise, calm, "
-    "and emoji-free at all times. "
-)
+_NO_EMOJI_RULE = "No emojis. "
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
 _openai_client: Optional[AsyncAzureOpenAI] = None
