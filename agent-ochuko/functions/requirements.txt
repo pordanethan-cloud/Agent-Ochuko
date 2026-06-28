@@ -1,0 +1,6 @@
+azure-functions
+supabase>=2.4.0
+azure-appconfiguration>=1.6.0
+azure-identity>=1.17.0
+openai>=1.35.0
+python-dotenv>=1.0.1

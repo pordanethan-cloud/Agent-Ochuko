@@ -1,0 +1,588 @@
+# Agent Ochuko — Build Roadmap (Post Phase 4)
+
+> **Prerequisite**: Phases 0–4 are complete. You have: Azure infra provisioned, FastAPI backend with full middleware stack, React chat UI with streaming, Google OAuth, full RBAC/ABAC/ReBAC security model, all agent workers (OCR, Vision, Speech, Image Gen, File Gen) processing via Azure Queue Storage, and Supabase Realtime pushing results to the frontend.
+
+---
+
+## Phase 5 — Admin Dashboard
+**Duration**: 3–4 days | **Depends on**: Phase 3 (RBAC roles), Phase 1 (FastAPI admin routes)
+
+### 5.1 — Scaffold & Auth Gate (Day 1)
+- [ ] Init separate React + Vite project in `admin/`
+- [ ] Configure Vite for Azure Static Web App deployment target (`agent-ochuko-admin`)
+- [ ] Implement admin login — reuse Supabase Google OAuth, but enforce `role IN ('admin', 'superadmin')` on load
+- [ ] Redirect non-admin JWTs to a "Not Authorized" page — no silent fail
+- [ ] Create `api.ts` client that injects admin JWT into all `/v1/admin/*` calls
+- [ ] Wire up base layout: sidebar nav (Users, Usage, Budgets, Settings, Audit Log)
+
+### 5.2 — Users Page (Day 1–2)
+- [ ] `GET /v1/admin/users` — table with columns: name, email, role, tokens used today, agent calls this month, status, last seen
+- [ ] Search bar — filters by name or email client-side
+- [ ] Role badge (color-coded: guest/user/power_user/admin/superadmin)
+- [ ] Action buttons per row:
+  - **Block** → `PATCH /v1/admin/users/{id}/block` — writes to `blocked_identities` by `google_sub`
+  - **Suspend** → sets `profiles.is_active = false` (reversible)
+  - **Activate** → sets `profiles.is_active = true`
+  - **Change Role** → dropdown, writes to `profiles.role`
+- [ ] Confirmation modal before block/suspend actions
+- [ ] Real-time user count widget: `{current_registered} / {registration_limit}`
+
+### 5.3 — Usage Page (Day 2)
+- [ ] Token consumption chart — per user, per model, per day (line chart, last 30 days)
+- [ ] Agent calls chart — per type (OCR, Vision, Speech, Image Gen, File Gen), per month (bar chart)
+- [ ] Top 5 users by token consumption table
+- [ ] Data source: `usage_aggregation` materialized by the Phase 6 cron (until then, query `messages` and `agent_quotas` directly)
+
+### 5.4 — Budgets Page (Day 2–3)
+- [ ] Global default daily token budget input → writes to `admin_settings.global_daily_token_budget`
+- [ ] Per-user budget override table: select user → set custom `token_budgets.budget_limit`
+- [ ] Show current usage vs limit as a progress bar per user
+- [ ] Agent quota limits display (OCR pages, vision calls, speech seconds, image gen) — read from `admin_settings`
+
+### 5.5 — Settings Page (Day 3)
+- [ ] **Registration Cap** — number input → `admin_settings.registration_limit`
+- [ ] **Registration Open** — toggle → `admin_settings.registration_open`
+- [ ] **Maintenance Mode** — toggle → `admin_settings.maintenance_mode` (shows warning: "All non-admin requests will return 503")
+- [ ] **Active Model Override** — text inputs for `THINK_MODEL_DEPLOYMENT`, `SOLVE_MODEL_DEPLOYMENT`, `NANO_MODEL_DEPLOYMENT` → writes to Azure App Configuration via admin endpoint
+- [ ] **Max File Size** — number input → `admin_settings.max_file_size_mb`
+- [ ] All changes require confirmation click, show success/error toast
+
+### 5.6 — Audit Log Page (Day 3–4)
+- [ ] `GET /v1/admin/audit` — paginated, sortable table
+- [ ] Columns: timestamp, user, action, resource type, policy decision (ALLOW/DENY), IP, user agent
+- [ ] Filters: by action type, by user, by date range, by decision (ALLOW/DENY)
+- [ ] Expandable row detail: full `metadata` JSONB (model used, response_id, tokens, job_id)
+- [ ] Export to CSV button
+
+### 5.7 — Deploy Admin Dashboard
+- [ ] Build and deploy to Azure Static Web App (`agent-ochuko-admin`)
+- [ ] Verify CORS: admin SWA origin added to FastAPI `ALLOWED_ORIGINS`
+- [ ] Smoke test every page with superadmin JWT
+
+**✅ Milestone**: Full admin control plane live. Owner can manage users, set budgets, block users, toggle maintenance, view audit trail — all from a web UI.
+
+---
+
+## Phase 6 — Azure Functions Crons
+**Duration**: 2–3 days | **Depends on**: Phase 4 (Function App deployed), Phase 3 (token_budgets + agent_quotas tables)
+
+Picking up from Phase 6.1:
+
+---
+
+### 6.1 — Daily Token Budget Reset (Day 1)
+- [ ] `token_quota_reset` — Timer Trigger: `0 0 * * *` (midnight UTC)
+- [ ] Logic: creates new `token_budgets` rows for `CURRENT_DATE` for all active users — does NOT delete old rows (they're historical data for the Usage page)
+- [ ] Uses `ensure_budget_row()` RPC — inserts with `budget_limit` pulled from `admin_settings.global_daily_token_budget`, or the per-user override if one exists
+- [ ] Edge case: if a user has a custom `budget_limit` override set by admin on the Budgets page, preserve that override — don't reset it to the global default
+- [ ] Logs to Application Insights: `{event: "token_reset", users_reset: N, timestamp: ...}`
+- [ ] Verification: after midnight UTC, query `token_budgets WHERE period = CURRENT_DATE` — every active user should have a fresh row with `tokens_used = 0`
+
+### 6.2 — Monthly Agent Quota Reset (Day 1)
+- [ ] `agent_quota_reset` — Timer Trigger: `0 0 1 * *` (1st of every month, midnight UTC)
+- [ ] Logic: inserts new `agent_quotas` row for each active user with `period = 'YYYY-MM'` format, all counters at 0
+- [ ] Old period rows are kept for historical reporting
+- [ ] Logs: `{event: "agent_quota_reset", period: "2026-07", users_reset: N}`
+- [ ] Verification: on the 1st, confirm `agent_quotas WHERE period = '2026-07'` exists for all active users with zeroed counters
+
+### 6.3 — Hourly Usage Aggregation (Day 1–2)
+- [ ] `usage_aggregation` — Timer Trigger: `0 * * * *` (top of every hour)
+- [ ] Purpose: materializes pre-computed stats so the Admin Dashboard Usage page doesn't run expensive aggregate queries against `messages` and `jobs` on every page load
+- [ ] Creates/updates a `usage_stats` table (or writes to a `usage_snapshots` table):
+  ```
+  usage_stats:
+    period_hour    TIMESTAMPTZ   — truncated to hour
+    user_id        UUID
+    model          TEXT          — deployment name (gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, o4-mini)
+    tokens_in      BIGINT        — SUM(tokens_input) for that hour
+    tokens_out     BIGINT        — SUM(tokens_output) for that hour
+    request_count  INT           — COUNT of messages
+    agent_type     TEXT          — NULL for chat, 'ocr'/'vision'/etc for agents
+    agent_calls    INT           — COUNT of completed jobs by type
+  ```
+- [ ] Query: aggregates from `messages` and `jobs` WHERE `created_at >= last_run AND created_at < now()`
+- [ ] Idempotent: uses `ON CONFLICT (period_hour, user_id, model, agent_type) DO UPDATE` — safe to re-run
+- [ ] RLS: only `is_admin()` can SELECT from `usage_stats`
+- [ ] Verification: after 1 hour of usage, query `usage_stats` — should have rows matching the chat and agent activity
+
+### 6.4 — Conversation Archiver (Day 2)
+- [ ] `conversation_archiver` — Timer Trigger: `0 2 * * *` (2am daily UTC)
+- [ ] Logic: `UPDATE conversations SET is_archived = TRUE WHERE updated_at < now() - INTERVAL '90 days' AND is_archived = FALSE`
+- [ ] Archived conversations remain in the database and are still queryable — they are simply deprioritized in the sidebar (frontend filters `is_archived = FALSE` by default, with a "Show archived" toggle)
+- [ ] Does NOT delete any data — this is a soft archive only
+- [ ] Logs: `{event: "conversations_archived", count: N, oldest_archived: "2026-03-27"}`
+- [ ] Verification: create a test conversation with `updated_at` manually set to 91 days ago → run archiver → confirm `is_archived = TRUE`
+
+### 6.5 — Model Expiry Monitor (Day 2)
+- [ ] `model_expiry_monitor` — Timer Trigger: `0 9 * * *` (9am daily UTC)
+- [ ] Reads from Azure App Configuration:
+  - `THINK_MODEL_DEPLOYMENT` + `THINK_MODEL_EXPIRY_DATE`
+  - `SOLVE_MODEL_DEPLOYMENT` + `SOLVE_MODEL_EXPIRY_DATE`
+  - `NANO_MODEL_DEPLOYMENT` + `NANO_MODEL_EXPIRY_DATE`
+  - `COMPACTION_MODEL_DEPLOYMENT` + `COMPACTION_MODEL_EXPIRY_DATE`
+- [ ] For each deployment:
+  - **≤ 30 days to expiry** → log WARNING to Application Insights + send alert (email or webhook to admin)
+  - **≤ 7 days to expiry** → log CRITICAL + send urgent alert
+  - **Expired (past date)** → auto-swap to fallback deployment name stored in `{MODE}_FALLBACK_DEPLOYMENT` App Config key → log `{event: "model_auto_swap", from: "gpt-5.4", to: "gpt-5.4-fallback"}`
+- [ ] After any auto-swap: update the primary deployment key in Azure App Configuration so FastAPI reads the new value on next request — zero downtime, zero redeploy
+- [ ] Verification: set a test `THINK_MODEL_EXPIRY_DATE` to yesterday → run monitor → confirm auto-swap occurred and App Config updated
+
+### 6.6 — Conversation Summarizer / Chat Compaction (Day 2–3)
+- [ ] `conversation_summarizer` — Timer Trigger: `0 3 * * *` (3am daily UTC)
+- [ ] Query: `SELECT id FROM conversations WHERE message_count > {COMPACTION_THRESHOLD} AND (last_compacted_at IS NULL OR last_compacted_at < now() - INTERVAL '7 days')`
+- [ ] For each qualifying conversation:
+  1. Fetch all messages WHERE `is_archived_msg = FALSE` ordered by `created_at ASC`
+  2. If count < `COMPACTION_THRESHOLD` (default 50) → skip (message_count may be stale)
+  3. Take oldest 60% of messages → format as structured text
+  4. Call GPT-o4-mini (`COMPACTION_MODEL_DEPLOYMENT`) via Azure OpenAI Responses API:
+     - System prompt: "Summarize this conversation history concisely. Preserve: all decisions made, key facts, user preferences, ongoing tasks, and any code or data shared. Output as structured paragraphs. Be thorough but compact."
+  5. Insert a new `[SUMMARY]` message: `role = 'system'`, `is_summary = TRUE`, `is_archived_msg = FALSE`, `routing_mode = 'summary'`
+  6. Mark the old messages: `UPDATE messages SET is_archived_msg = TRUE WHERE id IN (...oldest 60%...)`
+  7. Update conversation: `last_compacted_at = now()`
+- [ ] Safeguards:
+  - Max 20 conversations processed per run (prevent timeout on Function consumption plan — 10 minute max execution)
+  - If GPT-o4-mini call fails, skip that conversation, log error, move to next
+  - Never delete messages — only set `is_archived_msg = TRUE`
+- [ ] Logs: `{event: "compaction", conversation_id: "...", messages_archived: 30, summary_tokens: 450}`
+- [ ] Verification: seed a conversation with 60+ messages → run summarizer → confirm summary message exists, old messages have `is_archived_msg = TRUE`, frontend LLM context query returns only summary + recent messages, frontend scroll still shows all messages
+
+### 6.7 — Deploy & Validate All Crons
+- [ ] Deploy all 6 timer-triggered functions to `agent-ochuko-functions` Function App
+- [ ] Verify each function appears in Azure Portal → Function App → Functions list
+- [ ] Verify timer triggers are registered in Azure Portal → Function App → App files → `host.json`
+- [ ] Manually trigger each function from Azure Portal "Test/Run" to confirm end-to-end
+- [ ] Check Application Insights for all log entries from each cron
+
+**✅ Milestone**: All background automation running. Token budgets reset daily, agent quotas reset monthly, usage stats materialized hourly, stale conversations archived, model deployments monitored for expiry, and long conversations compacted by GPT-o4-mini — all without any manual intervention or code changes.
+
+---
+
+## Phase 7 — Production Hardening
+**Duration**: 3–5 days | **Depends on**: All previous phases complete and functional
+
+### 7.1 — Observability & Structured Logging (Day 1)
+- [ ] Integrate `opencensus-ext-azure` or `azure-monitor-opentelemetry` into FastAPI
+- [ ] Every request logs a structured trace: `{request_id, user_id, method, path, status_code, latency_ms, model_used, tokens_in, tokens_out}`
+- [ ] Every exception logs full stack trace + request context to Application Insights Exceptions table
+- [ ] Custom metrics to Application Insights:
+  - `chat.stream.ttft_ms` — time to first token (P50, P95, P99)
+  - `chat.stream.total_ms` — total stream duration
+  - `agent.job.duration_ms` — by agent type
+  - `agent.job.failure_rate` — by agent type
+  - `budget.utilization_pct` — per user, per day
+  - `model_router.decision` — count by mode (think/solve/discuss/nano)
+- [ ] Azure Function workers: same structured logging pattern, each job logs `{job_id, type, status, duration_ms, error}`
+- [ ] Set up Application Insights Alerts:
+  - **Error rate > 5% over 5 minutes** → email admin
+  - **P95 TTFT > 3 seconds** → email admin
+  - **Any cron function fails** → email admin
+  - **Budget utilization > 80% globally** → email admin
+
+### 7.2 — Health Check & Readiness (Day 1)
+- [ ] `GET /health` — returns `200 OK` with:
+  ```json
+  {
+    "status": "healthy",
+    "version": "1.0.0",
+    "commit": "abc1234",
+    "checks": {
+      "supabase": "ok",
+      "azure_openai": "ok",
+      "azure_queue": "ok",
+      "azure_app_config": "ok",
+      "azure_blob": "ok"
+    }
+  }
+  ```
+- [ ] Each check: lightweight ping/HEAD — timeout 2 seconds per service, mark "degraded" if any fail
+- [ ] If Supabase OR Azure OpenAI is down → return `503` with degraded status
+- [ ] Azure Container Apps uses `/health` as the **liveness probe** (restart if unhealthy for 3 consecutive checks)
+- [ ] Add a separate `GET /ready` — returns 200 only if `load_config()` has completed and Supabase client is initialized (used as **readiness probe** — Container Apps won't route traffic until ready)
+
+### 7.3 — CI/CD Pipelines (Day 1–2)
+- [ ] **Backend pipeline** (`.github/workflows/backend-deploy.yml`):
+  1. Trigger: push to `main` with changes in `backend/**`
+  2. Run `pytest` (unit tests) — fail pipeline if any test fails
+  3. Run `ruff check` (linting) + `ruff format --check` (formatting)
+  4. Build Docker image, tag with `git SHA`
+  5. Push to Azure Container Registry
+  6. Deploy to Azure Container Apps with revision suffix = git SHA
+  7. Wait for health check to pass on new revision
+  8. If health check fails → auto-rollback to previous revision
+- [ ] **Frontend pipeline** (`.github/workflows/frontend-deploy.yml`):
+  1. Trigger: push to `main` with changes in `frontend/**`
+  2. `npm ci` → `npm run build` → `npm run lint`
+  3. Deploy `dist/` to Azure Static Web App (Chat)
+- [ ] **Admin pipeline** (`.github/workflows/admin-deploy.yml`):
+  1. Same as frontend but deploys to Azure Static Web App (Admin)
+- [ ] **Functions pipeline** (`.github/workflows/functions-deploy.yml`):
+  1. Trigger: push to `main` with changes in `functions/**`
+  2. Run function-specific unit tests
+  3. Deploy to Azure Function App using `func azure functionapp publish`
+- [ ] All pipelines use GitHub Secrets for: `AZURE_CREDENTIALS`, `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`, `SWA_DEPLOYMENT_TOKEN_CHAT`, `SWA_DEPLOYMENT_TOKEN_ADMIN`
+
+### 7.4 — Container Deployment Strategy (Day 2)
+- [ ] **Blue/green (revision-based)** on Azure Container Apps:
+  - New revision deployed with 0% traffic initially
+  - Health check passes → shift 100% traffic to new revision
+  - Old revision kept for 1 hour as instant rollback target
+  - If health check fails → new revision deactivated, old revision keeps serving
+- [ ] Set Container App scaling:
+  - Min replicas: 1 (always warm — no cold start for users)
+  - Max replicas: 3 (handle burst traffic from concurrent users)
+  - Scale rule: HTTP concurrent requests > 20 per replica → scale out
+- [ ] Resource limits: 0.5 vCPU, 1 GB RAM per replica (upgrade from Phase 0's 0.25 vCPU if needed based on load test results)
+
+### 7.5 — Security Hardening Review (Day 2–3)
+- [ ] **RLS policy audit**: for every table, test with 5 role-specific JWTs (guest, user, power_user, admin, superadmin):
+  - `guest` can ONLY read shared conversations and their messages — nothing else
+  - `user` can ONLY read/write their own conversations, messages, jobs
+  - `user` CANNOT read another user's data even with a hand-crafted query
+  - `admin` can read all data, manage users, but CANNOT modify `audit_log`
+  - `superadmin` has full admin access + can modify App Configuration via admin endpoints
+- [ ] **JWT validation hardening**:
+  - Verify `iss` (issuer) matches Supabase project URL
+  - Verify `aud` (audience) is correct
+  - Verify `exp` is not in the past
+  - Reject tokens signed with `none` algorithm (JWT alg confusion attack)
+  - Cache JWKS keys for 1 hour, refresh on miss
+- [ ] **CORS strict audit**:
+  - `ALLOWED_ORIGINS` contains ONLY: `https://agent-ochuko.azurestaticapps.net` (chat), `https://agent-ochuko-admin.azurestaticapps.net` (admin), `http://localhost:5173` (dev)
+  - No wildcard `*` — ever
+  - `allow_credentials = True` — required for JWT cookie flow
+- [ ] **Rate limiting** (if not already in Phase 3):
+  - Per-IP: 100 requests/minute (prevent scraping/abuse)
+  - Per-user: 30 streaming requests/minute (prevent token burning)
+  - Implementation: `slowapi` or custom middleware using in-memory sliding window (or Redis if scaling > 1 replica — use Azure Cache for Redis Basic C0 if needed)
+- [ ] **File upload security**:
+  - Validate MIME type server-side before generating presigned URL
+  - Max file size enforced: `admin_settings.max_file_size_mb` (default 10MB)
+  - Blob container access: `uploads` = private (presigned URL only), `generated` = private, `exports` = private
+  - No executable file types allowed (`.exe`, `.sh`, `.bat`, `.cmd`, `.ps1`, `.js`)
+- [ ] **Headers hardening** on FastAPI:
+  - `X-Content-Type-Options: nosniff`
+  - `X-Frame-Options: DENY`
+  - `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+  - `Content-Security-Policy: default-src 'self'` (on frontend via SWA config)
+- [ ] **Dependency audit**: run `pip audit` on `requirements.txt` — resolve any CVEs before production
+
+### 7.6 — Load Testing (Day 3–4)
+- [ ] Tool: `locust` or `k6` — script simulates realistic user behavior
+- [ ] **Test scenario 1 — Concurrent streaming** (primary):
+  - 50 virtual users, each sends 1 chat message every 30 seconds
+  - Measure: TTFT (P50, P95, P99), total stream time, error rate
+  - Pass criteria: P95 TTFT < 2 seconds, error rate < 1%
+- [ ] **Test scenario 2 — Agent burst**:
+  - 20 virtual users, each submits 1 OCR job simultaneously
+  - Measure: time from 202 response to job `status = 'done'`
+  - Pass criteria: 95% of jobs complete within 30 seconds
+- [ ] **Test scenario 3 — Budget exhaustion under load**:
+  - 10 users hit their daily token budget simultaneously mid-stream
+  - Verify: stream terminates gracefully with 429, no partial writes, no double-deduction
+- [ ] **Test scenario 4 — Mixed load**:
+  - 30 chat users + 10 agent users + 5 admin dashboard users concurrently
+  - Measure: no cross-contamination (user A never sees user B's data), no RLS bypass under load
+- [ ] Document results in `docs/05_load_test_results.md`: latency distributions, throughput, failure modes, bottleneck analysis
+- [ ] If bottlenecks found: tune Container App replica count, adjust vCPU/RAM, optimize slow Supabase queries (check `pg_stat_statements`)
+
+### 7.7 — Final Cost Validation (Day 4)
+- [ ] Run the full system for 48 hours with simulated usage (10–20 active test accounts)
+- [ ] Check Azure Cost Management:
+  - Azure OpenAI: total token spend — project monthly at 100 users
+  - Container Apps: vCPU-seconds and memory-seconds consumed
+  - Functions: total executions
+  - Storage: blob size + queue transactions
+  - All other services: confirm free tier not exceeded
+- [ ] Compare against the cost analysis table in Section 14 of the implementation plan
+- [ ] If monthly projection exceeds $12: identify the cost driver, adjust token budgets or agent quotas accordingly
+- [ ] Document in `docs/06_cost_validation.md`
+
+### 7.8 — Error Handling & Graceful Degradation (Day 4–5)
+- [ ] **Azure OpenAI down**: FastAPI returns `503 Service Temporarily Unavailable` with `Retry-After: 30` header — frontend shows "AI service is temporarily unavailable, please try again shortly"
+- [ ] **Supabase down**: health check marks degraded — existing streams can complete (in-flight), new requests get 503
+- [ ] **Azure Queue down**: agent endpoints return 503 instead of silently failing — frontend shows clear error
+- [ ] **Hugging Face all keys exhausted**: `image_gen_worker` writes `status = 'failed'` with error "Image generation temporarily unavailable" — frontend shows human-readable message, not stack trace
+- [ ] **Groq Whisper down**: `speech_stt_worker` falls back to Azure Speech STT (if configured) or fails gracefully
+- [ ] **Frontend SSE stream breaks mid-response**: `useStream.ts` implements auto-reconnect — if stream drops, show partial response with "(Response interrupted — click to retry)" button
+- [ ] **Supabase Realtime drops**: `useJob.ts` implements fallback polling — if no Realtime update received within 15 seconds for a pending job, poll `GET /v1/jobs/{id}` every 10 seconds
+- [ ] All error responses follow a consistent JSON shape:
+  ```json
+  {
+    "error": {
+      "code": "BUDGET_EXHAUSTED",
+      "message": "Daily token budget exhausted. Resets at midnight UTC.",
+      "retry_after": 3600
+    }
+  }
+  ```
+
+**✅ Milestone**: System is production-grade. Observable, tested under load, secured at every layer, cost-validated, CI/CD automated, graceful under failure. Ready for real users.
+
+---
+
+## Phase 8 — Model Router Intelligence + Chat Compaction Integration
+**Duration**: 2–3 days | **Depends on**: Phase 6.6 (summarizer cron), Phase 1 (model_router.py)
+
+### 8.1 — ModelRouter in the Hot Path (Day 1)
+- [ ] Verify `model_router.py` is invoked on every `/v1/responses/stream` request AFTER middleware, BEFORE Azure OpenAI call
+- [ ] Wire routing decision into the message record: `messages.routing_mode` and `messages.routing_reason` populated on every assistant response
+- [ ] Confirm Nano interceptor fires correctly:
+  - Send "hi" → routed to `gpt-5.4-nano` with `routing_mode = 'nano'`
+  - Send "hi" 3 times → 4th message falls through to user's selected mode
+  - Send "hi" while in DISCUSS mode → bypasses interceptor, uses DISCUSS prompt directly
+- [ ] Confirm mode switching works: user changes mode from DISCUSS to THINK mid-conversation → next message uses `gpt-5.4` with THINK prompt
+- [ ] Log every routing decision to `audit_log` with `action = 'model_route'` and `metadata = {mode, deployment, reasoning}`
+
+### 8.2 — Compaction Context Integration (Day 1–2)
+- [ ] Backend context builder (`build_llm_context()`) must:
+  1. Query `messages WHERE conversation_id = :id AND is_archived_msg = FALSE ORDER BY created_at ASC`
+  2. This naturally includes: the `[SUMMARY]` message (is_summary=TRUE, is_archived_msg=FALSE) + all post-compaction messages
+  3. Prepend the routing-selected system prompt from ModelRouter
+  4. Send this context to Azure OpenAI Responses API
+- [ ] Frontend must NOT change — it queries ALL messages (including archived) for scrollable display, but the LLM only sees the compacted context
+- [ ] Test: conversation with 60 messages → compaction runs → send new message → verify LLM response references facts from the summary, not hallucinated
+
+### 8.3 — Runtime Prompt Override (Day 2)
+- [ ] Verify Azure App Configuration prompt keys (`THINK_PROMPT`, `SOLVE_PROMPT`, `DISCUSS_PROMPT`, `NANO_PROMPT`) override in-code constants
+- [ ] Test: change `THINK_PROMPT` in Azure App Configuration → send a THINK message → verify new prompt behavior — no redeploy
+- [ ] `config.py` cache refresh: either poll App Configuration every 5 minutes via background task, or use Azure App Configuration's push-based refresh with Sentinel key
+
+### 8.4 — Mode Toggle UI (Day 2–3)
+- [ ] Frontend: 3-mode toggle (THINK / SOLVE / DISCUSS) visible in chat input area
+- [ ] Default mode on new conversation: DISCUSS (cheapest)
+- [ ] Mode persisted per-conversation in `conversations.mode` column
+- [ ] Switching mode mid-conversation: `PATCH /v1/conversations/{id}` with `{mode: "think"}` — next message uses new mode
+- [ ] Visual indicator: show which model handled the response (small badge on assistant message: "THINK · GPT-5.4" or "NANO · intercepted")
+
+**✅ Milestone**: Intelligent model routing fully operational. Users consciously choose their cost tier, greetings are silently deflected to Nano, long conversations are compacted, and prompts can be tuned live from Azure portal.
+
+---
+
+## Phase 9 — Voice UI Polish
+**Duration**: 2–3 days | **Depends on**: Phase 4 (speech workers), Phase 2 (InputBar component)
+
+### 9.1 — Dictation Input (Day 1)
+- [ ] Integrate `useVoice.ts` hook into `InputBar.tsx`
+- [ ] Microphone button in input bar — toggles recording on/off
+- [ ] Visual state when recording:
+  - Input bar text blurs slightly (connotes voice mode, not typing)
+  - Subtle pulsating waveform overlay driven by `currentVolume` from the hook
+  - Small "listening..." label
+- [ ] VAD (Voice Activity Detection) via Web Audio API:
+  - Silence threshold: -50 dB
+  - Silence duration: 1.5 seconds → triggers chunk cut
+  - Chunk uploaded to `POST /v1/audio/transcriptions` (synchronous, Groq Whisper)
+  - Backend stitches chunk with `existing_text` using Nano model for grammar/capitalization correction
+  - Result replaces input bar text incrementally
+- [ ] Stop button: finalizes recording, uploads last chunk, text appears in input bar ready to send
+- [ ] User can edit the transcribed text before sending
+
+### 9.2 — TTS Playback (Day 1–2)
+- [ ] Play button on every assistant message bubble
+- [ ] Click → `POST /v1/agents/speech/tts` with `{text: message.content, voice: "en-ZA-LeahNeural"}`
+- [ ] Returns 202 → subscribe via `useJob.ts` → when `status = 'done'`, `result_blob_url` points to audio blob
+- [ ] Stream audio from blob URL using `<audio>` element — auto-play when ready
+- [ ] Show small audio waveform / progress bar while playing
+- [ ] Stop button to cancel playback
+
+### 9.3 — Edge Cases & Permissions (Day 2)
+- [ ] Handle microphone permission denied: show toast "Microphone access required for voice input"
+- [ ] Handle browser incompatibility (no MediaRecorder): hide voice button entirely
+- [ ] Handle network drop during chunk upload: retry once, then show error toast, keep recording
+- [ ] Mobile: test on Chrome Android + Safari iOS — MediaRecorder `audio/webm` may need fallback to `audio/mp4` on Safari
+
+**✅ Milestone**: Full voice loop working. User speaks → text appears in input bar → send → assistant responds → user clicks play → hears the response. Claude-style dictation experience.
+
+---
+
+## Phase 10 — Frontend Polish & Mobile Responsiveness
+**Duration**: 3–4 days | **Depends on**: Phase 2 (core UI), Phase 8 (mode toggle), Phase 9 (voice)
+
+### 10.1 — ChatGPT-Grade UI Polish (Day 1–2)
+- [ ] Dark theme: zinc/slate palette, no pure black, subtle borders
+- [ ] Message bubbles: user messages right-aligned with accent color, assistant messages left-aligned
+- [ ] Markdown rendering: full GFM support — headings, bold, italic, links, images, tables, blockquotes
+- [ ] Code blocks: syntax highlighting (Prism.js or Shiki), language label, one-click copy button
+- [ ] LaTeX rendering: KaTeX for inline `$...$` and block `$$...$$` math
+- [ ] Streaming cursor: blinking `▌` at the end of the assistant's response while streaming
+- [ ] Smooth scroll-to-bottom: auto-scroll during streaming, but stop auto-scroll if user scrolls up (reading history)
+- [ ] Message actions: copy full message, regenerate response (re-send last user message)
+- [ ] Timestamps: hover to show exact time, otherwise show relative ("2 min ago")
+- [ ] Empty state: when no conversation selected, show centered "Start a new chat" prompt with keyboard shortcut hint
+
+### 10.2 — Sidebar Polish (Day 2)
+- [ ] Conversation list: grouped by "Today", "Yesterday", "Previous 7 Days", "Older"
+- [ ] Each item: title (auto-generated from first message or user-renamed), last message preview, time
+- [ ] Inline rename: click title → editable text field → blur/enter to save
+- [ ] Delete: swipe left (mobile) or right-click context menu (desktop) → confirmation → soft delete
+- [ ] Search: filter conversations by title or message content (Supabase full-text search)
+- [ ] "Show archived" toggle at the bottom — loads conversations where `is_archived = TRUE`
+- [ ] New chat button: prominent, at the top of the sidebar
+
+### 10.3 — Mobile Responsive (Day 2–3)
+- [ ] Breakpoints: mobile (<768px), tablet (768–1024px), desktop (>1024px)
+- [ ] Mobile:
+  - Sidebar collapsed by default — hamburger menu to open as overlay
+  - No artifact panel (hidden via `useMediaQuery`)
+  - Input bar: full width, voice button + attach button compact
+  - Mode toggle: compact pill selector above input bar
+  - Messages: full width, no horizontal padding waste
+- [ ] Tablet:
+  - Sidebar as collapsible drawer (push content, not overlay)
+  - Artifact panel hidden (only on desktop 1024px+)
+- [ ] Desktop:
+  - Sidebar always visible (resizable, 250px default)
+  - Artifact panel appears as right 50% split when artifact content detected
+- [ ] DOM virtualization for long message histories: only render messages in/near viewport (react-virtuoso or similar) — prevents memory bloat on conversations with 200+ messages
+- [ ] Infinite scroll: load messages in pages of 50, fetch more on scroll-up
+
+### 10.4 — Keyboard Shortcuts (Day 3)
+- [ ] `Ctrl/Cmd + K` → focus search in sidebar
+- [ ] `Ctrl/Cmd + Shift + N` → new conversation
+- [ ] `Enter` → send message
+- [ ] `Shift + Enter` → newline in input
+- [ ] `Ctrl/Cmd + Shift + V` → toggle voice input
+- [ ] `Escape` → close artifact panel / close sidebar on mobile
+- [ ] `Ctrl/Cmd + 1/2/3` → switch mode (THINK/SOLVE/DISCUSS)
+
+### 10.5 — PWA Configuration (Day 3–4)
+- [ ] `manifest.json`: app name, icons (from `AGENT ochuko(icon,favcon,img).png`), theme color, background color, display: standalone
+- [ ] Service worker: cache app shell (HTML/CSS/JS) for offline-capable load, show "You're offline" banner when network unavailable
+- [ ] iOS: add `apple-touch-icon` meta tags
+- [ ] "Install app" prompt on supported browsers
+
+**✅ Milestone**: Production-quality chat interface. Indistinguishable from ChatGPT in look and feel. Responsive across all devices. Keyboard-navigable. Installable as PWA.
+
+---
+
+## Phase 11 — Shared Conversations & Guest View
+**Duration**: 1–2 days | **Depends on**: Phase 2 (frontend), Phase 1 (backend routes)
+
+### 11.1 — Share Flow (Day 1)
+- [ ] Share button in conversation header (desktop) or context menu (mobile)
+- [ ] Click → `PATCH /v1/conversations/{id}` with `{is_shared: true}` → returns `share_token`
+- [ ] Generate shareable URL: `https://agent-ochuko.azurestaticapps.net/shared/{share_token}`
+- [ ] Copy to clipboard with toast confirmation
+- [ ] Unshare button: sets `is_shared = false` — existing links return 404
+
+### 11.2 — Guest View Page (Day 1–2)
+- [ ] Route: `/shared/:token` — no auth required
+- [ ] `GET /v1/shared/{share_token}` → returns conversation title + all messages
+- [ ] Read-only rendered view: same message bubble styling, markdown rendering, code highlighting
+- [ ] No input bar, no sidebar, no mode toggle — pure read-only
+- [ ] "Exported from Agent Ochuko" watermark at top
+- [ ] Export to JSON button: downloads full conversation as structured JSON file
+- [ ] SEO: page title = conversation title, meta description = first 160 chars of first assistant message
+
+**✅ Milestone**: Users can share any conversation via link. Recipients see a polished read-only view without needing an account.
+
+---
+
+## Phase 12 — End-to-End Testing & Pre-Launch QA
+**Duration**: 3–4 days | **Depends on**: All phases complete
+
+### 12.1 — Unit Test Suite (Day 1)
+- [ ] All tests in `backend/tests/`:
+  - `test_jwt_validator.py` — valid token, expired token, wrong secret, `alg=none` attack
+  - `test_policy_engine.py` — ALLOW/DENY for each seeded policy, custom policy, priority ordering
+  - `test_model_router.py` — THINK/SOLVE/DISCUSS routing, Nano interceptor turn counting, Nano budget exhaustion handoff, DISCUSS bypass
+  - `test_token_budget.py` — atomic deduction, budget exhausted returns 429, concurrent deductions don't double-spend
+  - `test_quota_guard.py` — OCR pages exceeded, vision calls exceeded, speech seconds exceeded
+  - `test_dispatcher.py` — chat → Pattern A, agent → Pattern B, correct job creation
+  - `test_queue_dispatcher.py` — message enqueued with correct payload shape, queue name
+  - `test_admin_endpoints.py` — non-admin gets 403, admin gets 200, superadmin can modify App Config
+  - `test_registration_cap.py` — signup when at cap → exception, signup when closed → exception
+- [ ] Run with `pytest --cov=app --cov-report=html` — target 80%+ line coverage on core modules
+- [ ] All tests pass in CI pipeline
+
+### 12.2 — Integration Tests (Day 1–2)
+- [ ] Separate Supabase test project (not production)
+- [ ] Seed test data: 5 users (one per role), 10 conversations, 100 messages, 5 jobs
+- [ ] RLS tests: for each of the 5 role JWTs, attempt to:
+  - Read own data → ✅
+  - Read another user's data → ❌ (empty result, not error)
+  - Write to another user's conversation → ❌
+  - Admin read all → ✅
+  - Guest read shared → ✅, Guest read non-shared → ❌
+- [ ] Block guard integration: insert google_sub into `blocked_identities` → attempt login → 403
+- [ ] Budget integration: set budget to 100 tokens → send message that uses 100+ → 429 returned
+- [ ] Compaction integration: insert 60 messages → trigger `conversation_summarizer` → verify summary message, archived flags, LLM context builder returns compact set
+
+### 12.3 — E2E Tests with Playwright (Day 2–3)
+- [ ] All tests in `tests/e2e/`:
+  - `auth.spec.ts` — Google OAuth login → profile created → redirected to /chat
+  - `chat.spec.ts` — send message → streaming renders character by character → message saved → appears on reload
+  - `mode_switch.spec.ts` — switch to THINK → send message → verify routing badge shows "THINK"
+  - `file_upload.spec.ts` — drag PDF into input → upload progress → OCR job created → result appears in chat
+  - `image_gen.spec.ts` — type "generate an image of..." → image appears in chat
+  - `voice.spec.ts` — click mic → speak → transcript appears in input (mock MediaRecorder if needed)
+  - `share.spec.ts` — share conversation → open link in incognito → guest view renders → export JSON downloads
+  - `registration_cap.spec.ts` — set cap to current count via admin → attempt signup in incognito → rejected
+  - `admin.spec.ts` — login as admin → navigate all pages → block a user → verify blocked user gets 403
+  - `maintenance.spec.ts` — enable maintenance mode → non-admin gets 503 → disable → service resumes
+  - `budget_exhaustion.spec.ts` — exhaust budget → next request shows 429 error message
+- [ ] Run against staging environment (separate from production)
+- [ ] All tests pass in CI pipeline (Playwright in GitHub Actions with browser install step)
+
+### 12.4 — Manual Verification Checklist (Day 3–4)
+- [ ] Streaming chat: tokens appear one by one, not buffered
+- [ ] Model switch: change `ACTIVE_MODEL_DEPLOYMENT` in App Configuration → next request uses new model — confirm via routing badge, no restart needed
+- [ ] Artifact panel: shows on 1200px+ screen, absent on 600px screen
+- [ ] Voice input: speak → transcript appears in input bar, grammar corrected
+- [ ] Voice output: click play on assistant message → audio plays
+- [ ] OCR: upload 5-page PDF → all pages extracted, rendered in chat with table formatting
+- [ ] Vision: upload image → description appears in chat
+- [ ] Image gen: request image → generated image appears in chat (may take 10–30s)
+- [ ] File gen: request DOCX → download button appears → file downloads correctly
+- [ ] Block: admin blocks user → user's next request returns 403 with clear message
+- [ ] Suspend: admin suspends user → user's next request returns 403 → admin activates → user resumes
+- [ ] Registration cap: set cap to current count → new signup shows "Registration is currently closed"
+- [ ] Budget exhaustion: exhaust budget → 429 → wait for midnight reset or admin override → resumes
+- [ ] Maintenance mode: toggle ON → non-admin 503 → toggle OFF → resumes
+- [ ] Shared conversation: share → open link → read-only view renders → JSON export downloads
+- [ ] Conversation search: search by keyword → matching conversations highlighted
+- [ ] Conversation archive: old conversation archived by cron → "Show archived" reveals it
+- [ ] Chat compaction: 60+ message conversation → after cron → new messages reference compacted context correctly
+- [ ] Mobile: full flow works on Chrome Android and Safari iOS
+
+**✅ Milestone**: Every feature tested at unit, integration, and E2E level. Manual QA confirms real-world behavior. System is ready for production launch.
+
+---
+
+## Phase 13 — Launch
+**Duration**: 1 day
+
+- [ ] Final `main` branch merged — all CI checks green
+- [ ] Production Supabase: all migrations applied, seed data inserted, RLS verified
+- [ ] Production Azure: all resources provisioned, all secrets in Key Vault, Managed Identities linked
+- [ ] Deploy backend to Container Apps (production revision)
+- [ ] Deploy frontend to Static Web App (Chat)
+- [ ] Deploy admin dashboard to Static Web App (Admin)
+- [ ] Deploy all Azure Functions (workers + crons)
+- [ ] DNS: point custom domain (if any) to SWA
+- [ ] Promote your account to `superadmin` in production Supabase
+- [ ] Set `registration_open = true`, `registration_limit = 20` (start small)
+- [ ] Set `maintenance_mode = false`
+- [ ] Send first message — verify streaming works end-to-end in production
+- [ ] Invite first batch of users
+- [ ] Monitor Application Insights for 24 hours — watch for errors, latency spikes, unexpected costs
+
+**✅ Milestone**: Agent Ochuko is live. Users are chatting. Admin is monitoring. The system is self-healing, self-resetting, and cost-controlled.**
+
+---
+
+## Summary Timeline
+
+| Phase | What | Duration | Running Total |
+|---|---|---|---|
+| **5** | Admin Dashboard | 3–4 days | 3–4 days |
+| **6** | Azure Functions Crons | 2–3 days | 5–7 days |
+| **7** | Production Hardening | 3–5 days | 8–12 days |
+| **8** | Model Router + Compaction Integration | 2–3 days | 10–15 days |
+| **9** | Voice UI Polish | 2–3 days | 12–18 days |
+| **10** | Frontend Polish + Mobile | 3–4 days | 15–22 days |
+| **11** | Shared Conversations | 1–2 days | 16–24 days |
+| **12** | E2E Testing & QA | 3–4 days | 19–28 days |
+| **13** | Launch | 1 day | **20–29 days** |
+
+> **Total post-Phase 4 build time: 20–29 working days (~4–6 weeks).**
