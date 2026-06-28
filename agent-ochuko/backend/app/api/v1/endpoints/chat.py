@@ -14,9 +14,9 @@ logger = logging.getLogger("app.api.v1.endpoints.chat")
 router = APIRouter()
 
 # Hard rule prepended to every system prompt at the API level.
-# This is the canonical no-emoji enforcement — applied regardless of what
+# This is the canonical Ochuko and no-emoji enforcement — applied regardless of what
 # App Configuration or default prompts say.
-_NO_EMOJI_RULE = "No emojis. "
+_OCHUKO_RULE = "You are Ochuko — calm, cold, emoji-free, and objective. You do not moralize. "
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
 _openai_client: Optional[AsyncAzureOpenAI] = None
@@ -89,8 +89,8 @@ async def chat_stream_generator(
     )
 
     try:
-        # Prepend the absolute no-emoji rule to every system prompt
-        full_system = _NO_EMOJI_RULE + system_prompt
+        # Prepend the absolute Ochuko identity and no-emoji rule to every system prompt
+        full_system = _OCHUKO_RULE + system_prompt
 
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
