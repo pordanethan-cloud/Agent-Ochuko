@@ -50,16 +50,23 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # ── 6. Update Container App to use new image ───────────────────────
+      # ── 6. Ensure Docker Hub registry is configured on the Container App ─
+      - name: Set Docker Hub registry credentials
+        run: |
+          az containerapp registry set \
+            --name agent-ochuko-api \
+            --resource-group rg-ochuko \
+            --server docker.io \
+            --username ${{ secrets.DOCKER_USERNAME }} \
+            --password ${{ secrets.DOCKER_PASSWORD }}
+
+      # ── 7. Update Container App to use new image ───────────────────────
       - name: Deploy to Azure Container Apps
         run: |
           az containerapp update \
             --name agent-ochuko-api \
             --resource-group rg-ochuko \
-            --image ${{ steps.tag.outputs.IMAGE }} \
-            --registry-server index.docker.io \
-            --registry-username ${{ secrets.DOCKER_USERNAME }} \
-            --registry-password ${{ secrets.DOCKER_PASSWORD }}
+            --image ${{ steps.tag.outputs.IMAGE }}
 
       # ── 7. Health check — wait for new revision to be healthy ──────────
       - name: Wait for health check
