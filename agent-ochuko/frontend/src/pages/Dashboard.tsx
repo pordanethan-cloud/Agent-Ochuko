@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { supabase } from '../utils/supabaseClient'
 import { LogOut, Send, User, Sparkles } from 'lucide-react'
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
@@ -37,7 +39,7 @@ export const Dashboard: React.FC = () => {
       const session = await supabase.auth.getSession()
       const token = session.data.session?.access_token
 
-      const response = await fetch('http://localhost:8000/v1/responses/stream', {
+      const response = await fetch(`${API_BASE}/v1/responses/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -45,6 +47,7 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           conversation_id: '00000000-0000-0000-0000-000000000000',
+          mode: 'discuss',
           messages: [{ role: 'user', content: '__test_scaffold__' }]
         })
       })
@@ -116,7 +119,7 @@ export const Dashboard: React.FC = () => {
       const session = await supabase.auth.getSession()
       const token = session.data.session?.access_token
 
-      const response = await fetch('http://localhost:8000/v1/responses/stream', {
+      const response = await fetch(`${API_BASE}/v1/responses/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -124,6 +127,7 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           conversation_id: '00000000-0000-0000-0000-000000000000',
+          mode: 'discuss',
           messages: newMessages.map(m => ({ role: m.role, content: m.content }))
         })
       })
