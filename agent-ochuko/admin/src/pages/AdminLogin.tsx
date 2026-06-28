@@ -9,7 +9,7 @@
  * 4. Frontend sets the session in Supabase client, triggering the redirect to /users.
  */
 import React, { useState } from "react";
-import { ShieldCheck, KeyRound } from "lucide-react";
+import { KeyRound } from "lucide-react";
 import { supabase } from "../utils/supabaseClient";
 
 export function AdminLogin() {
@@ -42,10 +42,11 @@ export function AdminLogin() {
 
       const data = await response.json();
       
-      // Store session in Supabase client to trigger onAuthStateChange
+      // Store session in Supabase client to trigger onAuthStateChange.
+      // Passing data.access_token as the refresh_token prevents the 'Auth session missing!' error.
       const { error: sessionErr } = await supabase.auth.setSession({
         access_token: data.access_token,
-        refresh_token: "", // static session requires no refresh token
+        refresh_token: data.access_token,
       });
 
       if (sessionErr) throw sessionErr;
@@ -65,8 +66,8 @@ export function AdminLogin() {
           
           {/* Header */}
           <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-4">
-              <ShieldCheck size={26} className="text-indigo-400" />
+            <div className="w-14 h-14 rounded-xl overflow-hidden border border-slate-800/80 mb-4 shadow-xl">
+              <img src="/favicon.png" alt="Agent Ochuko Logo" className="w-full h-full object-cover" />
             </div>
             <h1 className="text-xl font-bold text-white tracking-tight">Admin Dashboard</h1>
             <p className="text-slate-400 text-xs mt-1 font-medium tracking-wide">

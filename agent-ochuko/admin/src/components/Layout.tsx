@@ -6,7 +6,6 @@ import {
   Wallet,
   Settings,
   ScrollText,
-  ShieldCheck,
   LogOut,
 } from "lucide-react";
 import { supabase } from "../utils/supabaseClient";
@@ -34,7 +33,9 @@ export function Layout() {
         <div className="flex flex-col flex-1 min-h-0">
           {/* Logo */}
           <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800 shrink-0">
-            <ShieldCheck size={22} className="text-indigo-400" />
+            <div className="w-6 h-6 rounded overflow-hidden border border-slate-700 bg-slate-950 shrink-0">
+              <img src="/favicon.png" alt="Ochuko" className="w-full h-full object-cover" />
+            </div>
             <span className="font-bold text-sm tracking-wide text-white">
               Agent Ochuko
               <span className="block text-[10px] font-normal text-slate-400 tracking-widest uppercase">
