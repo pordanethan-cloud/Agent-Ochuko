@@ -736,6 +736,7 @@ export const Dashboard: React.FC = () => {
                         editingMessageIndex === i ? (
                           <div className="space-y-3 pt-1">
                             <textarea
+                              aria-label="Edit message"
                               value={editingMessageText}
                               onChange={(e) => setEditingMessageText(e.target.value)}
                               className="w-full bg-[#0d0f11] border border-[#1a1d20] focus:border-[#c5a880]/40 rounded-lg p-3 text-[13.5px] text-brand-text focus:outline-none resize-none font-sans"
@@ -775,8 +776,7 @@ export const Dashboard: React.FC = () => {
                             [0, 150, 300].map((delay, d) => (
                               <span
                                 key={d}
-                                className="w-1.5 h-1.5 rounded-full bg-[#c5a880]/50 animate-bounce"
-                                style={{ animationDelay: `${delay}ms`, animationDuration: '900ms' }}
+                                className={`w-1.5 h-1.5 rounded-full bg-[#c5a880]/50 animate-bounce dot-bounce-${delay}`}
                               />
                             ))
                           )}

@@ -225,13 +225,10 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 function Toggle({ enabled, onToggle, label }: { enabled: boolean; onToggle: () => void; label?: string }) {
-  const toggleProps: { "aria-checked": "true" | "false" } = {
-    "aria-checked": enabled ? "true" : "false"
-  };
   return (
     <button
       role="switch"
-      {...toggleProps}
+      aria-checked={enabled}
       aria-label={label ?? (enabled ? "Enabled" : "Disabled")}
       onClick={onToggle}
       className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${enabled ? "bg-indigo-600" : "bg-slate-700"}`}

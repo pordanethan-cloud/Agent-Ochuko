@@ -36,3 +36,18 @@
   scrollbar-width: thin;
   scrollbar-color: rgba(197, 168, 128, 0.08) transparent;
 }
+
+/* Typing indicator dot bounces */
+.dot-bounce-0 {
+  animation-delay: 0ms;
+  animation-duration: 900ms;
+}
+.dot-bounce-150 {
+  animation-delay: 150ms;
+  animation-duration: 900ms;
+}
+.dot-bounce-300 {
+  animation-delay: 300ms;
+  animation-duration: 900ms;
+}
+
