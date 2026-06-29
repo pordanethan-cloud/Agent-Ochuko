@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil } from 'lucide-react'
+import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  routing_mode?: string
+  routing_reason?: string
 }
 
 // ─── Inline markdown: bold, italic, code ─────────────────────────────────────
@@ -176,6 +178,43 @@ function renderMarkdown(text: string): React.ReactNode {
   return <>{nodes}</>
 }
 
+function getFriendlyErrorMessage(message: string): string {
+  const lower = message.toLowerCase()
+
+  if (lower.includes("deactivated") || lower.includes("inactive") || lower.includes("user_inactive")) {
+    return "Your account access has been deactivated. Please reach out to your workspace administrator for assistance."
+  }
+  if (lower.includes("revoked") || lower.includes("blocked") || lower.includes("account_blocked")) {
+    return "Access to this system has been restricted. Please contact support if you believe this is in error."
+  }
+  if (lower.includes("budget") || lower.includes("budget_exhausted")) {
+    return "You have reached your daily message budget. Daily limits reset automatically at midnight UTC."
+  }
+  if (lower.includes("quota") || lower.includes("quota_exhausted")) {
+    return "Your monthly resource quota has been fully utilized. Quotas reset at the start of next month."
+  }
+  if (lower.includes("maintenance")) {
+    return "Agent Ochuko is currently undergoing scheduled maintenance. Please try again in a few minutes."
+  }
+  if (lower.includes("registration") || lower.includes("closed")) {
+    return "New registrations are currently closed. Please contact the administrator."
+  }
+  if (lower.includes("unauthorized") || lower.includes("token") || lower.includes("401")) {
+    return "Your session has expired. Please sign out and sign in again to refresh your authentication."
+  }
+  if (lower.includes("supabase") || lower.includes("database") || lower.includes("postgres") || lower.includes("db") || lower.includes("relation") || lower.includes("connection")) {
+    return "We are experiencing a temporary database connection issue. Our team is working to restore full connectivity; please try again in a few moments."
+  }
+  if (lower.includes("500") || lower.includes("internal server") || lower.includes("failed to load resource")) {
+    return "We encountered a temporary technical issue. Our systems are recovering; please try sending your message again in a moment."
+  }
+  if (lower.includes("openai") || lower.includes("rate limit") || lower.includes("model")) {
+    return "The AI engine is temporarily experiencing high traffic. Please try again shortly."
+  }
+
+  return `We were unable to process your request at this moment (${message}). Please try again in a few moments or contact support.`
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export const Dashboard: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -195,9 +234,125 @@ export const Dashboard: React.FC = () => {
   const [editingMessageText, setEditingMessageText] = useState("")
   const abortControllerRef = useRef<AbortController | null>(null)
 
+  const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
+  const [conversations, setConversations] = useState<any[]>([])
+  const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
+
+
+  const fetchConversations = async () => {
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) return
+
+      const res = await fetch(`${API_BASE}/v1/conversations`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setConversations(data)
+      }
+    } catch (e) {
+      console.error("Failed to fetch conversations:", e)
+    }
+  }
+
+  const handleNewSession = () => {
+    setMessages([])
+    setActiveConversationId('00000000-0000-0000-0000-000000000000')
+    setMode('discuss')
+    setIsSidebarOpen(false)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!convoToDelete) return
+    const id = convoToDelete
+    setConvoToDelete(null)
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) return
+
+      const res = await fetch(`${API_BASE}/v1/conversations/${id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      if (res.ok) {
+        if (id === activeConversationId) {
+          handleNewSession()
+        }
+        fetchConversations()
+      } else {
+        console.error("Failed to delete conversation:", res.statusText)
+      }
+    } catch (e) {
+      console.error("Error deleting conversation:", e)
+    }
+  }
+
+
+  const handleSelectConversation = async (id: string, convoMode: 'think' | 'solve' | 'discuss') => {
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) return
+
+      const res = await fetch(`${API_BASE}/v1/conversations/${id}/messages`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const mapped = data.map((m: any) => ({
+          role: m.role,
+          content: m.content,
+          routing_mode: m.routing_mode,
+          routing_reason: m.routing_reason,
+        }))
+        setMessages(mapped)
+        setActiveConversationId(id)
+        setMode(convoMode)
+        setIsSidebarOpen(false)
+      }
+    } catch (e) {
+      console.error("Failed to load message history:", e)
+    }
+  }
+
+  const handleModeChange = async (newMode: 'think' | 'solve' | 'discuss') => {
+    setMode(newMode)
+    if (activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000') {
+      try {
+        const session = await supabase.auth.getSession()
+        const token = session.data.session?.access_token
+        if (!token) return
+
+        await fetch(`${API_BASE}/v1/conversations/${activeConversationId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ mode: newMode }),
+        })
+        fetchConversations()
+      } catch (e) {
+        console.error("Failed to update conversation mode:", e)
+      }
+    }
+  }
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) setUserEmail(user.email || 'User')
+      if (user) {
+        setUserEmail(user.email || 'User')
+        fetchConversations()
+      }
     })
   }, [])
 
@@ -261,14 +416,30 @@ export const Dashboard: React.FC = () => {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          conversation_id: '00000000-0000-0000-0000-000000000000',
+          conversation_id: activeConversationId,
           mode,
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
         signal: abortController.signal,
       })
 
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      if (!response.ok) {
+        let errMsg = `HTTP error! status: ${response.status}`
+        try {
+          const errData = await response.json()
+          if (errData?.error?.message) {
+            errMsg = errData.error.message
+          } else if (errData?.error?.code) {
+            errMsg = errData.error.code
+          }
+        } catch (_) {
+          try {
+            const txt = await response.text()
+            if (txt && txt.length < 200) errMsg = txt
+          } catch (_) {}
+        }
+        throw new Error(errMsg)
+      }
 
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
@@ -291,9 +462,26 @@ export const Dashboard: React.FC = () => {
               accumulatedText += data.delta.text
               setMessages((prev) => {
                 const updated = [...prev]
-                updated[updated.length - 1] = { role: 'assistant', content: accumulatedText }
+                updated[updated.length - 1] = {
+                  ...updated[updated.length - 1],
+                  content: accumulatedText
+                }
                 return updated
               })
+            } else if (data.type === 'routing_info') {
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  updated[updated.length - 1] = {
+                    ...updated[updated.length - 1],
+                    routing_mode: data.routing_mode
+                  }
+                }
+                return updated
+              })
+            } else if (data.type === 'conversation_id') {
+              setActiveConversationId(data.conversation_id)
+              fetchConversations()
             } else if (data.type === 'web_search_status') {
               setWebSearchStatus(data.status === 'searching' ? 'searching' : 'done')
             } else if (data.type === 'error') {
@@ -310,10 +498,14 @@ export const Dashboard: React.FC = () => {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return // silently exit
-      // Write error into the placeholder bubble
+      const explanation = getFriendlyErrorMessage(err.message || 'unknown')
       setMessages((prev) => {
         const updated = [...prev]
-        updated[updated.length - 1] = { role: 'assistant', content: `Error: ${err.message}` }
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          content: explanation,
+          routing_mode: 'discuss'
+        }
         return updated
       })
     } finally {
@@ -371,8 +563,8 @@ export const Dashboard: React.FC = () => {
       {/* Slide-out Sidebar Drawer */}
       <aside
         onMouseLeave={() => setIsSidebarHovered(false)}
-        className={`absolute top-0 left-0 h-full w-64 bg-[#0d0f11]/98 border-r border-[#1e2025] z-30 flex flex-col justify-between px-6 py-7 backdrop-blur-xl shadow-2xl shadow-black/60 transition-transform duration-300 ease-out ${
-          isSidebarOpen || isSidebarHovered ? 'translate-x-0' : '-translate-x-full'
+        className={`absolute top-3 left-3 h-[calc(100vh-24px)] w-64 bg-[#0d0f11]/95 border border-[#1e2025] rounded-2xl z-30 flex flex-col justify-between px-6 py-7 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out ${
+          isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
         }`}
       >
         <div>
@@ -387,11 +579,47 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <button
-            onClick={() => { setMessages([]); setIsSidebarOpen(false) }}
-            className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#c5a880]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide"
+            onClick={handleNewSession}
+            className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#c5a880]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-6"
           >
             New Session
           </button>
+
+          {/* Conversation List */}
+          <div className="flex-1 overflow-y-auto space-y-1.5 max-h-[calc(100vh-270px)] pr-1 custom-scrollbar">
+            <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/50 uppercase mb-2">Sessions</p>
+            {conversations.length === 0 ? (
+              <p className="text-[10px] text-[#8e95a2]/40 italic pl-1">No past sessions</p>
+            ) : (
+              conversations.map((convo) => {
+                const active = convo.id === activeConversationId
+                return (
+                  <div key={convo.id} className="group relative flex items-center w-full">
+                    <button
+                      onClick={() => handleSelectConversation(convo.id, convo.mode)}
+                      className={`flex-1 text-left px-3 py-2 rounded-lg text-[11px] font-medium truncate transition duration-150 block pr-8 ${
+                        active
+                          ? 'bg-[#c5a880]/10 text-brand-text border border-[#c5a880]/20'
+                          : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
+                      }`}
+                    >
+                      {convo.title || 'Untitled Session'}
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setConvoToDelete(convo.id)
+                      }}
+                      className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2] hover:text-red-400 transition duration-150 rounded hover:bg-white/5"
+                      title="Delete Session"
+                    >
+                      <Trash className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )
+              })
+            )}
+          </div>
         </div>
 
         <div className="border-t border-[#1e2025] pt-5 space-y-4">
@@ -443,8 +671,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </header>
 
-        {/* Ambient glow */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[300px] bg-[#c5a880]/[0.012] rounded-full blur-[200px] pointer-events-none" />
+
 
         <div
           ref={scrollContainerRef}
@@ -562,6 +789,8 @@ export const Dashboard: React.FC = () => {
                       )}
                     </div>
 
+
+
                     {/* Actions Row at the bottom (outside the bubble), visible on hover */}
                     {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (
                       <div className="flex items-center gap-3.5 pl-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -622,7 +851,7 @@ export const Dashboard: React.FC = () => {
                 <button
                   key={id}
                   type="button"
-                  onClick={() => setMode(id)}
+                  onClick={() => handleModeChange(id)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all duration-200 active:scale-95 tracking-widest uppercase ${
                     active
                       ? 'bg-[#c5a880]/8 border-[#c5a880]/40 text-[#c5a880]'
@@ -663,6 +892,34 @@ export const Dashboard: React.FC = () => {
         </div>
 
       </main>
+
+      {convoToDelete && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0d0f11] border border-[#1e2025] rounded-2xl w-full max-w-sm p-6 shadow-2xl space-y-6">
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-brand-text">Delete Session</h3>
+              <p className="text-[12px] text-[#8e95a2] leading-relaxed">
+                Are you sure you want to permanently delete this chat session? This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setConvoToDelete(null)}
+                className="px-3.5 py-1.5 rounded-lg border border-[#1e2025] hover:bg-white/5 text-[11px] font-semibold text-brand-text transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-3.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-[11px] font-semibold text-red-450 transition"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+

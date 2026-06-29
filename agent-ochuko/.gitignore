@@ -34,3 +34,8 @@ desktop.ini
 
 # Credentials
 credentials.txt
+
+# Scratch scripts
+scratch_*
+backend/scratch_*
+

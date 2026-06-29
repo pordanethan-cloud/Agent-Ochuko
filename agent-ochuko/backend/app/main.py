@@ -5,10 +5,11 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import load_config, get_config, _CONFIG_CACHE
+from app.core.config import load_config, get_config, _CONFIG_CACHE, start_config_polling, stop_config_polling
 from app.api.v1.endpoints.chat import router as chat_router
 from app.api.v1.endpoints.admin import router as admin_router
 from app.api.v1.endpoints.admin_appcfg import router as admin_appcfg_router
+from app.api.v1.endpoints.conversations import router as conversations_router
 from app.middleware import (
     MaintenanceGuardMiddleware,
     BlockGuardMiddleware,
@@ -33,7 +34,9 @@ async def lifespan(app: FastAPI):
     # Lifespan now logs readiness as config was loaded eagerly
     logger.info("Application lifespan started.")
     _app_ready = True
+    start_config_polling(300)
     yield
+    stop_config_polling()
     _app_ready = False
     logger.info("Shutting down application...")
 
@@ -47,7 +50,18 @@ app = FastAPI(
 
 # CORS Middleware setup
 origins_str = _CONFIG_CACHE.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")
-origins = [origin.strip() for origin in origins_str.split(",") if origin.strip()]
+env_origins = os.getenv("ALLOWED_ORIGINS")
+
+combined_origins = set()
+for o in origins_str.split(","):
+    if o.strip():
+        combined_origins.add(o.strip())
+if env_origins:
+    for o in env_origins.split(","):
+        if o.strip():
+            combined_origins.add(o.strip())
+
+origins = list(combined_origins)
 
 # Auto-include production deployed storage static website domains
 prod_origins = [
@@ -79,6 +93,7 @@ app.add_middleware(MaintenanceGuardMiddleware)
 app.include_router(chat_router, prefix="/v1", tags=["chat"])
 app.include_router(admin_router, prefix="/v1/admin", tags=["admin"])
 app.include_router(admin_appcfg_router, prefix="/v1/admin", tags=["admin"])
+app.include_router(conversations_router, prefix="/v1/conversations", tags=["conversations"])
 
 
 # ── Health & Readiness Probes ─────────────────────────────────────────────

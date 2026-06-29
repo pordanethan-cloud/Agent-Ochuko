@@ -173,14 +173,14 @@ def set_user_budget(user_id: str, budget_limit: int) -> None:
 def get_usage_stats(days: int = 30) -> Dict[str, Any]:
     """
     Return token usage aggregated by (user, model, day) for the last `days` days.
-    Reads directly from messages table (Phase 5 — pre-cron fallback).
+    Reads from messages table joined with conversations to get user_id.
     """
     db = get_supabase_admin()
 
     # Per-user totals
     user_totals = (
         db.table("messages")
-        .select("user_id, input_tokens, output_tokens, model_used, created_at")
+        .select("created_at, tokens_input, tokens_output, model, conversations(user_id)")
         .gte("created_at", _days_ago_iso(days))
         .eq("role", "assistant")
         .order("created_at", desc=True)
@@ -188,18 +188,95 @@ def get_usage_stats(days: int = 30) -> Dict[str, Any]:
         .execute()
     )
 
-    return {"messages": user_totals.data, "days": days}
+    mapped_messages = []
+    for msg in user_totals.data or []:
+        convo = msg.get("conversations", {})
+        u_id = convo.get("user_id") if isinstance(convo, dict) else None
+        mapped_messages.append({
+            "user_id": u_id,
+            "input_tokens": msg.get("tokens_input", 0),
+            "output_tokens": msg.get("tokens_output", 0),
+            "model_used": msg.get("model"),
+            "created_at": msg.get("created_at")
+        })
+
+    return {"messages": mapped_messages, "days": days}
 
 
 def get_top_users(limit: int = 5) -> List[Dict[str, Any]]:
     """Return top N users by total token consumption (input + output)."""
     db = get_supabase_admin()
-    response = db.rpc(
-        "get_top_users_by_tokens",
-        {"p_limit": limit},
-    ).execute()
-    # Fallback if RPC doesn't exist yet — return empty list cleanly
-    return response.data if response.data else []
+    try:
+        response = db.rpc(
+            "get_top_users_by_tokens",
+            {"p_limit": limit},
+        ).execute()
+        if response.data:
+            return response.data
+    except Exception as e:
+        logger.warning("Failed to call get_top_users_by_tokens RPC, falling back to in-memory: %s", e)
+
+    # Fallback: Query messages and aggregate in-memory
+    try:
+        res = (
+            db.table("messages")
+            .select("tokens_input, tokens_output, conversations(user_id)")
+            .eq("role", "assistant")
+            .execute()
+        )
+        data = res.data or []
+        user_sums = {}
+        for m in data:
+            convo = m.get("conversations", {})
+            u_id = convo.get("user_id") if isinstance(convo, dict) else None
+            if not u_id:
+                continue
+            tokens = (m.get("tokens_input") or 0) + (m.get("tokens_output") or 0)
+            user_sums[u_id] = user_sums.get(u_id, 0) + tokens
+
+        # Sort and limit
+        sorted_users = sorted(user_sums.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+        # Get profiles to resolve names
+        top_list = []
+        if sorted_users:
+            u_ids = [uid for uid, _ in sorted_users]
+            profiles_res = db.table("profiles").select("id, display_name").in_("id", u_ids).execute()
+            prof_map = {p["id"]: p.get("display_name") for p in (profiles_res.data or [])}
+
+            # Resolve emails using list_users (or just map what we can)
+            email_map = {}
+            try:
+                auth_users_res = db.auth.admin.list_users()
+                users_list = []
+                if isinstance(auth_users_res, list):
+                    users_list = auth_users_res
+                elif hasattr(auth_users_res, "users"):
+                    users_list = auth_users_res.users
+                elif auth_users_res:
+                    users_list = getattr(auth_users_res, "data", [])
+                for u in users_list:
+                    uid = getattr(u, "id", None) or u.get("id")
+                    email = getattr(u, "email", None) or u.get("email")
+                    if uid and email:
+                        email_map[uid] = email
+            except Exception as ex:
+                logger.error("Failed to list auth users in top users fallback: %s", ex)
+
+            for uid, total in sorted_users:
+                email = email_map.get(uid) or "unknown@domain.com"
+                display_name = prof_map.get(uid) or email.split("@")[0]
+                top_list.append({
+                    "user_id": uid,
+                    "display_name": display_name,
+                    "email": email,
+                    "total_tokens": total
+                })
+        return top_list
+    except Exception as e:
+        logger.error("Failed in-memory fallback for top users: %s", e)
+        return []
+
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +318,7 @@ def get_audit_log(
         .select(
             "id, created_at, user_id, action, resource_type, resource_id, "
             "policy_decision, ip_address, user_agent, policy_reason, metadata, "
-            "profiles(email, full_name)"
+            "profiles(id, display_name)"
         )
         .order("created_at", desc=True)
         .range(offset, offset + page_size - 1)
@@ -259,7 +336,41 @@ def get_audit_log(
         query = query.eq("policy_decision", policy_decision)
 
     response = query.execute()
-    return response.data
+    entries = response.data or []
+
+    # Fetch auth users to resolve emails (same pattern as list_users)
+    auth_users_res = []
+    try:
+        auth_users_res = db.auth.admin.list_users()
+    except Exception as e:
+        logger.error("Failed to list auth users in get_audit_log: %s", e)
+
+    email_map = {}
+    users_list = []
+    if isinstance(auth_users_res, list):
+        users_list = auth_users_res
+    elif hasattr(auth_users_res, "users"):
+        users_list = auth_users_res.users
+    elif auth_users_res:
+        users_list = getattr(auth_users_res, "data", [])
+
+    for u in users_list:
+        uid = getattr(u, "id", None) or u.get("id")
+        email = getattr(u, "email", None) or u.get("email")
+        if uid and email:
+            email_map[uid] = email
+
+    for entry in entries:
+        profile = entry.get("profiles") or {}
+        u_id = entry.get("user_id")
+        email = email_map.get(u_id) or "system"
+        display_name = profile.get("display_name") if isinstance(profile, dict) else None
+        entry["profiles"] = {
+            "email": email,
+            "full_name": display_name or email.split("@")[0]
+        }
+
+    return entries
 
 
 def write_audit_log(

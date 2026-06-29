@@ -4,20 +4,9 @@
 
 ---
 
-## C1 — Azure Container Registry (ACR) Not in Phase 0 Setup (Affects: Phase 7.3)
+## C1 — Docker Hub Registry for Containers (Affects: Phase 7.3)
 
-The CI/CD pipeline (`backend-deploy.yml`) pushes images to `agent-ochuko-acr`, but ACR creation is not in `02_azure_services_setup.md`. Create before Phase 7 CI/CD work:
-
-1. Azure Portal → **"+ Create a resource"** → search **"Container Registry"**
-2. Fill in: Resource group `rg-ochuko`, Registry name `agentochukoregistry` (globally unique), SKU `Basic`
-3. After creation: **"Access keys"** → enable **Admin user**
-4. Collect:
-   ```
-   ACR_LOGIN_SERVER=agentochukoregistry.azurecr.io
-   ACR_USERNAME=agentochukoregistry
-   ACR_PASSWORD=<from Access keys>
-   ```
-5. Grant Container App Managed Identity the `AcrPull` role on the registry (so it can pull images)
+The CI/CD pipeline (`backend-deploy.yml`) is configured to push images to private Docker Hub repositories. The secrets `DOCKER_USERNAME` and `DOCKER_PASSWORD` must be configured in GitHub Secrets. No Azure Container Registry (ACR) setup is required.
 
 ---
 
@@ -38,23 +27,17 @@ The `model_expiry_monitor` cron reads these keys but they are not in the App Con
 
 ---
 
-## C3 — Rate Limiting at Multiple Replicas (Affects: Phase 7.5)
+## C3 — Rate Limiting via Sticky Sessions (Affects: Phase 7.5)
 
-Cost is not a constraint ("open checkbook"). We will bypass session affinity (sticky sessions) limitations and use the production-standard distributed caching layer:
-
-* **Implementation:** Deploy **Azure Cache for Redis (Basic C0, ~$16/month)** in resource group `rg-ochuko`.
-* **FastAPI Configuration:** Configure `slowapi` to use the Redis backend via the `limits` library.
-* **Why:** This ensures rate limiting is globally consistent and mathematically exact across all scaling Container App replicas without depending on client-side state or session affinity cookie pinning.
+Rate limiting is implemented using `slowapi` with in-memory storage (`memory://`). Consistency across multiple scaling Container App replicas is guaranteed by enabling **Session Affinity (sticky sessions)** on the Container App, ensuring a user's requests always route back to the same replica where their rate limits are tracked in-memory. Distributed caching like Redis is not required.
 
 ---
 
-## C4 — Admin Dashboard Deployment Was Listed as Vercel (Affects: Phase 5)
+## C4 — Admin Dashboard Deployment and Chat Client Targets (Affects: Phase 5, Phase 7.3)
 
-The implementation plan Section 10 says: *"Deployed separately on Vercel."* This contradicts:
-- Section 12 (Infrastructure): lists `agent-ochuko-admin` as Azure Static Web App
-- Phase 7.3 (CI/CD): `admin-deploy.yml` deploys to Azure SWA
-
-**Correct target**: Azure Static Web App. Disregard the Vercel mention.
+The static sites for both User Chat and the Admin Dashboard are deployed as Azure Storage Blob static website containers (`$web` on `agentochukostore` and `agentochukoadmin` storage accounts). SWA or Vercel are not used for hosting. Ensure CORS configuration targets:
+* `https://agentochukostore.z1.web.core.windows.net`
+* `https://agentochukoadmin.z1.web.core.windows.net`
 
 ---
 

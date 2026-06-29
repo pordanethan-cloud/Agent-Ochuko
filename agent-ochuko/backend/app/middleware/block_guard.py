@@ -41,45 +41,66 @@ class BlockGuardMiddleware(BaseHTTPMiddleware):
         if request.url.path in ("/health", "/ready", "/docs", "/openapi.json"):
             return await call_next(request)
 
-        # Get user from request state (set by JWT validator dependency)
-        user = getattr(request.state, "user", None)
+        # Get user from JWT claims
+        from app.core.jwt_validator import get_auth_user
+        user = get_auth_user(request)
         if not user:
-            # No user context yet — let the request proceed to the JWT validator
             return await call_next(request)
 
-        # Extract google_sub from JWT claims
+        user_id = user.get("sub")
         google_sub = user.get("user_metadata", {}).get("sub")
-        if not google_sub:
-            # Some auth flows may not have google_sub — let through for now
-            return await call_next(request)
 
-        # Check blocked_identities table
         db = _get_supabase()
         if db:
-            try:
-                result = (
-                    db.table("blocked_identities")
-                    .select("id")
-                    .eq("google_sub", google_sub)
-                    .limit(1)
-                    .execute()
-                )
-                if result.data:
-                    logger.warning(
-                        f"Blocked identity detected: google_sub={google_sub}, "
-                        f"user_id={user.get('sub')}"
+            # 1. Check profile is_active status
+            if user_id:
+                try:
+                    profile_res = (
+                        db.table("profiles")
+                        .select("is_active")
+                        .eq("id", user_id)
+                        .maybe_single()
+                        .execute()
                     )
-                    return JSONResponse(
-                        status_code=403,
-                        content={
-                            "error": {
-                                "code": "ACCOUNT_BLOCKED",
-                                "message": "Account access has been revoked. Contact an administrator.",
-                            }
-                        },
+                    if profile_res.data and not profile_res.data.get("is_active", True):
+                        logger.warning(f"Blocked inactive user request: user_id={user_id}")
+                        return JSONResponse(
+                            status_code=403,
+                            content={
+                                "error": {
+                                    "code": "USER_INACTIVE",
+                                    "message": "Your account has been deactivated. Please contact an administrator.",
+                                }
+                            },
+                        )
+                except Exception as profile_err:
+                    logger.error(f"Error checking profile activation status: {profile_err}")
+
+            # 2. Check blocked_identities table
+            if google_sub:
+                try:
+                    result = (
+                        db.table("blocked_identities")
+                        .select("id")
+                        .eq("google_sub", google_sub)
+                        .limit(1)
+                        .execute()
                     )
-            except Exception as e:
-                logger.error(f"Error checking blocked_identities: {e}")
-                # Fail open — don't block legitimate users due to DB errors
+                    if result.data:
+                        logger.warning(
+                            f"Blocked identity detected: google_sub={google_sub}, "
+                            f"user_id={user_id}"
+                        )
+                        return JSONResponse(
+                            status_code=403,
+                            content={
+                                "error": {
+                                    "code": "ACCOUNT_BLOCKED",
+                                    "message": "Account access has been revoked. Contact an administrator.",
+                                }
+                            },
+                        )
+                except Exception as e:
+                    logger.error(f"Error checking blocked_identities: {e}")
 
         return await call_next(request)

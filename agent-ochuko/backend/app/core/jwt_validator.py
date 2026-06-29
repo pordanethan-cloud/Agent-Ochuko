@@ -39,7 +39,10 @@ async def get_jwks(supabase_url: str) -> Dict[str, Any]:
         )
 
 
-async def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(security_scheme)) -> Dict[str, Any]:
+async def verify_jwt(
+    request: Request = None,
+    credentials: HTTPAuthorizationCredentials = Security(security_scheme)
+) -> Dict[str, Any]:
     """
     Dependency to validate the Supabase JWT. Handles both symmetric (HS256)
     verification using SUPABASE_JWT_SECRET, and asymmetric (RS256) using JWKS.
@@ -49,6 +52,8 @@ async def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(securi
     supabase_url = os.getenv("SUPABASE_URL")
     jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
 
+    payload = None
+
     # 1. Try symmetric verification (HS256) - standard Supabase behavior
     if jwt_secret:
         try:
@@ -56,12 +61,11 @@ async def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(securi
             payload = jwt.decode(
                 token, jwt_secret, algorithms=["HS256"], options={"verify_aud": False}
             )
-            return payload
         except JWTError as symmetric_err:
             logger.debug(f"Symmetric verification failed: {symmetric_err}. Trying RS256/JWKS...")
 
     # 2. Try asymmetric verification (RS256) using JWKS
-    if supabase_url:
+    if not payload and supabase_url:
         try:
             # Parse header to find key ID (kid)
             unverified_header = jwt.get_unverified_header(token)
@@ -84,13 +88,39 @@ async def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(securi
                     audience="authenticated",
                     options={"verify_aud": True},
                 )
-                return payload
         except JWTError as asymmetric_err:
             logger.error(f"Asymmetric verification failed: {asymmetric_err}")
 
     # If both verification flows failed, raise unauthorized
-    raise HTTPException(
-        status_code=401,
-        detail="Invalid or expired authentication token.",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    if not payload:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired authentication token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if request:
+        request.state.user = payload
+    return payload
+
+
+def get_auth_user(request: Request) -> Optional[Dict[str, Any]]:
+    """
+    Fast extraction of JWT claims without signature verification for middleware context.
+    Caches the parsed payload in request.state.user to avoid double decoding.
+    """
+    if hasattr(request.state, "user") and request.state.user is not None:
+        return request.state.user
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        return None
+
+    try:
+        token = auth_header.split(" ")[1]
+        payload = jwt.get_unverified_claims(token)
+        request.state.user = payload
+        return payload
+    except Exception:
+        return None
+

@@ -59,7 +59,8 @@ class QuotaGuardMiddleware(BaseHTTPMiddleware):
         if not agent_type or agent_type not in _AGENT_QUOTA_MAP:
             return await call_next(request)
 
-        user = getattr(request.state, "user", None)
+        from app.core.jwt_validator import get_auth_user
+        user = get_auth_user(request)
         if not user:
             return await call_next(request)
 

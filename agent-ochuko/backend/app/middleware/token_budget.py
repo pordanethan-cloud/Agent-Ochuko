@@ -53,7 +53,8 @@ class TokenBudgetMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Need user context from JWT
-        user = getattr(request.state, "user", None)
+        from app.core.jwt_validator import get_auth_user
+        user = get_auth_user(request)
         if not user:
             return await call_next(request)
 

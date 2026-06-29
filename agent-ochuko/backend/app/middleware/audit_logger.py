@@ -59,7 +59,8 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         latency_ms = int((time.monotonic() - start_time) * 1000)
 
         # Extract user info (may not be available for unauthenticated requests)
-        user = getattr(request.state, "user", None)
+        from app.core.jwt_validator import get_auth_user
+        user = get_auth_user(request)
         user_id = user.get("sub") if user else None
 
         # Extract client IP

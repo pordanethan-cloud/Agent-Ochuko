@@ -27,7 +27,8 @@ class MaintenanceGuardMiddleware(BaseHTTPMiddleware):
         maintenance_mode = await get_config("MAINTENANCE_MODE", "false")
         if maintenance_mode.lower() == "true":
             # Allow admins through — check the user context if it's been set
-            user = getattr(request.state, "user", None)
+            from app.core.jwt_validator import get_auth_user
+            user = get_auth_user(request)
             if user and user.get("user_metadata", {}).get("role") in ("admin", "superadmin"):
                 return await call_next(request)
 

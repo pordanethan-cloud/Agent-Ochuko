@@ -65,18 +65,17 @@
   2. Run `pytest` (unit tests) — fail pipeline if any test fails
   3. Run `ruff check` + `ruff format --check` (linting)
   4. Build Docker image, tag with `git SHA`
-  5. Push to Azure Container Registry (`agent-ochuko-acr`)
-  6. Deploy to Azure Container Apps with revision suffix = git SHA
+  5. Push to private Docker Hub registry (`agent-ochuko-api`)
+  6. Deploy to Azure Container Apps
   7. Wait for `/health` to pass on new revision
-  8. If health check fails → auto-rollback to previous revision
 
 - [ ] **Frontend pipeline** (`.github/workflows/frontend-deploy.yml`):
   1. Trigger: push to `main` with changes in `frontend/**`
   2. `npm ci` → `npm run build` → `npm run lint`
-  3. Deploy `dist/` to Azure Static Web App (Chat)
+  3. Deploy `dist/` to Azure Storage Blob static website container (`$web` on `agentochukostore`)
 
 - [ ] **Admin pipeline** (`.github/workflows/admin-deploy.yml`):
-  1. Same as frontend but deploys to Azure Static Web App (Admin)
+  1. Same as frontend but deploys to Azure Storage Blob static website container (`$web` on `agentochukoadmin`)
 
 - [ ] **Functions pipeline** (`.github/workflows/functions-deploy.yml`):
   1. Trigger: push to `main` with changes in `functions/**`
@@ -84,8 +83,7 @@
   3. Deploy: `func azure functionapp publish agent-ochuko-functions`
 
 - [ ] All pipelines use GitHub Secrets for:
-  - `AZURE_CREDENTIALS`, `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`
-  - `SWA_DEPLOYMENT_TOKEN_CHAT`, `SWA_DEPLOYMENT_TOKEN_ADMIN`
+  - `AZURE_CREDENTIALS`, `DOCKER_USERNAME`, `DOCKER_PASSWORD`
 
 ---
 
@@ -122,8 +120,8 @@
 
 - [ ] **CORS strict audit**:
   - `ALLOWED_ORIGINS` contains ONLY:
-    - `https://agent-ochuko.azurestaticapps.net` (chat)
-    - `https://agent-ochuko-admin.azurestaticapps.net` (admin)
+    - `https://agentochukostore.z1.web.core.windows.net` (chat)
+    - `https://agentochukoadmin.z1.web.core.windows.net` (admin)
     - `http://localhost:5173` (dev)
   - No wildcard `*` — ever
   - `allow_credentials = True` — required for JWT cookie flow
@@ -131,7 +129,7 @@
 - [ ] **Rate limiting**:
   - Per-IP: 100 requests/minute (prevent scraping/abuse)
   - Per-user: 30 streaming requests/minute (prevent token burning)
-  - Implementation: `slowapi` middleware or custom sliding window (if > 1 replica, use Azure Cache for Redis Basic C0)
+  - Implementation: `slowapi` middleware with in-memory storage (`memory://`), relying on Azure Container Apps sticky sessions (session affinity) for replica consistency.
 
 - [ ] **File upload security**:
   - Validate MIME type server-side before generating presigned URL
@@ -218,16 +216,13 @@ System is production-grade. Observable, tested under load, secured at every laye
 
 > Items from the implementation plan relevant to this phase that require additional decision or setup.
 
-### Azure Container Registry (ACR) Not in Phase 0 Setup
+### Docker Hub Private Registry Usage
 
-The CI/CD pipeline pushes Docker images to an Azure Container Registry (`agent-ochuko-acr`), but ACR creation is **not included** in `02_azure_services_setup.md`. Create it before running the backend CI/CD pipeline:
-- Resource: `agent-ochuko-acr`, SKU: `Basic`, Resource Group: `rg-ochuko`
-- Enable Admin user for GitHub Actions push credentials
-- Grant Container App's Managed Identity `AcrPull` role so it can pull images
+The CI/CD pipeline pushes Docker images to private Docker Hub repositories instead of Azure Container Registry (ACR). Ensure the credentials `DOCKER_USERNAME` and `DOCKER_PASSWORD` are maintained in GitHub secrets.
 
-### Rate Limiting at Scale
+### Rate Limiting via Sticky Sessions
 
-The implementation plan suggests `slowapi` for rate limiting within a single FastAPI process. With min replicas = 1, this is fine. But when Container Apps scales to 3 replicas, each replica has its own in-memory counter — a user could make 3x the limit by hitting different replicas. If scaling beyond 1 replica, use **Azure Cache for Redis (Basic C0, ~$16/month)** as the rate limit backend instead.
+We use `slowapi` with in-memory storage (`memory://`). Consistency across multiple Container App replicas is guaranteed by enabling **Session Affinity (sticky sessions)** on the Container App, ensuring a user's requests route back to the same replica where their rate limits are tracked in-memory.
 
 ### `pg_stat_statements` Extension
 

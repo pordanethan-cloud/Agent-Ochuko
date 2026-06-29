@@ -2285,7 +2285,7 @@ Frontend           →  Only: SUPABASE_URL + SUPABASE_ANON_KEY (public, safe)
 
 - [ ] Azure Application Insights: traces, exceptions, custom events (token usage)
 - [ ] Structured logging: every FastAPI request/error logged to App Insights
-- [ ] CI/CD: GitHub Actions for backend (Docker → Container App) + frontend (Vite build → Static Web App)
+- [ ] CI/CD: GitHub Actions for backend (Docker Hub → Container App) + frontend/admin (Vite build → Storage Blob Static Sites)
 - [ ] Container health check endpoint: `GET /health`
 - [ ] Blue/green deployment strategy on Container Apps
 - [ ] Load test: simulate 50 concurrent streaming users (k6 or locust)

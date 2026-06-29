@@ -205,21 +205,20 @@ Picking up from Phase 6.1:
   2. Run `pytest` (unit tests) — fail pipeline if any test fails
   3. Run `ruff check` (linting) + `ruff format --check` (formatting)
   4. Build Docker image, tag with `git SHA`
-  5. Push to Azure Container Registry
-  6. Deploy to Azure Container Apps with revision suffix = git SHA
+  5. Push to private Docker Hub registry
+  6. Deploy to Azure Container Apps
   7. Wait for health check to pass on new revision
-  8. If health check fails → auto-rollback to previous revision
 - [ ] **Frontend pipeline** (`.github/workflows/frontend-deploy.yml`):
   1. Trigger: push to `main` with changes in `frontend/**`
   2. `npm ci` → `npm run build` → `npm run lint`
-  3. Deploy `dist/` to Azure Static Web App (Chat)
+  3. Deploy `dist/` to Azure Storage Blob static website container (`$web` on `agentochukostore`)
 - [ ] **Admin pipeline** (`.github/workflows/admin-deploy.yml`):
-  1. Same as frontend but deploys to Azure Static Web App (Admin)
+  1. Same as frontend but deploys to Azure Storage Blob static website container (`$web` on `agentochukoadmin`)
 - [ ] **Functions pipeline** (`.github/workflows/functions-deploy.yml`):
   1. Trigger: push to `main` with changes in `functions/**`
   2. Run function-specific unit tests
   3. Deploy to Azure Function App using `func azure functionapp publish`
-- [ ] All pipelines use GitHub Secrets for: `AZURE_CREDENTIALS`, `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`, `SWA_DEPLOYMENT_TOKEN_CHAT`, `SWA_DEPLOYMENT_TOKEN_ADMIN`
+- [ ] All pipelines use GitHub Secrets for: `AZURE_CREDENTIALS`, `DOCKER_USERNAME`, `DOCKER_PASSWORD`
 
 ### 7.4 — Container Deployment Strategy (Day 2)
 - [ ] **Blue/green (revision-based)** on Azure Container Apps:
@@ -247,13 +246,13 @@ Picking up from Phase 6.1:
   - Reject tokens signed with `none` algorithm (JWT alg confusion attack)
   - Cache JWKS keys for 1 hour, refresh on miss
 - [ ] **CORS strict audit**:
-  - `ALLOWED_ORIGINS` contains ONLY: `https://agent-ochuko.azurestaticapps.net` (chat), `https://agent-ochuko-admin.azurestaticapps.net` (admin), `http://localhost:5173` (dev)
+  - `ALLOWED_ORIGINS` contains ONLY: `https://agentochukostore.z1.web.core.windows.net` (chat), `https://agentochukoadmin.z1.web.core.windows.net` (admin), `http://localhost:5173` (dev)
   - No wildcard `*` — ever
   - `allow_credentials = True` — required for JWT cookie flow
 - [ ] **Rate limiting** (if not already in Phase 3):
   - Per-IP: 100 requests/minute (prevent scraping/abuse)
   - Per-user: 30 streaming requests/minute (prevent token burning)
-  - Implementation: `slowapi` or custom middleware using in-memory sliding window (or Redis if scaling > 1 replica — use Azure Cache for Redis Basic C0 if needed)
+  - Implementation: `slowapi` middleware using in-memory storage (`memory://`), relying on Azure Container Apps sticky sessions (session affinity) for replica consistency.
 - [ ] **File upload security**:
   - Validate MIME type server-side before generating presigned URL
   - Max file size enforced: `admin_settings.max_file_size_mb` (default 10MB)
@@ -324,35 +323,43 @@ Picking up from Phase 6.1:
 **Duration**: 2–3 days | **Depends on**: Phase 6.6 (summarizer cron), Phase 1 (model_router.py)
 
 ### 8.1 — ModelRouter in the Hot Path (Day 1)
-- [ ] Verify `model_router.py` is invoked on every `/v1/responses/stream` request AFTER middleware, BEFORE Azure OpenAI call
-- [ ] Wire routing decision into the message record: `messages.routing_mode` and `messages.routing_reason` populated on every assistant response
-- [ ] Confirm Nano interceptor fires correctly:
+- [x] Verify `model_router.py` is invoked on every `/v1/responses/stream` request AFTER middleware, BEFORE Azure OpenAI call
+- [x] Wire routing decision into the message record: `messages.routing_mode` and `messages.routing_reason` populated on every assistant response
+- [x] Confirm Nano interceptor fires correctly:
   - Send "hi" → routed to `gpt-5.4-nano` with `routing_mode = 'nano'`
   - Send "hi" 3 times → 4th message falls through to user's selected mode
   - Send "hi" while in DISCUSS mode → bypasses interceptor, uses DISCUSS prompt directly
-- [ ] Confirm mode switching works: user changes mode from DISCUSS to THINK mid-conversation → next message uses `gpt-5.4` with THINK prompt
-- [ ] Log every routing decision to `audit_log` with `action = 'model_route'` and `metadata = {mode, deployment, reasoning}`
+- [x] Confirm mode switching works: user changes mode from DISCUSS to THINK mid-conversation → next message uses `gpt-5.4` with THINK prompt
+- [x] Log every routing decision to `audit_log` with `action = 'model_route'` and `metadata = {mode, deployment, reasoning}`
 
 ### 8.2 — Compaction Context Integration (Day 1–2)
-- [ ] Backend context builder (`build_llm_context()`) must:
+- [x] Backend context builder (`build_llm_context()`) must:
   1. Query `messages WHERE conversation_id = :id AND is_archived_msg = FALSE ORDER BY created_at ASC`
   2. This naturally includes: the `[SUMMARY]` message (is_summary=TRUE, is_archived_msg=FALSE) + all post-compaction messages
   3. Prepend the routing-selected system prompt from ModelRouter
   4. Send this context to Azure OpenAI Responses API
-- [ ] Frontend must NOT change — it queries ALL messages (including archived) for scrollable display, but the LLM only sees the compacted context
-- [ ] Test: conversation with 60 messages → compaction runs → send new message → verify LLM response references facts from the summary, not hallucinated
+- [x] Frontend must NOT change — it queries ALL messages (including archived) for scrollable display, but the LLM only sees the compacted context
+- [x] Test: conversation with 60 messages → compaction runs → send new message → verify LLM response references facts from the summary, not hallucinated
 
 ### 8.3 — Runtime Prompt Override (Day 2)
-- [ ] Verify Azure App Configuration prompt keys (`THINK_PROMPT`, `SOLVE_PROMPT`, `DISCUSS_PROMPT`, `NANO_PROMPT`) override in-code constants
-- [ ] Test: change `THINK_PROMPT` in Azure App Configuration → send a THINK message → verify new prompt behavior — no redeploy
-- [ ] `config.py` cache refresh: either poll App Configuration every 5 minutes via background task, or use Azure App Configuration's push-based refresh with Sentinel key
+- [x] Verify Azure App Configuration prompt keys (`THINK_PROMPT`, `SOLVE_PROMPT`, `DISCUSS_PROMPT`, `NANO_PROMPT`) override in-code constants
+- [x] Test: change `THINK_PROMPT` in Azure App Configuration → send a THINK message → verify new prompt behavior — no redeploy
+- [x] `config.py` cache refresh: either poll App Configuration every 5 minutes via background task, or use Azure App Configuration's push-based refresh with Sentinel key
 
 ### 8.4 — Mode Toggle UI (Day 2–3)
-- [ ] Frontend: 3-mode toggle (THINK / SOLVE / DISCUSS) visible in chat input area
-- [ ] Default mode on new conversation: DISCUSS (cheapest)
-- [ ] Mode persisted per-conversation in `conversations.mode` column
-- [ ] Switching mode mid-conversation: `PATCH /v1/conversations/{id}` with `{mode: "think"}` — next message uses new mode
-- [ ] Visual indicator: show which model handled the response (small badge on assistant message: "THINK · GPT-5.4" or "NANO · intercepted")
+- [x] Frontend: 3-mode toggle (THINK / SOLVE / DISCUSS) visible in chat input area
+- [x] Default mode on new conversation: DISCUSS (cheapest)
+- [x] Mode persisted per-conversation in `conversations.mode` column
+- [x] Switching mode mid-conversation: `PATCH /v1/conversations/{id}` with `{mode: "think"}` — next message uses new mode
+- [x] Visual indicator: show which model handled the response (small badge on assistant message: "THINK · GPT-5.4" or "NANO · intercepted")
+
+### 8.5 — Security & UI Polish Hotfixes
+- [x] Implement floating sidebar layout in Dashboard.tsx to float with top-3 left-3 margins, rounded borders, and fade/slide transition
+- [x] Remove central gold ambient background glow div on dashboard load
+- [x] Fix CORS and 500 database crashes on /v1/admin/usage and /v1/admin/audit endpoints
+- [x] Resolve Single Page Application (SPA) page refreshes by configuring Azure Storage static website error document path to index.html
+- [x] Enforce user deactivation checks in BlockGuardMiddleware to prevent paused users from chatting
+- [x] Parse server error bodies and map backend blockade codes to user-friendly explanation messages in Dashboard.tsx
 
 **✅ Milestone**: Intelligent model routing fully operational. Users consciously choose their cost tier, greetings are silently deflected to Nano, long conversations are compacted, and prompts can be tuned live from Azure portal.
 
