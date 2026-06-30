@@ -591,12 +591,12 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             current_retries = job_res.data.get("retry_count", 0) if job_res.data else 0
             new_retries = current_retries + 1
 
-            update_data = {"retry_count": new_retries}
-            if new_retries >= 5:
-                update_data["status"] = "failed"
-                update_data["error"] = str(job_err)
-                update_data["completed_at"] = datetime.now(timezone.utc).isoformat()
-
+            update_data = {
+                "retry_count": new_retries,
+                "status": "failed",
+                "error": str(job_err),
+                "completed_at": datetime.now(timezone.utc).isoformat()
+            }
             db.table("jobs").update(update_data).eq("id", job_id).execute()
         except Exception as db_err:
             logger.error(f"Failed to record job failure for job {job_id}: {db_err}")
