@@ -80,7 +80,19 @@ async def queue_ocr_job(
                 detail=f"Monthly OCR pages quota exceeded ({pages_used}/{limit} pages processed)."
             )
 
-        # 2. Insert pending job row
+        # 2. Ensure conversation row exists (frontend may have generated a UUID locally
+        #    before the backend created the DB row — upsert to avoid FK violation)
+        supabase.table("conversations").upsert(
+            {
+                "id": conversation_id,
+                "user_id": user_id,
+                "title": "Agent Job",
+                "message_count": 0,
+            },
+            on_conflict="id"
+        ).execute()
+
+        # 3. Insert pending job row
         job_data = {
             "user_id": user_id,
             "conversation_id": conversation_id,
@@ -89,7 +101,7 @@ async def queue_ocr_job(
             "input_metadata": {"blob_url": blob_url}
         }
         job_res = supabase.table("jobs").insert(job_data).execute()
-        if not job_res.data:
+        if not job_res or not job_res.data:
             raise HTTPException(status_code=500, detail="Failed to write job entry to database.")
 
         job_id = job_res.data[0]["id"]
@@ -158,7 +170,19 @@ async def queue_vision_job(
                 detail=f"Monthly Vision calls quota exceeded ({calls_used}/{limit} calls processed)."
             )
 
-        # 2. Insert pending job row
+        # 2. Ensure conversation row exists (frontend may have generated a UUID locally
+        #    before the backend created the DB row — upsert to avoid FK violation)
+        supabase.table("conversations").upsert(
+            {
+                "id": conversation_id,
+                "user_id": user_id,
+                "title": "Agent Job",
+                "message_count": 0,
+            },
+            on_conflict="id"
+        ).execute()
+
+        # 3. Insert pending job row
         job_data = {
             "user_id": user_id,
             "conversation_id": conversation_id,
@@ -167,8 +191,9 @@ async def queue_vision_job(
             "input_metadata": {"blob_url": blob_url, "prompt": prompt}
         }
         job_res = supabase.table("jobs").insert(job_data).execute()
-        if not job_res.data:
+        if not job_res or not job_res.data:
             raise HTTPException(status_code=500, detail="Failed to write job entry to database.")
+
 
         job_id = job_res.data[0]["id"]
 
