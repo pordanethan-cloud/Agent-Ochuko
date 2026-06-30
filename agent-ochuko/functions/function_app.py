@@ -527,7 +527,7 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             # Increment user's monthly OCR quota
             period = datetime.now(timezone.utc).strftime("%Y-%m")
             quota_res = db.table("agent_quotas").select("ocr_pages_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
-            if quota_res.data:
+            if quota_res and hasattr(quota_res, "data") and quota_res.data:
                 current_pages = quota_res.data.get("ocr_pages_used", 0)
                 db.table("agent_quotas").update({
                     "ocr_pages_used": current_pages + pages_count
@@ -559,7 +559,7 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             # Increment user's monthly Vision quota
             period = datetime.now(timezone.utc).strftime("%Y-%m")
             quota_res = db.table("agent_quotas").select("vision_calls_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
-            if quota_res.data:
+            if quota_res and hasattr(quota_res, "data") and quota_res.data:
                 current_calls = quota_res.data.get("vision_calls_used", 0)
                 db.table("agent_quotas").update({
                     "vision_calls_used": current_calls + 1
