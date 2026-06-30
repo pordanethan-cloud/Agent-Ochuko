@@ -584,17 +584,22 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
         logger.info(f"Job {job_id} ({job_type}) finished processing successfully.")
 
     except Exception as job_err:
-        logger.error(f"Failed to process job {job_id} ({job_type}): {job_err}", exc_info=True)
+        original_error_msg = str(job_err)
+        logger.error(f"Failed to process job {job_id} ({job_type}): {original_error_msg}", exc_info=True)
         try:
             db = get_supabase()
-            job_res = db.table("jobs").select("retry_count").eq("id", job_id).maybe_single().execute()
-            current_retries = job_res.data.get("retry_count", 0) if job_res.data else 0
-            new_retries = current_retries + 1
+            new_retries = 1
+            try:
+                job_res = db.table("jobs").select("retry_count").eq("id", job_id).maybe_single().execute()
+                if job_res and hasattr(job_res, "data") and job_res.data:
+                    new_retries = job_res.data.get("retry_count", 0) + 1
+            except Exception as read_err:
+                logger.warning(f"Failed to read current retry count: {read_err}")
 
             update_data = {
                 "retry_count": new_retries,
                 "status": "failed",
-                "error": str(job_err),
+                "error": original_error_msg,
                 "completed_at": datetime.now(timezone.utc).isoformat()
             }
             db.table("jobs").update(update_data).eq("id", job_id).execute()
