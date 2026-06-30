@@ -9,6 +9,7 @@ interface Message {
   content: string
   routing_mode?: string
   routing_reason?: string
+  fileAttachment?: { name: string; jobType: 'ocr' | 'vision' }
 }
 
 // ─── Inline markdown: bold, italic, code, links ───────────────────────────────
@@ -961,17 +962,20 @@ export const Dashboard: React.FC = () => {
       setActiveConversationId(convoId)
     }
 
+    // Capture file metadata now — before any setState calls clear it
     const fileName = attachedFile?.name || (jobType === 'ocr' ? 'document.pdf' : 'image.png')
-    const userMsgText = jobType === 'ocr'
-      ? `__AGENT_FILE__ocr__${fileName}${promptText ? `__PROMPT__${promptText}` : ''}`
-      : `__AGENT_FILE__vision__${fileName}${promptText ? `__PROMPT__${promptText}` : ''}`
+    const fileAttachment: Message['fileAttachment'] = { name: fileName, jobType }
+    // Plain-text version stored to DB (content field must be a string)
+    const userMsgText = promptText
+      ? `[${jobType === 'ocr' ? 'Document' : 'Image'} Analysis: ${fileName}] ${promptText}`
+      : `[${jobType === 'ocr' ? 'Document' : 'Image'} Analysis: ${fileName}]`
 
-    const nextMessages: Message[] = [
-      ...messages,
-      { role: 'user', content: userMsgText },
-      { role: 'assistant', content: 'Queuing job...' }
-    ]
-    setMessages(nextMessages)
+    // Use functional update to avoid stale messages closure
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: userMsgText, fileAttachment },
+      { role: 'assistant', content: '' }
+    ])
     setAttachedFile(null)
 
     try {
@@ -1051,9 +1055,17 @@ export const Dashboard: React.FC = () => {
               const errMsg = updatedJob.error || 'Background analysis encountered an error.'
               setMessages((prev) => {
                 const next = [...prev]
-                next[next.length - 1] = {
-                  role: 'assistant',
-                  content: errMsg
+                const last = next[next.length - 1]
+                // Replace if still in a loading/processing state (empty placeholder or processing message)
+                if (last.role === 'assistant' && (
+                  last.content === '' ||
+                  last.content.includes('processing layouts') ||
+                  last.content.includes('Queuing')
+                )) {
+                  next[next.length - 1] = {
+                    role: 'assistant',
+                    content: errMsg
+                  }
                 }
                 return next
               })
@@ -1069,11 +1081,11 @@ export const Dashboard: React.FC = () => {
         setMessages((prev) => {
           const next = [...prev]
           const last = next[next.length - 1]
-          // Only replace if it still shows a loading/processing state
+          // Replace if still in a loading/processing state (empty placeholder or processing message)
           if (last.role === 'assistant' && (
-            last.content.includes('Queuing') ||
+            last.content === '' ||
             last.content.includes('processing layouts') ||
-            last.content.includes('job...')
+            last.content.includes('Queuing')
           )) {
             next[next.length - 1] = {
               role: 'assistant',
@@ -1349,30 +1361,27 @@ export const Dashboard: React.FC = () => {
                               </button>
                             </div>
                           </div>
-                        ) : msg.content.startsWith('__AGENT_FILE__') ? (
-                          // Agent job user message — render as file chip + optional prompt
-                          (() => {
-                            const parts = msg.content.replace('__AGENT_FILE__', '')
-                            const [typePart, rest] = parts.split('__')
-                            const jobKind = typePart  // 'ocr' or 'vision'
-                            const [filePart, promptPart] = rest.split('__PROMPT__')
-                            return (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#c5a880]/8 border border-[#c5a880]/20">
-                                  <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
-                                  <div className="min-w-0">
-                                    <p className="text-[11px] font-bold text-[#c5a880] uppercase tracking-widest">
-                                      {jobKind === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
-                                    </p>
-                                    <p className="text-[13px] text-brand-text/90 font-medium truncate">{filePart}</p>
-                                  </div>
-                                </div>
-                                {promptPart && (
-                                  <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">{promptPart}</p>
-                                )}
+                        ) : msg.fileAttachment ? (
+                          // Agent job — render as file chip + optional prompt text
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#c5a880]/8 border border-[#c5a880]/20">
+                              <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-bold text-[#c5a880] uppercase tracking-widest">
+                                  {msg.fileAttachment.jobType === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
+                                </p>
+                                <p className="text-[13px] text-brand-text/90 font-medium truncate">
+                                  {msg.fileAttachment.name}
+                                </p>
                               </div>
-                            )
-                          })()
+                            </div>
+                            {/* Show any prompt text the user typed alongside the file */}
+                            {msg.content.includes('] ') && (
+                              <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
+                                {msg.content.replace(/^\[.*?\] /, '')}
+                              </p>
+                            )}
+                          </div>
                         ) : (
                           <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
                             {msg.content}
