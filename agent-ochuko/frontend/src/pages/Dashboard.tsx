@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -602,6 +602,14 @@ export const Dashboard: React.FC = () => {
 
 
   const handleSelectConversation = async (id: string, convoMode: 'think' | 'solve' | 'discuss') => {
+    // Abort any active stream cleanly before switching — each session is independent
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+      setIsStreaming(false)
+      setWebSearchStatus('idle')
+    }
+
     try {
       const session = await supabase.auth.getSession()
       const token = session.data.session?.access_token
@@ -823,6 +831,31 @@ export const Dashboard: React.FC = () => {
         setTimeout(() => inputRef.current?.focus(), 0)
       }
     }
+  }
+
+  // Stop the active stream — aborts the fetch, marks the partial message as stopped
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
+    setMessages((prev) => {
+      const next = [...prev]
+      const last = next[next.length - 1]
+      if (last?.role === 'assistant' && last.content.length > 0) {
+        next[next.length - 1] = {
+          ...last,
+          content: last.content + '\n\n*— stopped —*'
+        }
+      } else if (last?.role === 'assistant') {
+        // Remove empty placeholder if nothing was streamed yet
+        next.pop()
+      }
+      return next
+    })
+    setIsStreaming(false)
+    setWebSearchStatus('idle')
+    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   const handleTriggerUpload = () => {
@@ -1495,7 +1528,7 @@ export const Dashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={handleTriggerUpload}
-                disabled={uploading || isStreaming}
+                disabled={uploading}
                 className="absolute right-3 top-3.5 p-0.5 text-[#8e95a2] hover:text-[#c5a880] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
                 title="Attach document or image"
               >
@@ -1503,14 +1536,27 @@ export const Dashboard: React.FC = () => {
               </button>
             </div>
 
-            <button
-              type="submit"
-              disabled={isStreaming || uploading || (!input.trim() && !attachedFile)}
-              aria-label="Send"
-              className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
-            >
-              <Send className="w-4 h-4" />
-            </button>
+            {isStreaming ? (
+              // Stop button — aborts the active model stream only, not Azure background jobs
+              <button
+                type="button"
+                onClick={handleStop}
+                aria-label="Stop generation"
+                title="Stop generation"
+                className="w-12 h-12 bg-[#1a1c20] border border-[#2b2e35] text-[#c5a880] rounded-xl flex items-center justify-center hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition duration-150 active:scale-95 shadow-md shrink-0 group"
+              >
+                <Square className="w-[14px] h-[14px] fill-[#c5a880] group-hover:fill-[#d4b990] transition duration-150" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={uploading || (!input.trim() && !attachedFile)}
+                aria-label="Send"
+                className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            )}
 
             <input
               ref={fileInputRef}
