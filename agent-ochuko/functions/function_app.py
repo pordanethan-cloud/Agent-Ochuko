@@ -466,8 +466,14 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
     logger.info(f"agent_jobs_trigger started at {utc_timestamp}")
 
     try:
-        body_str = msg.get_body().decode("utf-8")
-        payload = json.loads(body_str)
+        raw = msg.get_body().decode("utf-8").strip()
+        # queue_dispatcher.py base64-encodes the JSON payload before enqueuing
+        import base64 as _b64
+        try:
+            decoded = _b64.b64decode(raw).decode("utf-8")
+        except Exception:
+            decoded = raw  # fallback: not base64, try raw JSON directly
+        payload = json.loads(decoded)
     except Exception as parse_err:
         logger.error(f"Failed to parse queue message payload: {parse_err}")
         return
