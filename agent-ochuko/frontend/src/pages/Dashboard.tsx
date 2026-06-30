@@ -960,7 +960,14 @@ export const Dashboard: React.FC = () => {
       })
 
       if (!res.ok) {
-        throw new Error(await res.text())
+        let errDetail = 'The document analysis service is temporarily unavailable.'
+        try {
+          const errBody = await res.json()
+          errDetail = errBody?.detail || errBody?.message || errDetail
+        } catch {
+          errDetail = (await res.text()) || errDetail
+        }
+        throw new Error(errDetail)
       }
 
       const { job_id } = await res.json()
@@ -1023,13 +1030,16 @@ export const Dashboard: React.FC = () => {
         .subscribe()
 
     } catch (err: any) {
-      console.error("Agent job trigger failed:", err)
-      const explanation = getFriendlyErrorMessage(err.message || 'unknown')
+      console.error('Agent job trigger failed:', err)
+      // err.message is already the clean detail string from our API response parser
+      const explanation = err.message && !err.message.startsWith('{') && !err.message.startsWith('Error:')
+        ? err.message
+        : getFriendlyErrorMessage(err.message || 'unknown')
       setMessages((prev) => {
         const next = [...prev]
         next[next.length - 1] = {
           role: 'assistant',
-          content: `Failed to trigger agent: ${explanation}`
+          content: explanation
         }
         return next
       })

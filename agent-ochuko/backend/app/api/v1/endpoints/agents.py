@@ -5,7 +5,7 @@ Handles queuing asynchronous background agent tasks (OCR, Vision)
 via the storage queue (Pattern B).
 """
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -34,6 +34,36 @@ class JobResponse(BaseModel):
     status: str = Field("pending", description="The current status of the job")
 
 
+def _safe_execute(query) -> Optional[Any]:
+    """Run a Supabase query and return the response, or None on any error."""
+    try:
+        return query.execute()
+    except Exception as exc:
+        logger.warning("Supabase query failed (non-fatal): %s", exc)
+        return None
+
+
+def _ensure_conversation(supabase, conversation_id: str, user_id: str) -> None:
+    """
+    Upsert a conversation row so the FK on jobs.conversation_id is always satisfied.
+    The frontend may generate a UUID locally before the backend has created the DB row.
+    If the row already exists this is a no-op.
+    """
+    try:
+        supabase.table("conversations").upsert(
+            {
+                "id": conversation_id,
+                "user_id": user_id,
+                "title": "Agent Job",
+                "message_count": 0,
+            },
+            on_conflict="id"
+        ).execute()
+    except Exception as exc:
+        # Non-fatal if row already exists — FK will be satisfied either way
+        logger.warning("Could not upsert conversation %s: %s", conversation_id, exc)
+
+
 @router.post("/ocr", response_model=JobResponse, status_code=202, summary="Queue a document OCR / layout extraction task")
 async def queue_ocr_job(
     payload: OCRRequest,
@@ -53,26 +83,31 @@ async def queue_ocr_job(
     supabase = get_supabase_admin()
 
     try:
-        # 1. Enforce monthly agent quota limit
+        # 1. Enforce monthly agent quota limit (soft-fail: if table missing, allow through)
         current_period = datetime.now(timezone.utc).strftime("%Y-%m")
-        res = (
+        quota_res = _safe_execute(
             supabase.table("agent_quotas")
             .select("ocr_pages_used")
             .eq("user_id", user_id)
             .eq("period", current_period)
             .maybe_single()
-            .execute()
         )
-        pages_used = res.data.get("ocr_pages_used", 0) if res.data else 0
+        pages_used = 0
+        if quota_res and quota_res.data and isinstance(quota_res.data, dict):
+            pages_used = quota_res.data.get("ocr_pages_used", 0) or 0
 
-        settings_res = (
+        settings_res = _safe_execute(
             supabase.table("admin_settings")
             .select("value")
             .eq("key", "max_ocr_pages_per_user")
             .maybe_single()
-            .execute()
         )
-        limit = int(settings_res.data["value"]) if settings_res.data else 50
+        limit = 50
+        if settings_res and settings_res.data and isinstance(settings_res.data, dict):
+            try:
+                limit = int(settings_res.data.get("value", 50))
+            except (ValueError, TypeError):
+                limit = 50
 
         if pages_used >= limit:
             raise HTTPException(
@@ -80,17 +115,8 @@ async def queue_ocr_job(
                 detail=f"Monthly OCR pages quota exceeded ({pages_used}/{limit} pages processed)."
             )
 
-        # 2. Ensure conversation row exists (frontend may have generated a UUID locally
-        #    before the backend created the DB row — upsert to avoid FK violation)
-        supabase.table("conversations").upsert(
-            {
-                "id": conversation_id,
-                "user_id": user_id,
-                "title": "Agent Job",
-                "message_count": 0,
-            },
-            on_conflict="id"
-        ).execute()
+        # 2. Ensure conversation row exists before inserting the job (avoids FK violation)
+        _ensure_conversation(supabase, conversation_id, user_id)
 
         # 3. Insert pending job row
         job_data = {
@@ -100,13 +126,13 @@ async def queue_ocr_job(
             "status": "pending",
             "input_metadata": {"blob_url": blob_url}
         }
-        job_res = supabase.table("jobs").insert(job_data).execute()
+        job_res = _safe_execute(supabase.table("jobs").insert(job_data))
         if not job_res or not job_res.data:
-            raise HTTPException(status_code=500, detail="Failed to write job entry to database.")
+            raise HTTPException(status_code=500, detail="Could not create the background job. Please try again.")
 
         job_id = job_res.data[0]["id"]
 
-        # 3. Dispatch to Azure Queue Storage
+        # 4. Dispatch to Azure Queue Storage
         enqueue_job(
             job_id=job_id,
             job_type="ocr",
@@ -119,8 +145,8 @@ async def queue_ocr_job(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to queue OCR job for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to queue OCR job: {str(e)}")
+        logger.error("Failed to queue OCR job for user %s: %s", user_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to queue the document analysis job. Please try again.")
 
 
 @router.post("/vision", response_model=JobResponse, status_code=202, summary="Queue a vision image analysis task")
@@ -143,26 +169,31 @@ async def queue_vision_job(
     supabase = get_supabase_admin()
 
     try:
-        # 1. Enforce monthly agent quota limit
+        # 1. Enforce monthly agent quota limit (soft-fail: if table missing, allow through)
         current_period = datetime.now(timezone.utc).strftime("%Y-%m")
-        res = (
+        quota_res = _safe_execute(
             supabase.table("agent_quotas")
             .select("vision_calls_used")
             .eq("user_id", user_id)
             .eq("period", current_period)
             .maybe_single()
-            .execute()
         )
-        calls_used = res.data.get("vision_calls_used", 0) if res.data else 0
+        calls_used = 0
+        if quota_res and quota_res.data and isinstance(quota_res.data, dict):
+            calls_used = quota_res.data.get("vision_calls_used", 0) or 0
 
-        settings_res = (
+        settings_res = _safe_execute(
             supabase.table("admin_settings")
             .select("value")
             .eq("key", "max_vision_calls")
             .maybe_single()
-            .execute()
         )
-        limit = int(settings_res.data["value"]) if settings_res.data else 5000
+        limit = 5000
+        if settings_res and settings_res.data and isinstance(settings_res.data, dict):
+            try:
+                limit = int(settings_res.data.get("value", 5000))
+            except (ValueError, TypeError):
+                limit = 5000
 
         if calls_used >= limit:
             raise HTTPException(
@@ -170,17 +201,8 @@ async def queue_vision_job(
                 detail=f"Monthly Vision calls quota exceeded ({calls_used}/{limit} calls processed)."
             )
 
-        # 2. Ensure conversation row exists (frontend may have generated a UUID locally
-        #    before the backend created the DB row — upsert to avoid FK violation)
-        supabase.table("conversations").upsert(
-            {
-                "id": conversation_id,
-                "user_id": user_id,
-                "title": "Agent Job",
-                "message_count": 0,
-            },
-            on_conflict="id"
-        ).execute()
+        # 2. Ensure conversation row exists before inserting the job (avoids FK violation)
+        _ensure_conversation(supabase, conversation_id, user_id)
 
         # 3. Insert pending job row
         job_data = {
@@ -190,14 +212,13 @@ async def queue_vision_job(
             "status": "pending",
             "input_metadata": {"blob_url": blob_url, "prompt": prompt}
         }
-        job_res = supabase.table("jobs").insert(job_data).execute()
+        job_res = _safe_execute(supabase.table("jobs").insert(job_data))
         if not job_res or not job_res.data:
-            raise HTTPException(status_code=500, detail="Failed to write job entry to database.")
-
+            raise HTTPException(status_code=500, detail="Could not create the background job. Please try again.")
 
         job_id = job_res.data[0]["id"]
 
-        # 3. Dispatch to Azure Queue Storage
+        # 4. Dispatch to Azure Queue Storage
         enqueue_job(
             job_id=job_id,
             job_type="vision",
@@ -210,5 +231,5 @@ async def queue_vision_job(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to queue Vision job for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to queue Vision job: {str(e)}")
+        logger.error("Failed to queue Vision job for user %s: %s", user_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to queue the image analysis job. Please try again.")
