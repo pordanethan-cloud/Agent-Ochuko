@@ -928,14 +928,15 @@ export const Dashboard: React.FC = () => {
       setActiveConversationId(convoId)
     }
 
+    const fileName = attachedFile?.name || (jobType === 'ocr' ? 'document.pdf' : 'image.png')
     const userMsgText = jobType === 'ocr'
-      ? `[OCR Analysis requested for document: ${attachedFile?.name || 'document.pdf'}]`
-      : `[Vision Analysis requested for image: ${attachedFile?.name || 'image.png'}] ${promptText || ''}`
+      ? `__AGENT_FILE__ocr__${fileName}${promptText ? `__PROMPT__${promptText}` : ''}`
+      : `__AGENT_FILE__vision__${fileName}${promptText ? `__PROMPT__${promptText}` : ''}`
 
     const nextMessages: Message[] = [
       ...messages,
       { role: 'user', content: userMsgText },
-      { role: 'assistant', content: 'Queuing background agent job...' }
+      { role: 'assistant', content: 'Queuing job...' }
     ]
     setMessages(nextMessages)
     setAttachedFile(null)
@@ -980,6 +981,7 @@ export const Dashboard: React.FC = () => {
           { event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${job_id}` },
           async (payload) => {
             const updatedJob = payload.new
+            clearTimeout(stallTimer)
             if (updatedJob.status === 'processing') {
                setMessages((prev) => {
                  const next = [...prev]
@@ -1004,21 +1006,21 @@ export const Dashboard: React.FC = () => {
 
               // Save the message records to history
               try {
-                await supabase.from("messages").insert([
+                await supabase.from('messages').insert([
                   { conversation_id: convoId, role: 'user', content: userMsgText, routing_mode: 'discuss' },
                   { conversation_id: convoId, role: 'assistant', content: textResult, routing_mode: jobType }
                 ])
                 fetchConversations()
               } catch (dbErr) {
-                console.error("Failed to commit messages to history:", dbErr)
+                console.error('Failed to commit messages to history:', dbErr)
               }
             } else if (updatedJob.status === 'failed') {
-              const errMsg = updatedJob.error || 'Unknown error occurred during background analysis.'
+              const errMsg = updatedJob.error || 'Background analysis encountered an error.'
               setMessages((prev) => {
                 const next = [...prev]
                 next[next.length - 1] = {
                   role: 'assistant',
-                  content: `Agent execution failure: ${errMsg}`
+                  content: errMsg
                 }
                 return next
               })
@@ -1028,6 +1030,28 @@ export const Dashboard: React.FC = () => {
           }
         )
         .subscribe()
+
+      // Timeout — if Azure Function hasn't updated the job within 90 s, unblock the UI
+      let stallTimer = setTimeout(() => {
+        setMessages((prev) => {
+          const next = [...prev]
+          const last = next[next.length - 1]
+          // Only replace if it still shows a loading/processing state
+          if (last.role === 'assistant' && (
+            last.content.includes('Queuing') ||
+            last.content.includes('processing layouts') ||
+            last.content.includes('job...')
+          )) {
+            next[next.length - 1] = {
+              role: 'assistant',
+              content: `Your document has been queued for analysis. Results will be added here automatically once processing completes — this may take a minute.`
+            }
+          }
+          return next
+        })
+        setIsStreaming(false)
+        channel.unsubscribe()
+      }, 90_000)
 
     } catch (err: any) {
       console.error('Agent job trigger failed:', err)
@@ -1292,6 +1316,30 @@ export const Dashboard: React.FC = () => {
                               </button>
                             </div>
                           </div>
+                        ) : msg.content.startsWith('__AGENT_FILE__') ? (
+                          // Agent job user message — render as file chip + optional prompt
+                          (() => {
+                            const parts = msg.content.replace('__AGENT_FILE__', '')
+                            const [typePart, rest] = parts.split('__')
+                            const jobKind = typePart  // 'ocr' or 'vision'
+                            const [filePart, promptPart] = rest.split('__PROMPT__')
+                            return (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#c5a880]/8 border border-[#c5a880]/20">
+                                  <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
+                                  <div className="min-w-0">
+                                    <p className="text-[11px] font-bold text-[#c5a880] uppercase tracking-widest">
+                                      {jobKind === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
+                                    </p>
+                                    <p className="text-[13px] text-brand-text/90 font-medium truncate">{filePart}</p>
+                                  </div>
+                                </div>
+                                {promptPart && (
+                                  <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">{promptPart}</p>
+                                )}
+                              </div>
+                            )
+                          })()
                         ) : (
                           <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
                             {msg.content}
