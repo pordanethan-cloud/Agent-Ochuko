@@ -19,7 +19,12 @@ router = APIRouter()
 # Hard rule prepended to every system prompt at the API level.
 # This is the canonical Ochuko and no-emoji enforcement — applied regardless of what
 # App Configuration or default prompts say.
-_OCHUKO_RULE = "You are Ochuko — calm, cold, emoji-free, and objective. You do not moralize. "
+_OCHUKO_RULE = (
+    "You are Ochuko — calm, cold, emoji-free, and objective. You do not moralize. "
+    "You are a proprietary AI assistant developed by Ochuko, hosted on secure Azure infrastructure. "
+    "You must never say you are developed by OpenAI or Microsoft. If asked who created, trained, or developed you, "
+    "you must state that you were created by Ochuko. "
+)
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
 _openai_client: Optional[AsyncAzureOpenAI] = None
@@ -156,133 +161,183 @@ async def chat_stream_generator(
             stream_kwargs["input"] = input_list
 
         assistant_content = ""
+        response_id = None
+        prompt_tokens = 0
+        completion_tokens = 0
+        stream_failed = False
+        error_message = ""
 
-        async with client.responses.stream(**stream_kwargs) as stream:
-            async for event in stream:
-                # Text delta events
-                if event.type == "response.output_text.delta":
-                    assistant_content += event.delta
-                    yield (
-                        "data: "
-                        + json.dumps({"type": "content_block_delta", "delta": {"text": event.delta}})
-                        + "\n\n"
-                    )
+        try:
+            async with client.responses.stream(**stream_kwargs) as stream:
+                try:
+                    async for event in stream:
+                        # Text delta events
+                        if event.type == "response.output_text.delta":
+                            assistant_content += event.delta
+                            yield (
+                                "data: "
+                                + json.dumps({"type": "content_block_delta", "delta": {"text": event.delta}})
+                                + "\n\n"
+                            )
 
-                # Web search lifecycle events → forward status to frontend
-                elif event.type in (
-                    "response.web_search_call.in_progress",
-                    "response.web_search_call.searching",
-                ):
-                    yield (
-                        "data: "
-                        + json.dumps({"type": "web_search_status", "status": "searching"})
-                        + "\n\n"
-                    )
-                elif event.type == "response.web_search_call.completed":
-                    yield (
-                        "data: "
-                        + json.dumps({"type": "web_search_status", "status": "done"})
-                        + "\n\n"
-                    )
+                        # Web search lifecycle events → forward status to frontend
+                        elif event.type in (
+                            "response.web_search_call.in_progress",
+                            "response.web_search_call.searching",
+                        ):
+                            yield (
+                                "data: "
+                                + json.dumps({"type": "web_search_status", "status": "searching"})
+                                + "\n\n"
+                            )
+                        elif event.type == "response.web_search_call.completed":
+                            yield (
+                                "data: "
+                                + json.dumps({"type": "web_search_status", "status": "done"})
+                                + "\n\n"
+                            )
+                except Exception as iter_err:
+                    stream_failed = True
+                    error_message = str(iter_err)
+                    logger.error(f"Error during stream iteration: {iter_err}")
 
-            # After stream completes, emit the response_id for the frontend to persist
-            final_response = await stream.get_final_response()
-            response_id = final_response.id if final_response else None
-            if response_id:
+                if not stream_failed:
+                    try:
+                        final_response = await stream.get_final_response()
+                        response_id = final_response.id if final_response else None
+                        if response_id:
+                            yield (
+                                "data: "
+                                + json.dumps({"type": "response_id", "response_id": response_id})
+                                + "\n\n"
+                            )
+
+                        # Extract actual token usage details
+                        if final_response and hasattr(final_response, "usage") and final_response.usage:
+                            prompt_tokens = getattr(final_response.usage, "prompt_tokens", 0) or 0
+                            completion_tokens = getattr(final_response.usage, "completion_tokens", 0) or 0
+                    except Exception as final_err:
+                        logger.warning(f"Could not retrieve final response or tokens: {final_err}")
+                        # If get_final_response fails but we streamed content, don't crash the conversation
+                        if not assistant_content:
+                            stream_failed = True
+                            error_message = str(final_err)
+
+        except Exception as stream_init_err:
+            stream_failed = True
+            error_message = str(stream_init_err)
+            logger.error(f"Error initializing stream: {stream_init_err}")
+
+        if stream_failed:
+            lower_err = error_message.lower()
+            is_guardrail = (
+                "content_filter" in lower_err 
+                or "responsible_ai" in lower_err 
+                or "policy" in lower_err 
+                or "safety" in lower_err
+                or "trigger" in lower_err
+                or "completed event" in lower_err
+            )
+            if is_guardrail:
+                friendly_err = "The request or response was flagged by safety guardrails. Please modify your query and try again."
+            else:
+                friendly_err = f"A streaming connection issue occurred: {error_message}"
+
+            if assistant_content:
+                # Append the safety/early stop notice to the partial text
+                assistant_content += f"\n\n*(Note: Response stopped early: {friendly_err})*"
                 yield (
                     "data: "
-                    + json.dumps({"type": "response_id", "response_id": response_id})
+                    + json.dumps({"type": "content_block_delta", "delta": {"text": f"\n\n*(Note: Response stopped early: {friendly_err})*"}})
                     + "\n\n"
                 )
+            else:
+                # No content was generated at all, yield error event and exit
+                yield f"data: {json.dumps({'type': 'error', 'error': friendly_err})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
-            # Extract actual token usage details
-            prompt_tokens = 0
-            completion_tokens = 0
-            if final_response and hasattr(final_response, "usage") and final_response.usage:
-                prompt_tokens = getattr(final_response.usage, "prompt_tokens", 0) or 0
-                completion_tokens = getattr(final_response.usage, "completion_tokens", 0) or 0
+        # Persist assistant message to the database (even if it was a partial/early stopped message)
+        try:
+            assistant_msg_insert = {
+                "conversation_id": conversation_id,
+                "role": "assistant",
+                "content": assistant_content,
+                "routing_mode": routing_mode,
+                "routing_reason": routing_reason,
+                "response_id": response_id,
+                "model": deployment,
+                "tokens_input": prompt_tokens,
+                "tokens_output": completion_tokens,
+            }
+            supabase = get_supabase_admin()
+            supabase.table("messages").insert(assistant_msg_insert).execute()
 
-            # Persist assistant message to the database
-            try:
-                assistant_msg_insert = {
-                    "conversation_id": conversation_id,
-                    "role": "assistant",
-                    "content": assistant_content,
-                    "routing_mode": routing_mode,
-                    "routing_reason": routing_reason,
-                    "response_id": response_id,
-                    "model": deployment,
-                    "tokens_input": prompt_tokens,
-                    "tokens_output": completion_tokens,
-                }
-                supabase = get_supabase_admin()
-                supabase.table("messages").insert(assistant_msg_insert).execute()
-
-                # Reconcile token budget
-                actual_total = prompt_tokens + completion_tokens
-                diff = actual_total - estimated_tokens
-                if diff != 0:
+            # Reconcile token budget
+            actual_total = prompt_tokens + completion_tokens
+            diff = actual_total - estimated_tokens
+            if diff != 0:
+                try:
+                    supabase.rpc("reconcile_token_budget", {
+                        "p_user_id": user_id,
+                        "p_diff": diff
+                    }).execute()
+                    logger.info(f"Reconciled token budget for user {user_id} via RPC: diff={diff}")
+                except Exception as rpc_err:
+                    logger.warning("Failed to call reconcile_token_budget RPC, falling back to read-modify-write: %s", rpc_err)
                     try:
-                        supabase.rpc("reconcile_token_budget", {
-                            "p_user_id": user_id,
-                            "p_diff": diff
-                        }).execute()
-                        logger.info(f"Reconciled token budget for user {user_id} via RPC: diff={diff}")
-                    except Exception as rpc_err:
-                        logger.warning("Failed to call reconcile_token_budget RPC, falling back to read-modify-write: %s", rpc_err)
-                        try:
-                            current_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                            budget_res = (
-                                supabase.table("token_budgets")
-                                .select("tokens_used")
-                                .eq("user_id", user_id)
-                                .eq("period", current_date_str)
-                                .maybe_single()
-                                .execute()
-                            )
-                            if budget_res.data:
-                                current_used = budget_res.data.get("tokens_used", 0)
-                                new_used = max(0, current_used + diff)
-                                supabase.table("token_budgets").update({
-                                    "tokens_used": new_used
-                                }).eq("user_id", user_id).eq("period", current_date_str).execute()
-                                logger.info(f"Reconciled token budget for user {user_id} via fallback: new_used={new_used}")
-                        except Exception as fallback_err:
-                            logger.error("Failed in-memory fallback for token budget reconciliation: %s", fallback_err)
+                        current_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        budget_res = (
+                            supabase.table("token_budgets")
+                            .select("tokens_used")
+                            .eq("user_id", user_id)
+                            .eq("period", current_date_str)
+                            .maybe_single()
+                            .execute()
+                        )
+                        if budget_res.data:
+                            current_used = budget_res.data.get("tokens_used", 0)
+                            new_used = max(0, current_used + diff)
+                            supabase.table("token_budgets").update({
+                                "tokens_used": new_used
+                            }).eq("user_id", user_id).eq("period", current_date_str).execute()
+                            logger.info(f"Reconciled token budget for user {user_id} via fallback: new_used={new_used}")
+                    except Exception as fallback_err:
+                        logger.error("Failed in-memory fallback for token budget reconciliation: %s", fallback_err)
 
-                # Update message count in conversation
-                count_res = (
-                    supabase.table("messages")
-                    .select("id", count="exact")
-                    .eq("conversation_id", conversation_id)
-                    .execute()
-                )
-                msg_count = count_res.count if count_res.count is not None else (len(messages) + 2)
-                supabase.table("conversations").update({
-                    "message_count": msg_count,
-                }).eq("id", conversation_id).execute()
+            # Update message count in conversation
+            count_res = (
+                supabase.table("messages")
+                .select("id", count="exact")
+                .eq("conversation_id", conversation_id)
+                .execute()
+            )
+            msg_count = count_res.count if count_res.count is not None else (len(messages) + 2)
+            supabase.table("conversations").update({
+                "message_count": msg_count,
+            }).eq("id", conversation_id).execute()
 
-            except Exception as db_err:
-                logger.error(f"Failed to save assistant response: {db_err}")
+        except Exception as db_err:
+            logger.error(f"Failed to save assistant response: {db_err}")
 
-            # Log routing decision to audit log
-            try:
-                audit_entry = {
-                    "user_id": user_id,
-                    "action": "model_route",
-                    "resource_type": "chat",
-                    "metadata": {
-                        "mode": mode,
-                        "deployment": deployment,
-                        "reasoning": routing_reason,
-                        "conversation_id": conversation_id,
-                    },
-                    "policy_decision": "ALLOW",
-                }
-                supabase = get_supabase_admin()
-                supabase.table("audit_log").insert(audit_entry).execute()
-            except Exception as audit_err:
-                logger.error(f"Failed to log routing decision to audit_log: {audit_err}")
+        # Log routing decision to audit log
+        try:
+            audit_entry = {
+                "user_id": user_id,
+                "action": "model_route",
+                "resource_type": "chat",
+                "metadata": {
+                    "mode": mode,
+                    "deployment": deployment,
+                    "reasoning": routing_reason,
+                    "conversation_id": conversation_id,
+                },
+                "policy_decision": "ALLOW",
+            }
+            supabase = get_supabase_admin()
+            supabase.table("audit_log").insert(audit_entry).execute()
+        except Exception as audit_err:
+            logger.error(f"Failed to log routing decision to audit_log: {audit_err}")
 
         yield "data: [DONE]\n\n"
 

@@ -366,3 +366,231 @@ def conversation_summarizer(myTimer: func.TimerRequest) -> None:
                 
     except Exception as e:
         logger.error(f"Error in conversation_summarizer: {e}", exc_info=True)
+
+
+# ===========================================================================
+# Background Agent Task Queue Worker (Pattern B)
+# ===========================================================================
+
+_doc_client = None
+
+def get_doc_client():
+    """Lazily initializes the Azure Document Intelligence client."""
+    global _doc_client
+    if _doc_client is None:
+        from azure.ai.formrecognizer import DocumentAnalysisClient
+        from azure.core.credentials import AzureKeyCredential
+        
+        endpoint = os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+        key = os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_KEY")
+        if not endpoint or not key:
+            raise RuntimeError("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and AZURE_DOCUMENT_INTELLIGENCE_KEY must be configured.")
+        _doc_client = DocumentAnalysisClient(endpoint, AzureKeyCredential(key))
+    return _doc_client
+
+
+_vision_client = None
+
+def get_vision_client():
+    """Lazily initializes the Azure Computer Vision client."""
+    global _vision_client
+    if _vision_client is None:
+        from azure.cognitiveservices.vision.computervision import ComputerVisionClient
+        from msrest.authentication import CognitiveServicesCredentials
+        
+        endpoint = os.environ.get("AZURE_VISION_ENDPOINT")
+        key = os.environ.get("AZURE_VISION_KEY")
+        if not endpoint or not key:
+            raise RuntimeError("AZURE_VISION_ENDPOINT and AZURE_VISION_KEY must be configured.")
+        _vision_client = ComputerVisionClient(endpoint, CognitiveServicesCredentials(key))
+    return _vision_client
+
+
+def get_read_sas_url(blob_url: str) -> str:
+    """Generates a short-lived read-only SAS URL for the given direct blob URL."""
+    conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    if not conn_str:
+        return blob_url  # Fallback if connection string is missing
+
+    try:
+        from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+        
+        # Extract AccountName and AccountKey
+        parts = {}
+        for item in conn_str.split(';'):
+            if '=' in item:
+                k, v = item.split('=', 1)
+                parts[k.strip()] = v.strip()
+        account_name = parts.get("AccountName")
+        account_key = parts.get("AccountKey")
+
+        if not account_name or not account_key:
+            return blob_url
+
+        # Parse container and blob name from URL
+        url_parts = blob_url.split(".blob.core.windows.net/")
+        if len(url_parts) < 2:
+            return blob_url
+
+        path_parts = url_parts[1].split("/", 1)
+        if len(path_parts) < 2:
+            return blob_url
+
+        container_name = path_parts[0]
+        blob_name = path_parts[1]
+
+        permissions = BlobSasPermissions(read=True)
+        expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=permissions,
+            expiry=expiry
+        )
+        return f"{blob_url}?{sas_token}"
+    except Exception as e:
+        logger.warning(f"Failed to generate read SAS URL: {e}")
+        return blob_url
+
+
+@app.queue_trigger(arg_name="msg", queue_name="agent-jobs", connection="AZURE_STORAGE_CONNECTION_STRING")
+def agent_jobs_trigger(msg: func.QueueMessage) -> None:
+    """
+    Queue trigger that processes incoming background agent tasks (OCR, Vision).
+    Reads task details, executes cognitive API operations, and updates Supabase state.
+    """
+    utc_timestamp = datetime.now(timezone.utc).isoformat()
+    logger.info(f"agent_jobs_trigger started at {utc_timestamp}")
+
+    try:
+        body_str = msg.get_body().decode("utf-8")
+        payload = json.loads(body_str)
+    except Exception as parse_err:
+        logger.error(f"Failed to parse queue message payload: {parse_err}")
+        return
+
+    job_id = payload.get("job_id")
+    job_type = payload.get("type")
+    input_metadata = payload.get("input_metadata") or {}
+    user_id = payload.get("user_id")
+
+    if not job_id or not job_type:
+        logger.error("Missing job_id or type in queue message payload.")
+        return
+
+    try:
+        db = get_supabase()
+
+        # Update job to processing
+        db.table("jobs").update({
+            "status": "processing",
+            "started_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", job_id).execute()
+
+        blob_url = input_metadata.get("blob_url", "")
+        read_sas_url = get_read_sas_url(blob_url) if blob_url else ""
+
+        result_data = {}
+
+        if job_type == "ocr":
+            if not read_sas_url:
+                raise ValueError("Missing blob_url in input_metadata.")
+
+            logger.info(f"Running Document Intelligence OCR on: {blob_url}")
+            doc_client = get_doc_client()
+            poller = doc_client.begin_analyze_document_from_url("prebuilt-layout", read_sas_url)
+            analysis_result = poller.result()
+
+            # Format layout text content
+            extracted_lines = []
+            for page in analysis_result.pages:
+                for line in page.lines:
+                    extracted_lines.append(line.content)
+
+            text_content = "\n".join(extracted_lines)
+            pages_count = len(analysis_result.pages)
+            result_data = {
+                "text": text_content,
+                "pages": pages_count,
+                "confidence": 1.0
+            }
+
+            # Increment user's monthly OCR quota
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+            quota_res = db.table("agent_quotas").select("ocr_pages_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
+            if quota_res.data:
+                current_pages = quota_res.data.get("ocr_pages_used", 0)
+                db.table("agent_quotas").update({
+                    "ocr_pages_used": current_pages + pages_count
+                }).eq("user_id", user_id).eq("period", period).execute()
+            else:
+                db.table("agent_quotas").insert({
+                    "user_id": user_id,
+                    "period": period,
+                    "ocr_pages_used": pages_count
+                }).execute()
+
+        elif job_type == "vision":
+            if not read_sas_url:
+                raise ValueError("Missing blob_url in input_metadata.")
+
+            prompt = input_metadata.get("prompt", "Describe the content in this image.")
+            logger.info(f"Running Computer Vision analysis on: {blob_url} with prompt: {prompt}")
+
+            vision_client = get_vision_client()
+            describe_res = vision_client.describe_image(read_sas_url)
+            description = ""
+            if describe_res.captions:
+                description = describe_res.captions[0].text
+
+            result_data = {
+                "text": f"Vision analysis: {description}"
+            }
+
+            # Increment user's monthly Vision quota
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+            quota_res = db.table("agent_quotas").select("vision_calls_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
+            if quota_res.data:
+                current_calls = quota_res.data.get("vision_calls_used", 0)
+                db.table("agent_quotas").update({
+                    "vision_calls_used": current_calls + 1
+                }).eq("user_id", user_id).eq("period", period).execute()
+            else:
+                db.table("agent_quotas").insert({
+                    "user_id": user_id,
+                    "period": period,
+                    "vision_calls_used": 1
+                }).execute()
+
+        else:
+            raise ValueError(f"Unsupported job type: '{job_type}'")
+
+        # Save done result
+        db.table("jobs").update({
+            "status": "done",
+            "result": result_data,
+            "completed_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", job_id).execute()
+
+        logger.info(f"Job {job_id} ({job_type}) finished processing successfully.")
+
+    except Exception as job_err:
+        logger.error(f"Failed to process job {job_id} ({job_type}): {job_err}", exc_info=True)
+        try:
+            db = get_supabase()
+            job_res = db.table("jobs").select("retry_count").eq("id", job_id).maybe_single().execute()
+            current_retries = job_res.data.get("retry_count", 0) if job_res.data else 0
+            new_retries = current_retries + 1
+
+            update_data = {"retry_count": new_retries}
+            if new_retries >= 5:
+                update_data["status"] = "failed"
+                update_data["error"] = str(job_err)
+                update_data["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+            db.table("jobs").update(update_data).eq("id", job_id).execute()
+        except Exception as db_err:
+            logger.error(f"Failed to record job failure for job {job_id}: {db_err}")

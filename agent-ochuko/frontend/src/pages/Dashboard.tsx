@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash } from 'lucide-react'
+import { LogOut, Send, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -11,9 +11,9 @@ interface Message {
   routing_reason?: string
 }
 
-// ─── Inline markdown: bold, italic, code ─────────────────────────────────────
+// ─── Inline markdown: bold, italic, code, links ───────────────────────────────
 function renderInline(text: string, keyBase: string): React.ReactNode {
-  const pattern = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g
+  const pattern = /(\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`|\[(.*?)\]\((.*?)\))/g
   const segments: React.ReactNode[] = []
   let lastIndex = 0
   let match: RegExpExecArray | null
@@ -22,29 +22,46 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
     if (match.index > lastIndex) {
       segments.push(<span key={`${keyBase}-t${lastIndex}`}>{text.slice(lastIndex, match.index)}</span>)
     }
-    if (match[0].startsWith('**')) {
+
+    const fullMatch = match[0]
+    if (fullMatch.startsWith('**')) {
       segments.push(
         <strong key={`${keyBase}-b${match.index}`} className="font-semibold text-[#f0ece4]">
           {match[2]}
         </strong>
       )
-    } else if (match[0].startsWith('*')) {
+    } else if (fullMatch.startsWith('*')) {
       segments.push(
-        <em key={`${keyBase}-i${match.index}`} className="italic text-brand-text/75">
+        <em key={`${keyBase}-i${match.index}`} className="italic text-[#c5a880]/90">
           {match[3]}
         </em>
       )
-    } else {
+    } else if (fullMatch.startsWith('`')) {
       segments.push(
         <code
           key={`${keyBase}-c${match.index}`}
-          className="bg-black/40 border border-brand-border/50 rounded px-1.5 py-[1px] text-[11px] font-mono text-[#c5a880]/90"
+          className="bg-black/40 border border-[#c5a880]/20 rounded px-1.5 py-[1px] text-[11.5px] font-mono text-[#c5a880]/90"
         >
           {match[4]}
         </code>
       )
+    } else if (fullMatch.startsWith('[')) {
+      const label = match[5]
+      const url = match[6]
+      segments.push(
+        <a
+          key={`${keyBase}-l${match.index}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[#c5a880] hover:text-[#d4b990] underline underline-offset-4 decoration-[#c5a880]/40 transition duration-150"
+        >
+          {label}
+        </a>
+      )
     }
-    lastIndex = match.index + match[0].length
+
+    lastIndex = match.index + fullMatch.length
   }
 
   if (lastIndex < text.length) {
@@ -54,128 +71,403 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
   return segments.length === 1 ? segments[0] : <>{segments}</>
 }
 
-// ─── Block markdown renderer ──────────────────────────────────────────────────
-function renderMarkdown(text: string): React.ReactNode {
+// ─── Code Block Component with Copy ──────────────────────────────────────────
+const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, content }) => {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (_) {}
+  }
+
+  return (
+    <div className="bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-xl overflow-hidden my-4 shadow-lg">
+      <div className="flex items-center justify-between px-4 py-2 bg-[#121417] border-b border-[#1a1d20]/50 select-none">
+        <span className="text-[10px] font-bold text-brand-muted tracking-widest uppercase font-mono">
+          {language}
+        </span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 text-[10px] font-semibold text-brand-muted hover:text-brand-text transition duration-150 tracking-wider uppercase"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3 h-3 text-[#c5a880]" />
+              <span className="text-[#c5a880]">Copied</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3 h-3" />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="p-4 overflow-x-auto">
+        <code className="text-[11.5px] font-mono text-[#d4c5a0]/85 leading-relaxed block whitespace-pre">
+          {content}
+        </code>
+      </pre>
+    </div>
+  )
+}
+
+interface ASTBlock {
+  type: 'heading' | 'code' | 'blockquote' | 'table' | 'list' | 'hr' | 'paragraph'
+  level?: number
+  language?: string
+  content?: string
+  headers?: string[]
+  rows?: string[][]
+  ordered?: boolean
+  items?: string[]
+}
+
+// ─── Markdown AST Parser ──────────────────────────────────────────────────────
+function parseMarkdownToBlocks(text: string): ASTBlock[] {
   const lines = text.split('\n')
-  const nodes: React.ReactNode[] = []
+  const blocks: ASTBlock[] = []
   let i = 0
 
   while (i < lines.length) {
     const raw = lines[i]
-    const kb = `md-${i}`
+    const trimmed = raw.trim()
 
-    // Fenced code block
-    if (raw.startsWith('```')) {
+    // 1. Fenced Code Block
+    if (trimmed.startsWith('```')) {
+      const language = trimmed.slice(3).trim()
       const codeLines: string[] = []
       i++
-      while (i < lines.length && !lines[i].startsWith('```')) {
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
         codeLines.push(lines[i])
         i++
       }
-      nodes.push(
-        <pre
-          key={kb}
-          className="bg-black/50 border border-brand-border/40 rounded-lg px-5 py-4 my-4 overflow-x-auto"
-        >
-          <code className="text-[11.5px] font-mono text-[#d4c5a0]/85 leading-relaxed">
-            {codeLines.join('\n')}
-          </code>
-        </pre>
-      )
+      blocks.push({
+        type: 'code',
+        language: language || 'text',
+        content: codeLines.join('\n')
+      })
       i++ // skip closing ```
       continue
     }
 
-    // Headings
-    if (raw.startsWith('### ')) {
-      nodes.push(
-        <h3 key={kb} className="text-[13px] font-bold text-[#f0ece4] mt-5 mb-2 tracking-tight">
-          {renderInline(raw.slice(4), kb)}
-        </h3>
-      )
-      i++; continue
-    }
-    if (raw.startsWith('## ')) {
-      nodes.push(
-        <h2 key={kb} className="text-sm font-bold text-[#f0ece4] mt-6 mb-2 tracking-tight">
-          {renderInline(raw.slice(3), kb)}
-        </h2>
-      )
-      i++; continue
-    }
-    if (raw.startsWith('# ')) {
-      nodes.push(
-        <h1 key={kb} className="text-base font-bold text-[#f0ece4] mt-6 mb-2 tracking-tight">
-          {renderInline(raw.slice(2), kb)}
-        </h1>
-      )
-      i++; continue
-    }
-
-    // Horizontal rule
-    if (/^---+$/.test(raw.trim())) {
-      nodes.push(<hr key={kb} className="border-brand-border/30 my-5" />)
-      i++; continue
-    }
-
-    // Unordered list — gather consecutive items
-    if (/^[-*+] /.test(raw)) {
-      const items: string[] = []
-      while (i < lines.length && /^[-*+] /.test(lines[i])) {
-        items.push(lines[i].slice(2))
+    // 2. Blockquote
+    if (trimmed.startsWith('>')) {
+      const quoteLines: string[] = []
+      while (i < lines.length && lines[i].trim().startsWith('>')) {
+        const content = lines[i].trim().replace(/^>\s?/, '')
+        quoteLines.push(content)
         i++
       }
-      nodes.push(
-        <ul key={kb} className="my-3 space-y-2">
-          {items.map((item, j) => (
-            <li key={j} className="flex gap-2.5 leading-relaxed">
-              <span className="text-[#c5a880] text-[8px] mt-[5px] shrink-0">◆</span>
-              <span className="text-[13px] text-brand-text/85">{renderInline(item, `${kb}-li${j}`)}</span>
-            </li>
-          ))}
-        </ul>
-      )
+      blocks.push({
+        type: 'blockquote',
+        content: quoteLines.join('\n')
+      })
       continue
     }
 
-    // Ordered list
-    if (/^\d+\. /.test(raw)) {
-      const items: string[] = []
-      while (i < lines.length && /^\d+\. /.test(lines[i])) {
-        items.push(lines[i].replace(/^\d+\. /, ''))
+    // 3. Table
+    if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length > 1) {
+      const tableLines: string[] = []
+      while (i < lines.length && lines[i].trim().startsWith('|') && lines[i].trim().endsWith('|')) {
+        tableLines.push(lines[i].trim())
         i++
       }
-      nodes.push(
-        <ol key={kb} className="my-3 space-y-2">
-          {items.map((item, j) => (
-            <li key={j} className="flex gap-2.5 leading-relaxed">
-              <span className="text-[#c5a880] font-semibold text-[11px] shrink-0 min-w-[1.25rem] mt-[2px]">
-                {j + 1}.
-              </span>
-              <span className="text-[13px] text-brand-text/85">{renderInline(item, `${kb}-oli${j}`)}</span>
-            </li>
-          ))}
-        </ol>
-      )
+
+      if (tableLines.length >= 1) {
+        let headers: string[] = []
+        let rows: string[][] = []
+        let hasSeparator = false
+
+        if (tableLines.length > 1) {
+          const secondLine = tableLines[1]
+          const cleaned = secondLine.replace(/[|:\s-]/g, '')
+          if (cleaned === '') {
+            hasSeparator = true
+          }
+        }
+
+        if (hasSeparator) {
+          headers = tableLines[0]
+            .split('|')
+            .slice(1, -1)
+            .map(h => h.trim())
+          
+          for (let j = 2; j < tableLines.length; j++) {
+            const rowCells = tableLines[j]
+              .split('|')
+              .slice(1, -1)
+              .map(c => c.trim())
+            rows.push(rowCells)
+          }
+        } else {
+          headers = tableLines[0]
+            .split('|')
+            .slice(1, -1)
+            .map(h => h.trim())
+          for (let j = 1; j < tableLines.length; j++) {
+            const rowCells = tableLines[j]
+              .split('|')
+              .slice(1, -1)
+              .map(c => c.trim())
+            rows.push(rowCells)
+          }
+        }
+
+        blocks.push({
+          type: 'table',
+          headers,
+          rows
+        })
+        continue
+      }
+    }
+
+    // 4. Headings
+    if (trimmed.startsWith('#')) {
+      const match = trimmed.match(/^(#{1,6})\s+(.*)$/)
+      if (match) {
+        const level = match[1].length
+        const content = match[2]
+        blocks.push({
+          type: 'heading',
+          level,
+          content
+        })
+        i++
+        continue
+      }
+    }
+
+    // 5. Horizontal rule
+    if (/^---+$/.test(trimmed) || /^==+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
+      blocks.push({ type: 'hr' })
+      i++
       continue
     }
 
-    // Empty line → paragraph spacer
-    if (raw.trim() === '') {
-      nodes.push(<div key={kb} className="h-2.5" />)
-      i++; continue
+    // 6. Unordered List
+    if (/^[-*+]\s+/.test(trimmed)) {
+      const items: string[] = []
+      while (i < lines.length && /^[-*+]\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[-*+]\s+/, ''))
+        i++
+      }
+      blocks.push({
+        type: 'list',
+        ordered: false,
+        items
+      })
+      continue
     }
 
-    // Normal paragraph line
-    nodes.push(
-      <p key={kb} className="text-[13.5px] text-brand-text/88 leading-[1.78] tracking-[0.01em]">
-        {renderInline(raw, kb)}
-      </p>
-    )
-    i++
+    // 7. Ordered List
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items: string[] = []
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''))
+        i++
+      }
+      blocks.push({
+        type: 'list',
+        ordered: true,
+        items
+      })
+      continue
+    }
+
+    // 8. Empty line / Paragraph spacer
+    if (trimmed === '') {
+      i++
+      continue
+    }
+
+    // 9. Paragraph
+    const pLines: string[] = []
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !lines[i].trim().startsWith('```') &&
+      !lines[i].trim().startsWith('#') &&
+      !lines[i].trim().startsWith('>') &&
+      !lines[i].trim().startsWith('|') &&
+      !/^[-*+]\s+/.test(lines[i].trim()) &&
+      !/^\d+\.\s+/.test(lines[i].trim()) &&
+      !/^---+$/.test(lines[i].trim())
+    ) {
+      pLines.push(lines[i].trim())
+      i++
+    }
+    if (pLines.length > 0) {
+      blocks.push({
+        type: 'paragraph',
+        content: pLines.join(' ')
+      })
+    }
   }
 
-  return <>{nodes}</>
+  return blocks
+}
+
+// ─── Block markdown renderer ──────────────────────────────────────────────────
+function renderMarkdown(text: string): React.ReactNode {
+  const blocks = parseMarkdownToBlocks(text)
+  return (
+    <div className="space-y-4">
+      {blocks.map((block, index) => {
+        const key = `block-${index}`
+        switch (block.type) {
+          case 'heading': {
+            const level = block.level || 1
+            const content = renderInline(block.content || '', key)
+            switch (level) {
+              case 1:
+                return (
+                  <h1 key={key} className="text-base font-bold text-[#f0ece4] mt-6 mb-2 tracking-tight">
+                    {content}
+                  </h1>
+                )
+              case 2:
+                return (
+                  <h2 key={key} className="text-sm font-bold text-[#f0ece4] mt-5 mb-2 tracking-tight">
+                    {content}
+                  </h2>
+                )
+              case 3:
+                return (
+                  <h3 key={key} className="text-[13px] font-bold text-[#f0ece4] mt-4 mb-1.5 tracking-tight">
+                    {content}
+                  </h3>
+                )
+              case 4:
+                return (
+                  <h4 key={key} className="text-[12.5px] font-bold text-[#f0ece4] mt-3.5 mb-1.5 tracking-tight">
+                    {content}
+                  </h4>
+                )
+              case 5:
+                return (
+                  <h5 key={key} className="text-[12px] font-bold text-[#f0ece4] mt-3 mb-1 tracking-tight">
+                    {content}
+                  </h5>
+                )
+              case 6:
+                return (
+                  <h6 key={key} className="text-[11.5px] font-bold text-[#f0ece4] mt-2.5 mb-1 tracking-tight">
+                    {content}
+                  </h6>
+                )
+              default:
+                return (
+                  <h1 key={key} className="text-base font-bold text-[#f0ece4] mt-6 mb-2 tracking-tight">
+                    {content}
+                  </h1>
+                )
+            }
+          }
+          case 'code': {
+            return (
+              <CodeBlock
+                key={key}
+                language={block.language || 'text'}
+                content={block.content || ''}
+              />
+            )
+          }
+          case 'blockquote': {
+            return (
+              <blockquote
+                key={key}
+                className="border-l-2 border-[#c5a880] pl-4 my-4 italic text-brand-text/75 bg-[#c5a880]/4 py-2 pr-3 rounded-r-lg"
+              >
+                {renderInline(block.content || '', key)}
+              </blockquote>
+            )
+          }
+          case 'table': {
+            return (
+              <div key={key} className="overflow-x-auto my-5 border border-[#1a1d20]/50 rounded-xl bg-black/20">
+                <table className="min-w-full divide-y divide-[#1a1d20]/30 text-left text-[12.5px]">
+                  <thead className="bg-[#1c1e22]/50 text-[#f0ece4]">
+                    <tr>
+                      {block.headers?.map((header, hIdx) => (
+                        <th
+                          key={hIdx}
+                          className="px-4 py-3 font-semibold border-b border-[#1a1d20]/30 tracking-wider text-[11px] uppercase text-[#c5a880]/80"
+                        >
+                          {renderInline(header, `${key}-th-${hIdx}`)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#1a1d20]/20">
+                    {block.rows?.map((row, rIdx) => (
+                      <tr
+                        key={rIdx}
+                        className={rIdx % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.02]'}
+                      >
+                        {row.map((cell, cIdx) => (
+                          <td key={cIdx} className="px-4 py-3 text-brand-text/85">
+                            {renderInline(cell, `${key}-td-${rIdx}-${cIdx}`)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          }
+          case 'list': {
+            if (block.ordered) {
+              return (
+                <ol key={key} className="my-3 space-y-2 pl-1">
+                  {block.items?.map((item, j) => (
+                    <li key={j} className="flex gap-2.5 leading-relaxed items-start">
+                      <span className="text-[#c5a880] font-semibold text-[11.5px] shrink-0 min-w-[1.25rem] mt-[1.5px]">
+                        {j + 1}.
+                      </span>
+                      <span className="text-[13px] text-brand-text/85">
+                        {renderInline(item, `${key}-oli-${j}`)}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )
+            } else {
+              return (
+                <ul key={key} className="my-3 space-y-2 pl-1">
+                  {block.items?.map((item, j) => (
+                    <li key={j} className="flex gap-2.5 leading-relaxed items-start">
+                      <span className="text-[#c5a880] text-[8px] mt-[6.5px] shrink-0 select-none">◆</span>
+                      <span className="text-[13px] text-brand-text/85">
+                        {renderInline(item, `${key}-uli-${j}`)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )
+            }
+          }
+          case 'hr': {
+            return <hr key={key} className="border-[#1a1d20]/30 my-5" />
+          }
+          case 'paragraph': {
+            return (
+              <p key={key} className="text-[13.5px] text-brand-text/88 leading-[1.78] tracking-[0.01em]">
+                {renderInline(block.content || '', key)}
+              </p>
+            )
+          }
+          default:
+            return null
+        }
+      })}
+    </div>
+  )
 }
 
 function getFriendlyErrorMessage(message: string): string {
@@ -212,6 +504,10 @@ function getFriendlyErrorMessage(message: string): string {
     return "The AI engine is temporarily experiencing high traffic. Please try again shortly."
   }
 
+  if (lower.includes("completed event") || lower.includes("guardrail") || lower.includes("content_filter") || lower.includes("safety")) {
+    return "This request was blocked by the system safety guardrails because the prompt or response contained content violating safety policies. Please rephrase your query and try again."
+  }
+
   return `We were unable to process your request at this moment (${message}). Please try again in a few moments or contact support.`
 }
 
@@ -233,6 +529,16 @@ export const Dashboard: React.FC = () => {
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null)
   const [editingMessageText, setEditingMessageText] = useState("")
   const abortControllerRef = useRef<AbortController | null>(null)
+
+  const [attachedFile, setAttachedFile] = useState<{
+    name: string
+    type: string
+    blobUrl: string
+    fileId: string
+  } | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
   const [conversations, setConversations] = useState<any[]>([])
@@ -519,8 +825,231 @@ export const Dashboard: React.FC = () => {
     }
   }
 
+  const handleTriggerUpload = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Allow PDF and images
+    const allowedExts = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
+    if (!allowedExts.includes(ext)) {
+      alert(`Unsupported file type. Allowed extensions: ${allowedExts.join(', ')}`)
+      return
+    }
+
+    setUploading(true)
+    setUploadProgress(0)
+
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) throw new Error('Authentication session not found.')
+
+      let convoId = activeConversationId
+      if (!convoId || convoId === '00000000-0000-0000-0000-000000000000') {
+        convoId = crypto.randomUUID()
+      }
+
+      // 1. Get secure presigned SAS upload URL from backend
+      const sasRes = await fetch(`${API_BASE}/v1/files/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          filename: file.name,
+          mime_type: file.type,
+          conversation_id: convoId
+        })
+      })
+
+      if (!sasRes.ok) {
+        throw new Error(await sasRes.text())
+      }
+
+      const { upload_url, blob_url, file_id } = await sasRes.json()
+
+      // 2. Perform direct PUT upload to Azure Blob Storage
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('PUT', upload_url)
+        xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob')
+        xhr.setRequestHeader('Content-Type', file.type)
+
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const pct = Math.round((evt.loaded / evt.total) * 100)
+            setUploadProgress(pct)
+          }
+        }
+
+        xhr.onload = () => {
+          if (xhr.status === 201 || xhr.status === 200) {
+            resolve()
+          } else {
+            reject(new Error(`Azure Blob Storage returned status ${xhr.status}`))
+          }
+        }
+
+        xhr.onerror = () => reject(new Error('Network error during upload to storage'))
+        xhr.send(file)
+      })
+
+      setAttachedFile({
+        name: file.name,
+        type: file.type,
+        blobUrl: blob_url,
+        fileId: file_id
+      })
+
+    } catch (err: any) {
+      console.error('File upload error:', err)
+      alert(`File upload failed: ${err.message || err}`)
+    } finally {
+      setUploading(false)
+      setUploadProgress(null)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
+  const triggerAgentJob = async (jobType: 'ocr' | 'vision', blobUrl: string, promptText?: string) => {
+    setIsStreaming(true)
+
+    let convoId = activeConversationId
+    if (!convoId || convoId === '00000000-0000-0000-0000-000000000000') {
+      convoId = crypto.randomUUID()
+      setActiveConversationId(convoId)
+    }
+
+    const userMsgText = jobType === 'ocr'
+      ? `[OCR Analysis requested for document: ${attachedFile?.name || 'document.pdf'}]`
+      : `[Vision Analysis requested for image: ${attachedFile?.name || 'image.png'}] ${promptText || ''}`
+
+    const nextMessages: Message[] = [
+      ...messages,
+      { role: 'user', content: userMsgText },
+      { role: 'assistant', content: 'Queuing background agent job...' }
+    ]
+    setMessages(nextMessages)
+    setAttachedFile(null)
+
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) throw new Error('Authentication session not found.')
+
+      const endpoint = jobType === 'ocr' ? '/v1/agents/ocr' : '/v1/agents/vision'
+      const requestBody = jobType === 'ocr'
+        ? { conversation_id: convoId, blob_url: blobUrl }
+        : { conversation_id: convoId, blob_url: blobUrl, prompt: promptText || 'Describe the content in this image.' }
+
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(requestBody)
+      })
+
+      if (!res.ok) {
+        throw new Error(await res.text())
+      }
+
+      const { job_id } = await res.json()
+
+      // Subscribe to Supabase Realtime updates on the jobs table
+      const channel = supabase
+        .channel(`job-${job_id}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${job_id}` },
+          async (payload) => {
+            const updatedJob = payload.new
+            if (updatedJob.status === 'processing') {
+               setMessages((prev) => {
+                 const next = [...prev]
+                 next[next.length - 1] = {
+                   role: 'assistant',
+                   content: 'Cognitive model actively processing layouts and extracting content...'
+                 }
+                 return next
+               })
+            } else if (updatedJob.status === 'done') {
+              const textResult = updatedJob.result?.text || 'No result data returned by the agent.'
+              setMessages((prev) => {
+                const next = [...prev]
+                next[next.length - 1] = {
+                  role: 'assistant',
+                  content: textResult
+                }
+                return next
+              })
+              setIsStreaming(false)
+              channel.unsubscribe()
+
+              // Save the message records to history
+              try {
+                await supabase.from("messages").insert([
+                  { conversation_id: convoId, role: 'user', content: userMsgText, routing_mode: 'discuss' },
+                  { conversation_id: convoId, role: 'assistant', content: textResult, routing_mode: jobType }
+                ])
+                fetchConversations()
+              } catch (dbErr) {
+                console.error("Failed to commit messages to history:", dbErr)
+              }
+            } else if (updatedJob.status === 'failed') {
+              const errMsg = updatedJob.error || 'Unknown error occurred during background analysis.'
+              setMessages((prev) => {
+                const next = [...prev]
+                next[next.length - 1] = {
+                  role: 'assistant',
+                  content: `Agent execution failure: ${errMsg}`
+                }
+                return next
+              })
+              setIsStreaming(false)
+              channel.unsubscribe()
+            }
+          }
+        )
+        .subscribe()
+
+    } catch (err: any) {
+      console.error("Agent job trigger failed:", err)
+      const explanation = getFriendlyErrorMessage(err.message || 'unknown')
+      setMessages((prev) => {
+        const next = [...prev]
+        next[next.length - 1] = {
+          role: 'assistant',
+          content: `Failed to trigger agent: ${explanation}`
+        }
+        return next
+      })
+      setIsStreaming(false)
+    }
+  }
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (attachedFile) {
+      const isPdf = attachedFile.type === 'application/pdf' || attachedFile.name.toLowerCase().endsWith('.pdf')
+      const jobType = isPdf ? 'ocr' : 'vision'
+      const promptText = input.trim()
+      setInput('')
+      setTimeout(() => inputRef.current?.focus(), 0)
+      await triggerAgentJob(jobType, attachedFile.blobUrl, promptText)
+      return
+    }
+
     if (!input.trim()) return
 
     const userMessage = input.trim()
@@ -700,35 +1229,31 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="max-w-2xl mx-auto space-y-5">
+            <div className="max-w-2xl mx-auto space-y-6">
               {messages.map((msg, i) => (
                 <div
                   key={i}
-                  className={`group relative flex gap-3.5 ${msg.role === 'user' ? 'ml-6 sm:ml-14' : ''}`}
+                  className={`group relative flex w-full gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  {/* Avatar */}
-                  <div
-                    className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 overflow-hidden mt-1 ${
-                      msg.role === 'user'
-                        ? 'border-[#1e2025] bg-brand-surface/60'
-                        : 'border-[#c5a880]/12 bg-brand-surface/30'
-                    }`}
-                  >
-                    <img
-                      src="/favicon.png"
-                      alt={msg.role === 'user' ? 'User' : 'Ochuko'}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
+                  {/* Avatar only for assistant */}
+                  {msg.role !== 'user' && (
+                    <div className="w-8 h-8 rounded-lg border border-[#c5a880]/15 bg-brand-surface/30 flex items-center justify-center shrink-0 overflow-hidden mt-1 select-none">
+                      <img
+                        src="/favicon.png"
+                        alt="Ochuko"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
 
-                  {/* Right side container: Bubble + Actions */}
-                  <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                  {/* Right/Left side container: Bubble + Actions */}
+                  <div className={`flex flex-col gap-1.5 ${msg.role === 'user' ? 'max-w-[85%] items-end' : 'flex-1 min-w-0'}`}>
                     {/* Bubble */}
                     <div
-                      className={`relative rounded-xl px-5 py-4 border min-w-0 ${
+                      className={`relative rounded-xl px-5 py-4 min-w-0 ${
                         msg.role === 'user'
-                          ? 'bg-[#0f1113]/60 border-[#1e2025]/80'
-                          : 'bg-[#0c0e10]/90 border-[#1a1d20] shadow-lg shadow-black/30'
+                          ? 'bg-[#1c1e22]/50 border border-[#2b2e35] text-brand-text/90 rounded-tr-none'
+                          : 'bg-transparent border-transparent md:px-2'
                       }`}
                     >
                       {/* Content */}
@@ -758,7 +1283,7 @@ export const Dashboard: React.FC = () => {
                             </div>
                           </div>
                         ) : (
-                          <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium">
+                          <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
                             {msg.content}
                           </p>
                         )
@@ -789,11 +1314,9 @@ export const Dashboard: React.FC = () => {
                       )}
                     </div>
 
-
-
                     {/* Actions Row at the bottom (outside the bubble), visible on hover */}
                     {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (
-                      <div className="flex items-center gap-3.5 pl-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      <div className="flex items-center gap-3.5 px-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                         {msg.role === 'assistant' && msg.content.length > 0 && (
                           <button
                             onClick={() => handleCopy(msg.content, i)}
@@ -802,12 +1325,12 @@ export const Dashboard: React.FC = () => {
                           >
                             {copiedIndex === i ? (
                               <>
-                                <Check className="w-3 h-3 text-[#c5a880]" />
+                                <Check className="w-3.5 h-3.5 text-[#c5a880]" />
                                 <span className="text-[#c5a880]">Copied</span>
                               </>
                             ) : (
                               <>
-                                <Copy className="w-3 h-3" />
+                                <Copy className="w-3.5 h-3.5" />
                                 <span>Copy</span>
                               </>
                             )}
@@ -823,7 +1346,7 @@ export const Dashboard: React.FC = () => {
                             title="Edit prompt"
                             className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
                           >
-                            <Pencil className="w-3 h-3" />
+                            <Pencil className="w-3.5 h-3.5" />
                             <span>Edit</span>
                           </button>
                         )}
@@ -866,24 +1389,78 @@ export const Dashboard: React.FC = () => {
 
           </div>
 
+          {/* Attached File Preview */}
+          {attachedFile && (
+            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025] rounded-lg">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#c5a880]" />
+                <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[180px]">
+                  {attachedFile.name}
+                </span>
+                <span className="text-[9px] text-[#c5a880] tracking-wider uppercase bg-[#c5a880]/10 px-1.5 py-0.5 rounded border border-[#c5a880]/20 font-bold font-mono">
+                  {attachedFile.type.split('/')[1] || 'pdf'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAttachedFile(null)}
+                className="p-1 text-[#8e95a2] hover:text-red-400 transition"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Uploading progress indicator */}
+          {uploading && (
+            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025]/50 rounded-lg animate-pulse">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 text-[#c5a880] animate-spin" />
+                <span className="text-[11px] text-[#c5a880] font-semibold tracking-wide">
+                  Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Input */}
-          <form onSubmit={handleSend} className="max-w-2xl mx-auto relative">
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Submit an inquiry..."
-              className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150"
-            />
+          <form onSubmit={handleSend} className="max-w-2xl mx-auto relative flex items-center gap-2">
+            <div className="relative flex-1">
+              <input
+                ref={inputRef}
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={attachedFile ? "Add prompt details for the agent..." : "Submit an inquiry..."}
+                className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150"
+              />
+              <button
+                type="button"
+                onClick={handleTriggerUpload}
+                disabled={uploading || isStreaming}
+                className="absolute right-3 top-3.5 p-0.5 text-[#8e95a2] hover:text-[#c5a880] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
+                title="Attach document or image"
+              >
+                <Paperclip className="w-4 h-4" />
+              </button>
+            </div>
+
             <button
               type="submit"
-              disabled={isStreaming || !input.trim()}
+              disabled={isStreaming || uploading || (!input.trim() && !attachedFile)}
               aria-label="Send"
-              className="absolute right-2 top-2 w-8 h-8 bg-[#c5a880] text-[#08090a] rounded-lg flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold"
+              className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send className="w-4 h-4" />
             </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={handleFileChange}
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.gif"
+              className="hidden"
+            />
           </form>
 
           <p className="text-center text-[9px] text-brand-muted/40 font-bold tracking-[0.15em] uppercase mt-3">

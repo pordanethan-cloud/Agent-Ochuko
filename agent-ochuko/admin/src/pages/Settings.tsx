@@ -228,7 +228,7 @@ function Toggle({ enabled, onToggle, label }: { enabled: boolean; onToggle: () =
   return (
     <button
       role="switch"
-      aria-checked={enabled}
+      aria-checked={enabled ? "true" : "false"}
       aria-label={label ?? (enabled ? "Enabled" : "Disabled")}
       onClick={onToggle}
       className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${enabled ? "bg-indigo-600" : "bg-slate-700"}`}
