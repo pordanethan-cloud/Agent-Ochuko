@@ -1483,6 +1483,7 @@ export const Dashboard: React.FC = () => {
       const jobType = isPdf ? 'ocr' : 'vision'
       const promptText = input.trim()
       setInput('')
+      clearTranscript()
       setTimeout(() => inputRef.current?.focus(), 0)
       await triggerAgentJob(jobType, attachedFile.blobUrl, promptText)
       return
@@ -1492,6 +1493,7 @@ export const Dashboard: React.FC = () => {
 
     const userMessage = input.trim()
     setInput('')
+    clearTranscript()
     setTimeout(() => inputRef.current?.focus(), 0)
 
     // Route to hybrid search if the message matches a web-search intent pattern
