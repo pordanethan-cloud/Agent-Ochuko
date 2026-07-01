@@ -465,7 +465,26 @@ def _get_next_hf_key() -> str:
         if not keys:
             raise RuntimeError("HUGGINGFACE_API_KEYS is not configured.")
         _hf_key_cycle = itertools.cycle(keys)
-    return next(_hf_key_cycle)
+    return next(_get_next_hf_key_cycle if '_get_next_hf_key_cycle' in globals() else _hf_key_cycle)
+
+
+# Round-robin iterator over Groq API keys for load distribution
+_groq_key_cycle = None
+
+def _get_next_groq_key() -> str:
+    """Returns the next Groq API key from the comma-separated pool, cycling round-robin."""
+    global _groq_key_cycle
+    if _groq_key_cycle is None:
+        raw = os.environ.get("GROQ_API_KEYS", "")
+        keys = [k.strip() for k in raw.split(",") if k.strip()]
+        if not keys:
+            single = os.environ.get("GROQ_API_KEY", "")
+            if single:
+                keys = [single]
+            else:
+                raise RuntimeError("GROQ_API_KEYS or GROQ_API_KEY is not configured.")
+        _groq_key_cycle = itertools.cycle(keys)
+    return next(_groq_key_cycle)
 
 
 def _upload_image_to_blob(image_bytes: bytes, blob_name: str) -> str:
@@ -498,6 +517,80 @@ def _upload_image_to_blob(image_bytes: bytes, blob_name: str) -> str:
 
     account_name = blob_service.account_name
     return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"
+
+
+def _upload_audio_to_blob(audio_bytes: bytes, blob_name: str) -> str:
+    """
+    Uploads raw audio bytes (MP3) to the 'agent-outputs' container in Azure Blob Storage.
+    Returns the public blob URL.
+    """
+    from azure.storage.blob import BlobServiceClient, ContentSettings
+    conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    if not conn_str:
+        raise RuntimeError("AZURE_STORAGE_CONNECTION_STRING is not configured.")
+
+    blob_service = BlobServiceClient.from_connection_string(conn_str)
+    container_name = "agent-outputs"
+
+    container_client = blob_service.get_container_client(container_name)
+    try:
+        container_client.create_container()
+    except Exception:
+        pass  # Already exists
+
+    blob_client = container_client.get_blob_client(blob_name)
+    blob_client.upload_blob(
+        audio_bytes, overwrite=True,
+        content_settings=ContentSettings(content_type="audio/mpeg")
+    )
+
+    account_name = blob_service.account_name
+    return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"
+
+
+def call_azure_tts(text: str, voice: str, region: str, key: str) -> bytes:
+    """Calls Azure Speech Services Neural TTS REST API and returns raw audio bytes (MP3)."""
+    import urllib.request
+    import urllib.error
+
+    # Endpoint URL for TTS REST API
+    url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    
+    # Lang code is prefix of voice (e.g., en-ZA-LeahNeural -> en-ZA)
+    parts = voice.split("-")
+    lang = "-".join(parts[:2]) if len(parts) >= 2 else "en-US"
+    
+    # Construct SSML body
+    ssml = (
+        f"<speak version='1.0' xml:lang='{lang}'>"
+        f"<voice xml:lang='{lang}' name='{voice}'>"
+        f"{text}"
+        f"</voice>"
+        f"</speak>"
+    )
+    
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/ssml+xml",
+        "User-Agent": "AgentOchukoTTS",
+        "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
+    }
+    
+    req = urllib.request.Request(
+        url,
+        data=ssml.encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=30.0) as response:
+            return response.read()
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Azure Speech REST API returned HTTP {e.code}: {error_body}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to connect to Azure Speech REST API: {str(e)}")
 
 
 def get_read_sas_url(blob_url: str) -> str:
@@ -821,6 +914,152 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
                 db.table("agent_quotas").upsert({"user_id": user_id, "period": period, "image_gen_used": 1}, on_conflict="user_id,period").execute()
 
             logger.info("Image generated and uploaded. job_id=%s url=%.80s", job_id, image_url)
+
+
+        elif job_type == "speech_stt":
+            if not read_sas_url:
+                raise ValueError("Missing blob_url in input_metadata.")
+
+            logger.info(f"Running Speech-to-Text transcribing on: {blob_url}")
+
+            # Download the audio file contents
+            import urllib.request
+            with urllib.request.urlopen(read_sas_url) as response:
+                audio_bytes = response.read()
+
+            # Call Groq Whisper API
+            import io
+            from groq import Groq
+            
+            raw_keys = os.environ.get("GROQ_API_KEYS", "")
+            keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+            if not keys:
+                single = os.environ.get("GROQ_API_KEY", "")
+                if single:
+                    keys = [single]
+                else:
+                    raise RuntimeError("GROQ_API_KEYS is not configured.")
+
+            max_keys = len(keys)
+            groq_response = None
+            last_error = None
+
+            # Attempt transcription with key fallback
+            for attempt in range(1, max_keys + 1):
+                api_key = _get_next_groq_key()
+                try:
+                    client = Groq(api_key=api_key)
+                    file_obj = io.BytesIO(audio_bytes)
+                    file_obj.name = "audio.webm"  # default extension
+                    if blob_url:
+                        _, ext = os.path.splitext(blob_url.split("?")[0])
+                        if ext:
+                            file_obj.name = f"audio{ext}"
+
+                    groq_response = client.audio.transcriptions.create(
+                        file=file_obj,
+                        model="whisper-large-v3-turbo",
+                        response_format="verbose_json"
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(f"Groq transcription attempt {attempt}/{max_keys} failed: {e}")
+                    last_error = str(e)
+
+            if not groq_response:
+                raise RuntimeError(f"All Groq keys exhausted. Last error: {last_error}")
+
+            transcript = groq_response.text
+            duration = getattr(groq_response, "duration", 0.0) or 0.0
+            
+            result_data = {
+                "text": transcript,
+                "duration": duration
+            }
+
+            # Increment user's speech seconds used
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+            quota_res = db.table("agent_quotas").select("speech_seconds_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
+            if quota_res and hasattr(quota_res, "data") and quota_res.data:
+                current_secs = quota_res.data.get("speech_seconds_used", 0) or 0
+                db.table("agent_quotas").update({
+                    "speech_seconds_used": current_secs + int(duration)
+                }).eq("user_id", user_id).eq("period", period).execute()
+            else:
+                db.table("agent_quotas").insert({
+                    "user_id": user_id,
+                    "period": period,
+                    "speech_seconds_used": int(duration)
+                }).execute()
+
+            logger.info("Speech transcribed. job_id=%s duration=%s text=%.80s", job_id, duration, transcript)
+
+        elif job_type == "speech_tts":
+            text = input_metadata.get("text", "")
+            voice = input_metadata.get("voice") or get_appconfig_value("SPEECH_VOICE_NAME", "en-US-JennyNeural")
+            
+            if not text:
+                raise ValueError("Missing text in input_metadata for speech_tts job.")
+
+            logger.info(f"Running Text-to-Speech synthesis. Voice: {voice}, Text length: {len(text)}")
+
+            # Call Azure Speech REST API
+            region = os.environ.get("AZURE_SPEECH_REGION", "southafricanorth")
+            key = os.environ.get("AZURE_SPEECH_KEY")
+            if not key:
+                raise RuntimeError("AZURE_SPEECH_KEY is not configured.")
+
+            audio_bytes = call_azure_tts(text, voice, region, key)
+
+            # Upload generated MP3 to Azure Blob Storage
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            blob_name = f"generated/{user_id}/{job_id}_{timestamp}.mp3"
+            raw_blob_url = _upload_audio_to_blob(audio_bytes, blob_name)
+
+            # Generate a 24-hour read SAS URL
+            result_blob_url = get_read_sas_url(raw_blob_url)
+            try:
+                from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+                conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
+                parts = {}
+                for item in conn_str.split(";"):
+                    if "=" in item:
+                        k, v = item.split("=", 1)
+                        parts[k.strip()] = v.strip()
+                acct = parts.get("AccountName", "")
+                acct_key = parts.get("AccountKey", "")
+                if acct and acct_key:
+                    sas = generate_blob_sas(
+                        account_name=acct,
+                        container_name="agent-outputs",
+                        blob_name=blob_name,
+                        account_key=acct_key,
+                        permission=BlobSasPermissions(read=True),
+                        expiry=datetime.now(timezone.utc) + timedelta(hours=24),
+                    )
+                    result_blob_url = f"https://{acct}.blob.core.windows.net/agent-outputs/{blob_name}?{sas}"
+            except Exception as sas_err:
+                logger.warning("Could not generate 24h SAS for audio, using default: %s", sas_err)
+
+            result_data = {"result_blob_url": result_blob_url, "text": text, "voice": voice}
+
+            # Estimate duration (15 characters per second) and update speech quota
+            estimated_duration = max(1, int(len(text) / 15))
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+            quota_res = db.table("agent_quotas").select("speech_seconds_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
+            if quota_res and hasattr(quota_res, "data") and quota_res.data:
+                current_secs = quota_res.data.get("speech_seconds_used", 0) or 0
+                db.table("agent_quotas").update({
+                    "speech_seconds_used": current_secs + estimated_duration
+                }).eq("user_id", user_id).eq("period", period).execute()
+            else:
+                db.table("agent_quotas").insert({
+                    "user_id": user_id,
+                    "period": period,
+                    "speech_seconds_used": estimated_duration
+                }).execute()
+
+            logger.info("Speech synthesized and uploaded. job_id=%s url=%.80s", job_id, result_blob_url)
 
 
         else:

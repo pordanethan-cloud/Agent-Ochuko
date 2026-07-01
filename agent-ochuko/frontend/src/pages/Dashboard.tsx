@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2 } from 'lucide-react'
+import { useVoice } from '../hooks/useVoice'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -596,6 +597,28 @@ export const Dashboard: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Voice UI & Audio Playback States
+  const [playingMessageIndex, setPlayingMessageIndex] = useState<number | null>(null)
+  const [playingStatus, setPlayingStatus] = useState<'idle' | 'loading' | 'playing'>('idle')
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const audioElementRef = useRef<HTMLAudioElement | null>(null)
+
+  const {
+    isListening,
+    isTranscribing,
+    currentVolume,
+    startListening,
+    stopListening,
+    clearTranscript,
+    setTranscriptDirect
+  } = useVoice({
+    onTranscriptChange: (text) => setInput(text),
+    onError: (msg) => {
+      setToastMessage(msg)
+      setTimeout(() => setToastMessage(null), 4000)
+    }
+  })
 
   const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
   const [conversations, setConversations] = useState<any[]>([])
@@ -1326,6 +1349,131 @@ export const Dashboard: React.FC = () => {
     }
   }
 
+  const handlePlayTTS = async (index: number, content: string) => {
+    if (playingMessageIndex === index) {
+      handleStopTTS()
+      return;
+    }
+
+    handleStopTTS()
+    setPlayingMessageIndex(index)
+    setPlayingStatus('loading')
+
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) throw new Error('Authentication session not found.')
+
+      const res = await fetch(`${API_BASE}/v1/agents/speech/tts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          text: content,
+          voice: 'en-ZA-LeahNeural',
+          conversation_id: activeConversationId
+        })
+      })
+
+      if (!res.ok) {
+        throw new Error('TTS service failed')
+      }
+
+      const { job_id } = await res.json()
+
+      const channel = supabase
+        .channel(`tts-job-${job_id}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${job_id}` },
+          async (payload: any) => {
+            const updatedJob = payload.new
+            if (updatedJob.status === 'done') {
+              channel.unsubscribe()
+              const audioUrl = updatedJob.result?.result_blob_url
+              if (audioUrl) {
+                playAudioUrl(audioUrl)
+              } else {
+                playBrowserSpeech(content)
+              }
+            } else if (updatedJob.status === 'failed') {
+              channel.unsubscribe()
+              playBrowserSpeech(content)
+            }
+          }
+        )
+        .subscribe()
+
+      setTimeout(() => {
+        channel.unsubscribe()
+        setPlayingStatus((status) => {
+          if (status === 'loading' && playingMessageIndex === index) {
+            playBrowserSpeech(content)
+          }
+          return status
+        })
+      }, 45000)
+
+    } catch (err) {
+      console.error("TTS generation failed, falling back to browser SpeechSynthesis:", err)
+      playBrowserSpeech(content)
+    }
+  }
+
+  const playAudioUrl = (url: string) => {
+    setPlayingStatus('playing')
+    if (audioElementRef.current) {
+      audioElementRef.current.src = url
+      audioElementRef.current.play().catch((err) => {
+        console.error("Audio playback failed, falling back to browser SpeechSynthesis:", err)
+        if (playingMessageIndex !== null) {
+          playBrowserSpeech(messages[playingMessageIndex].content)
+        }
+      })
+    }
+  }
+
+  const playBrowserSpeech = (text: string) => {
+    setPlayingStatus('playing')
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+      const utterance = new SpeechSynthesisUtterance(text)
+      
+      const voices = window.speechSynthesis.getVoices()
+      const zaVoice = voices.find(v => v.lang === 'en-ZA' || v.lang.startsWith('en-za'))
+      if (zaVoice) {
+        utterance.voice = zaVoice
+      }
+
+      utterance.onend = () => {
+        setPlayingStatus('idle')
+        setPlayingMessageIndex(null)
+      }
+      utterance.onerror = () => {
+        setPlayingStatus('idle')
+        setPlayingMessageIndex(null)
+      }
+      window.speechSynthesis.speak(utterance)
+    } else {
+      setPlayingStatus('idle')
+      setPlayingMessageIndex(null)
+    }
+  }
+
+  const handleStopTTS = () => {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+    if (audioElementRef.current) {
+      audioElementRef.current.pause()
+      audioElementRef.current.src = ''
+    }
+    setPlayingStatus('idle')
+    setPlayingMessageIndex(null)
+  }
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
     if (isStreaming || uploading) return
@@ -1687,6 +1835,38 @@ export const Dashboard: React.FC = () => {
                           </button>
                         )}
 
+                        {msg.role === 'assistant' && msg.content.length > 0 && (
+                          <button
+                            onClick={() => handlePlayTTS(i, msg.content)}
+                            title={playingMessageIndex === i && playingStatus === 'playing' ? "Stop reading" : "Read response aloud"}
+                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
+                          >
+                            {playingMessageIndex === i ? (
+                              playingStatus === 'loading' ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 text-[#c5a880] animate-spin" />
+                                  <span className="text-[#c5a880]">Preparing...</span>
+                                </>
+                              ) : playingStatus === 'playing' ? (
+                                <>
+                                  <Volume2 className="w-3.5 h-3.5 text-[#c5a880] animate-bounce" />
+                                  <span className="text-[#c5a880]">Stop</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Volume2 className="w-3.5 h-3.5" />
+                                  <span>Speak</span>
+                                </>
+                              )
+                            ) : (
+                              <>
+                                <Volume2 className="w-3.5 h-3.5" />
+                                <span>Speak</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+
                         {msg.role === 'user' && editingMessageIndex !== i && (
                           <button
                             onClick={() => {
@@ -1776,49 +1956,94 @@ export const Dashboard: React.FC = () => {
           )}
 
           {/* Input */}
-          <form onSubmit={handleSend} className="max-w-2xl mx-auto relative flex items-center gap-2">
-            <div className="relative flex-1">
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                disabled={isStreaming || uploading}
-                placeholder={isStreaming ? "Agent is thinking..." : (attachedFile ? "Add prompt details for the agent..." : "Submit an inquiry...")}
-                className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <button
-                type="button"
-                onClick={handleTriggerUpload}
-                disabled={uploading}
-                className="absolute right-3 top-3.5 p-0.5 text-[#8e95a2] hover:text-[#c5a880] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
-                title="Attach document or image"
-              >
-                <Paperclip className="w-4 h-4" />
-              </button>
+          <form onSubmit={handleSend} className="max-w-2xl mx-auto relative flex flex-col gap-2">
+            <div className="relative flex items-center w-full gap-2">
+              <div className="relative flex-1">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value)
+                    setTranscriptDirect(e.target.value)
+                  }}
+                  disabled={isStreaming || uploading}
+                  placeholder={isListening ? "" : (isStreaming ? "Agent is thinking..." : (attachedFile ? "Add prompt details for the agent..." : "Submit an inquiry..."))}
+                  className={`w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-20 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isListening ? "blur-[1.2px] opacity-60 pointer-events-none" : ""
+                  }`}
+                />
+                
+                {isListening && (
+                  <div className="absolute inset-y-0 left-4 right-20 flex items-center justify-center gap-1.5 pointer-events-none select-none">
+                    {[...Array(12)].map((_, idx) => {
+                      const factor = [0.2, 0.4, 0.7, 0.9, 0.5, 0.8, 0.4, 0.6, 0.8, 0.5, 0.3, 0.1][idx]
+                      const barHeight = Math.max(3, (currentVolume / 255) * 32 * factor)
+                      return (
+                        <span
+                          key={idx}
+                          className="w-1 rounded-full bg-[#c5a880]/60 transition-all duration-75 ease-out"
+                          style={{ height: `${barHeight}px` }}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={isListening ? stopListening : startListening}
+                  className={`absolute right-9 top-3.5 p-0.5 transition duration-150 active:scale-95 ${
+                    isListening ? "text-red-400 animate-pulse" : "text-[#8e95a2] hover:text-[#c5a880]"
+                  }`}
+                  title={isListening ? "Stop listening" : "Start voice dictation"}
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTriggerUpload}
+                  disabled={uploading}
+                  className="absolute right-3 top-3.5 p-0.5 text-[#8e95a2] hover:text-[#c5a880] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
+                  title="Attach document or image"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
+              </div>
+
+              {isStreaming ? (
+                // Stop button — aborts the active model stream only, not Azure background jobs
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  aria-label="Stop generation"
+                  title="Stop generation"
+                  className="w-12 h-12 bg-[#1a1c20] border border-[#2b2e35] text-[#c5a880] rounded-xl flex items-center justify-center hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition duration-150 active:scale-95 shadow-md shrink-0 group"
+                >
+                  <Square className="w-[14px] h-[14px] fill-[#c5a880] group-hover:fill-[#d4b990] transition duration-150" />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={uploading || isListening || (!input.trim() && !attachedFile)}
+                  aria-label="Send"
+                  className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
-            {isStreaming ? (
-              // Stop button — aborts the active model stream only, not Azure background jobs
-              <button
-                type="button"
-                onClick={handleStop}
-                aria-label="Stop generation"
-                title="Stop generation"
-                className="w-12 h-12 bg-[#1a1c20] border border-[#2b2e35] text-[#c5a880] rounded-xl flex items-center justify-center hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition duration-150 active:scale-95 shadow-md shrink-0 group"
-              >
-                <Square className="w-[14px] h-[14px] fill-[#c5a880] group-hover:fill-[#d4b990] transition duration-150" />
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={uploading || (!input.trim() && !attachedFile)}
-                aria-label="Send"
-                className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
-              >
-                <Send className="w-4 h-4" />
-              </button>
+            {isListening && (
+              <div className="flex items-center justify-center gap-2 mt-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-[10px] font-bold text-[#c5a880] tracking-widest uppercase animate-pulse">
+                  {isTranscribing ? "Processing transcription..." : "Listening..."}
+                </span>
+              </div>
             )}
+          </form>
 
             <input
               ref={fileInputRef}
@@ -1827,7 +2052,6 @@ export const Dashboard: React.FC = () => {
               accept=".pdf,.png,.jpg,.jpeg,.webp,.gif"
               className="hidden"
             />
-          </form>
 
           <p className="text-center text-[9px] text-brand-muted/40 font-bold tracking-[0.15em] uppercase mt-3">
             Secure · OAuth Synced · Legal Parameters Active
@@ -1860,6 +2084,26 @@ export const Dashboard: React.FC = () => {
               </button>
             </div>
           </div>
+        </div>
+      {/* Hidden Audio Player for TTS */}
+      <audio
+        ref={audioElementRef}
+        onEnded={handleStopTTS}
+        onError={() => {
+          console.warn("Audio playback failed, falling back to speechSynthesis")
+          if (playingMessageIndex !== null) {
+            playBrowserSpeech(messages[playingMessageIndex].content)
+          }
+        }}
+        className="hidden"
+      />
+
+      {/* Premium Toast Banner */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 bg-[#0d0f11] border border-red-500/30 rounded-xl shadow-2xl animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          <span className="text-[12px] font-semibold text-brand-text">{toastMessage}</span>
+          <button onClick={() => setToastMessage(null)} className="text-[#8e95a2] hover:text-brand-text text-[10px] ml-2 font-bold font-mono">×</button>
         </div>
       )}
     </div>

@@ -331,3 +331,184 @@ async def queue_image_gen_job(
     except Exception as e:
         logger.error("Failed to queue image-gen job for user %s: %s", user_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail="Unable to queue the image generation job. Please try again.")
+
+
+class STTRequest(BaseModel):
+    conversation_id: str = Field(..., description="The conversation UUID associated with this job")
+    blob_url: str = Field(..., description="The direct Azure Blob URL to the audio file")
+
+
+class TTSRequest(BaseModel):
+    text: str = Field(..., description="The text content to convert to speech")
+    voice: Optional[str] = Field(None, description="The Azure Speech neural voice name to use (e.g. en-ZA-LeahNeural)")
+    conversation_id: Optional[str] = Field(None, description="The conversation UUID associated with this job")
+
+
+@router.post("/speech/stt", response_model=JobResponse, status_code=202, summary="Queue a speech-to-text transcribing task")
+async def queue_stt_job(
+    payload: STTRequest,
+    user: Dict[str, Any] = Depends(verify_jwt)
+) -> JobResponse:
+    """
+    Queue an async speech-to-text job for processing a heavy audio file.
+    """
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in JWT.")
+
+    conversation_id = payload.conversation_id.strip()
+    blob_url = payload.blob_url.strip()
+
+    supabase = get_supabase_admin()
+
+    try:
+        # Enforce monthly speech quota check in endpoint (soft fail if DB tables missing)
+        current_period = datetime.now(timezone.utc).strftime("%Y-%m")
+        quota_res = _safe_execute(
+            supabase.table("agent_quotas")
+            .select("speech_seconds_used")
+            .eq("user_id", user_id)
+            .eq("period", current_period)
+            .maybe_single()
+        )
+        used = 0
+        if quota_res and quota_res.data and isinstance(quota_res.data, dict):
+            used = quota_res.data.get("speech_seconds_used", 0) or 0
+
+        settings_res = _safe_execute(
+            supabase.table("admin_settings")
+            .select("value")
+            .eq("key", "max_speech_seconds")
+            .maybe_single()
+        )
+        limit = 3600
+        if settings_res and settings_res.data and isinstance(settings_res.data, dict):
+            try:
+                limit = int(settings_res.data.get("value", 3600))
+            except (ValueError, TypeError):
+                limit = 3600
+
+        if used >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Monthly speech quota exceeded ({used}/{limit} seconds used)."
+            )
+
+        _ensure_conversation(supabase, conversation_id, user_id)
+
+        job_data = {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "type": "speech",
+            "status": "pending",
+            "input_metadata": {"blob_url": blob_url}
+        }
+        job_res = _safe_execute(supabase.table("jobs").insert(job_data))
+        if not job_res or not job_res.data:
+            raise HTTPException(status_code=500, detail="Could not create background job. Please try again.")
+
+        job_id = job_res.data[0]["id"]
+
+        # Queue type is 'speech_stt' to let worker differentiate STT vs TTS
+        enqueue_job(
+            job_id=job_id,
+            job_type="speech_stt",
+            input_metadata={"blob_url": blob_url},
+            user_id=user_id
+        )
+
+        return JobResponse(job_id=job_id, status="pending")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to queue speech_stt job for user %s: %s", user_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to queue the transcription job. Please try again.")
+
+
+@router.post("/speech/tts", response_model=JobResponse, status_code=202, summary="Queue a text-to-speech rendering task")
+async def queue_tts_job(
+    payload: TTSRequest,
+    user: Dict[str, Any] = Depends(verify_jwt)
+) -> JobResponse:
+    """
+    Queue an async text-to-speech job for rendering text as neural speech.
+    """
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in JWT.")
+
+    text = payload.text.strip()
+    voice = payload.voice.strip() if payload.voice else None
+    conversation_id = payload.conversation_id.strip() if payload.conversation_id else None
+
+    if not text:
+        raise HTTPException(status_code=400, detail="Text parameter cannot be empty.")
+
+    supabase = get_supabase_admin()
+
+    try:
+        # Enforce monthly speech quota check in endpoint (soft fail if DB tables missing)
+        current_period = datetime.now(timezone.utc).strftime("%Y-%m")
+        quota_res = _safe_execute(
+            supabase.table("agent_quotas")
+            .select("speech_seconds_used")
+            .eq("user_id", user_id)
+            .eq("period", current_period)
+            .maybe_single()
+        )
+        used = 0
+        if quota_res and quota_res.data and isinstance(quota_res.data, dict):
+            used = quota_res.data.get("speech_seconds_used", 0) or 0
+
+        settings_res = _safe_execute(
+            supabase.table("admin_settings")
+            .select("value")
+            .eq("key", "max_speech_seconds")
+            .maybe_single()
+        )
+        limit = 3600
+        if settings_res and settings_res.data and isinstance(settings_res.data, dict):
+            try:
+                limit = int(settings_res.data.get("value", 3600))
+            except (ValueError, TypeError):
+                limit = 3600
+
+        if used >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Monthly speech quota exceeded ({used}/{limit} seconds used)."
+            )
+
+        if conversation_id:
+            _ensure_conversation(supabase, conversation_id, user_id)
+
+        job_data = {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "type": "speech",
+            "status": "pending",
+            "input_metadata": {"text": text, "voice": voice}
+        }
+        job_res = _safe_execute(supabase.table("jobs").insert(job_data))
+        if not job_res or not job_res.data:
+            raise HTTPException(status_code=500, detail="Could not create background job. Please try again.")
+
+        job_id = job_res.data[0]["id"]
+
+        # Queue type is 'speech_tts' to let worker differentiate STT vs TTS
+        enqueue_job(
+            job_id=job_id,
+            job_type="speech_tts",
+            input_metadata={"text": text, "voice": voice},
+            user_id=user_id
+        )
+
+        return JobResponse(job_id=job_id, status="pending")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to queue speech_tts job for user %s: %s", user_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to queue the text-to-speech job. Please try again.")
+

@@ -8,3 +8,4 @@ azure-ai-formrecognizer>=3.3.0
 azure-cognitiveservices-vision-computervision>=0.9.0
 azure-storage-blob>=12.20.0
 azure-storage-queue>=12.10.0
+groq>=0.9.0
