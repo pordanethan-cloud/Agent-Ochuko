@@ -823,6 +823,116 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             logger.info("Image generated and uploaded. job_id=%s url=%.80s", job_id, image_url)
 
 
+        elif job_type == "speech_tts":
+            # ─── Azure Speech TTS ───────────────────────────────────────────────────────
+            import urllib.request as _urlreq
+
+            text = input_metadata.get("text", "")
+            voice = input_metadata.get("voice", "en-GB-SoniaNeural")
+
+            if not text:
+                raise ValueError("Missing text in input_metadata for speech_tts job.")
+
+            speech_key = os.environ.get("AZURE_SPEECH_KEY")
+            speech_region = os.environ.get("AZURE_SPEECH_REGION", "southafricanorth")
+            if not speech_key:
+                raise RuntimeError("AZURE_SPEECH_KEY is not configured.")
+
+            logger.info("Running Azure Speech TTS. job_id=%s voice=%s text_len=%d", job_id, voice, len(text))
+
+            # Build SSML — always set xml:lang to en-US to satisfy Azure validation;
+            # the voice attribute controls the actual accent/dialect.
+            ssml = (
+                f'<speak version="1.0" xml:lang="en-US" '
+                f'xmlns="http://www.w3.org/2001/10/synthesis" '
+                f'xmlns:mstts="http://www.w3.org/2001/mstts">'
+                f'<voice name="{voice}">'
+                f'{text}'
+                f'</voice>'
+                f'</speak>'
+            )
+            ssml_bytes = ssml.encode("utf-8")
+
+            tts_url = f"https://{speech_region}.tts.speech.microsoft.com/cognitiveservices/v1"
+            tts_req = _urlreq.Request(
+                tts_url,
+                data=ssml_bytes,
+                headers={
+                    "Ocp-Apim-Subscription-Key": speech_key,
+                    "Content-Type": "application/ssml+xml",
+                    "X-Microsoft-OutputFormat": "audio-48khz-96kbitrate-mono-mp3",
+                    "User-Agent": "AgentOchuko/1.0",
+                },
+                method="POST",
+            )
+
+            try:
+                with _urlreq.urlopen(tts_req, timeout=30) as tts_resp:
+                    audio_bytes = tts_resp.read()
+            except Exception as speech_exc:
+                # Mark as failed so frontend falls back to window.speechSynthesis
+                raise RuntimeError(f"Azure Speech TTS request failed: {speech_exc}")
+
+            if not audio_bytes or len(audio_bytes) < 500:
+                raise RuntimeError("Azure Speech returned an empty or invalid audio response.")
+
+            # Upload audio to Azure Blob Storage (container: agent-audio)
+            from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+            conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+            if not conn_str:
+                raise RuntimeError("AZURE_STORAGE_CONNECTION_STRING is not configured.")
+
+            blob_service = BlobServiceClient.from_connection_string(conn_str)
+            container_name = "agent-audio"
+            container_client = blob_service.get_container_client(container_name)
+            try:
+                container_client.create_container()
+            except Exception:
+                pass  # Already exists
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            blob_name = f"tts/{user_id}/{job_id}_{timestamp}.mp3"
+            blob_client_obj = container_client.get_blob_client(blob_name)
+            blob_client_obj.upload_blob(
+                audio_bytes, overwrite=True,
+                content_settings=ContentSettings(content_type="audio/mpeg")
+            )
+
+            # Generate 1-hour read SAS URL
+            parts = {}
+            for item in conn_str.split(";"):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    parts[k.strip()] = v.strip()
+            acct = parts.get("AccountName", "")
+            acct_key = parts.get("AccountKey", "")
+            raw_blob_url = f"https://{acct}.blob.core.windows.net/{container_name}/{blob_name}"
+
+            sas_url = raw_blob_url  # fallback
+            if acct and acct_key:
+                sas = generate_blob_sas(
+                    account_name=acct,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    account_key=acct_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+                sas_url = f"{raw_blob_url}?{sas}"
+
+            result_data = {"blob_url": sas_url, "voice": voice}
+
+            # Increment monthly TTS quota
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+            quota_res = db.table("agent_quotas").select("tts_calls_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
+            if quota_res and hasattr(quota_res, "data") and quota_res.data:
+                current = quota_res.data.get("tts_calls_used", 0) or 0
+                db.table("agent_quotas").update({"tts_calls_used": current + 1}).eq("user_id", user_id).eq("period", period).execute()
+            else:
+                db.table("agent_quotas").upsert({"user_id": user_id, "period": period, "tts_calls_used": 1}, on_conflict="user_id,period").execute()
+
+            logger.info("TTS audio generated and uploaded. job_id=%s url=%.80s", job_id, sas_url)
+
         else:
             raise ValueError(f"Unsupported job type: '{job_type}'")
 

@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2 } from 'lucide-react'
+import { useVoice } from '../hooks/useVoice'
+import { useJob } from '../hooks/useJob'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -567,6 +569,25 @@ function getFriendlyErrorMessage(message: string): string {
   return `We were unable to process your request at this moment (${message}). Please try again in a few moments or contact support.`
 }
 
+// ── VoiceWaveform — 5-bar volume-driven equaliser ────────────────────────────
+const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
+  const bars = [0.35, 0.65, 1.0, 0.65, 0.35]
+  return (
+    <div className="flex items-end justify-center gap-[3px] h-4" aria-hidden>
+      {bars.map((base, idx) => (
+        <div
+          key={idx}
+          className="w-[3px] rounded-full bg-[#c5a880] transition-all duration-75"
+          style={{
+            height: `${Math.max(3, Math.round(base * volume * 14 + 3))}px`,
+            opacity: 0.4 + base * volume * 0.6,
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export const Dashboard: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -600,6 +621,131 @@ export const Dashboard: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
   const [conversations, setConversations] = useState<any[]>([])
   const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
+
+  // ── Voice dictation ────────────────────────────────────────────────────────
+  const voice = useVoice((text: string) => setInput(text))
+
+  // ── TTS per-message playback state ─────────────────────────────────────────
+  const [activeTtsJobId, setActiveTtsJobId] = useState<string | null>(null)
+  const [ttsState, setTtsState] = useState<Record<number, {
+    status: 'idle' | 'loading' | 'playing' | 'done' | 'failed'
+    blobUrl: string | null
+    progress: number
+  }>>({})
+  const activeTtsAudioRef = useRef<HTMLAudioElement | null>(null)
+  const activeTtsIndexRef = useRef<number | null>(null)
+  const activeTtsJob = useJob(activeTtsJobId)
+
+  // ── Toast notifications ────────────────────────────────────────────────────
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'info' | 'error' }[]>([])
+
+  const showToast = useCallback((message: string, type: 'info' | 'error' = 'info') => {
+    const id = Date.now().toString()
+    setToasts(prev => [...prev, { id, message, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
+  }, [])
+
+  // Surface voice hook errors as toasts
+  useEffect(() => {
+    if (voice.error === 'permission_denied') {
+      showToast('Microphone access required for voice input', 'error')
+    } else if (voice.error === 'transcription_failed') {
+      showToast('Transcription failed — please try again', 'error')
+    } else if (voice.error === 'browser_incompatible') {
+      showToast('Voice input is not supported in this browser', 'info')
+    }
+  }, [voice.error, showToast])
+
+  // TTS job completion: play audio or fall back to browser speechSynthesis
+  useEffect(() => {
+    const idx = activeTtsIndexRef.current
+    if (idx === null) return
+
+    if (activeTtsJob.status === 'done' && activeTtsJob.resultBlobUrl) {
+      if (activeTtsAudioRef.current) {
+        activeTtsAudioRef.current.pause()
+        activeTtsAudioRef.current = null
+      }
+      const audio = new Audio(activeTtsJob.resultBlobUrl)
+      activeTtsAudioRef.current = audio
+      audio.ontimeupdate = () => {
+        if (audio.duration > 0) {
+          setTtsState(prev => ({
+            ...prev,
+            [idx]: { ...prev[idx], progress: Math.round((audio.currentTime / audio.duration) * 100) }
+          }))
+        }
+      }
+      audio.onended = () => {
+        setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
+        activeTtsAudioRef.current = null
+        activeTtsIndexRef.current = null
+      }
+      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'playing', blobUrl: activeTtsJob.resultBlobUrl } }))
+      audio.play().catch(() => { /* autoplay policy: requires user gesture on some browsers */ })
+      setActiveTtsJobId(null)
+
+    } else if (activeTtsJob.status === 'failed') {
+      // Azure Speech unavailable — fall back to browser speechSynthesis
+      const msgContent = messages[idx]?.content || ''
+      if (msgContent) {
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(msgContent))
+      }
+      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
+      activeTtsIndexRef.current = null
+      setActiveTtsJobId(null)
+    }
+  }, [activeTtsJob.status, activeTtsJob.resultBlobUrl, messages])
+
+  const toggleVoice = useCallback(async () => {
+    if (voice.isRecording) {
+      voice.stopRecording()
+    } else {
+      await voice.startRecording()
+    }
+  }, [voice])
+
+  const handleTTSPlay = useCallback(async (idx: number, content: string) => {
+    // Stop any active audio
+    if (activeTtsAudioRef.current) {
+      activeTtsAudioRef.current.pause()
+      activeTtsAudioRef.current = null
+    }
+    window.speechSynthesis.cancel()
+    setActiveTtsJobId(null)
+
+    // Toggle off: if this message is already playing, stop it
+    if (ttsState[idx]?.status === 'playing') {
+      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
+      activeTtsIndexRef.current = null
+      return
+    }
+
+    activeTtsIndexRef.current = idx
+    setTtsState(prev => ({ ...prev, [idx]: { status: 'loading', blobUrl: null, progress: 0 } }))
+
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) throw new Error('Not authenticated')
+
+      const res = await fetch(`${API_BASE}/v1/agents/speech/tts`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: content, voice: 'auto', conversation_id: activeConversationId }),
+      })
+
+      if (!res.ok) throw new Error(`TTS enqueue failed: ${res.status}`)
+      const data = await res.json()
+      setActiveTtsJobId(data.job_id)
+    } catch {
+      // Immediate browser fallback on network or quota error
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(content))
+      setTtsState(prev => ({ ...prev, [idx]: { status: 'done', blobUrl: null, progress: 0 } }))
+      activeTtsIndexRef.current = null
+    }
+  }, [ttsState, activeConversationId])
 
 
   const fetchConversations = async () => {
@@ -1687,6 +1833,36 @@ export const Dashboard: React.FC = () => {
                           </button>
                         )}
 
+                        {/* TTS Listen/Stop button — assistant messages only */}
+                        {msg.role === 'assistant' && msg.content.length > 0 && (
+                          <>
+                            <button
+                              id={`tts-play-${i}`}
+                              type="button"
+                              onClick={() => handleTTSPlay(i, msg.content)}
+                              title={ttsState[i]?.status === 'playing' ? 'Stop audio' : 'Listen to response'}
+                              className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
+                            >
+                              {ttsState[i]?.status === 'loading' ? (
+                                <><Loader2 className="w-3.5 h-3.5 animate-spin" /><span>Loading</span></>
+                              ) : ttsState[i]?.status === 'playing' ? (
+                                <><Square className="w-3.5 h-3.5 fill-current" /><span>Stop</span></>
+                              ) : (
+                                <><Volume2 className="w-3.5 h-3.5" /><span>Listen</span></>
+                              )}
+                            </button>
+                            {/* Audio progress bar — visible only while playing */}
+                            {ttsState[i]?.status === 'playing' && (
+                              <div className="w-16 h-[2px] bg-[#1a1d20] rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-[#c5a880]/70 transition-all duration-500"
+                                  style={{ width: `${ttsState[i]?.progress ?? 0}%` }}
+                                />
+                              </div>
+                            )}
+                          </>
+                        )}
+
                         {msg.role === 'user' && editingMessageIndex !== i && (
                           <button
                             onClick={() => {
@@ -1775,17 +1951,66 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
+          {/* Voice recording status strip — waveform + label, shown while recording */}
+          {voice.isRecording && (
+            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between px-1">
+              <div className="flex items-center gap-2.5">
+                <VoiceWaveform volume={voice.currentVolume} />
+                <span className="text-[10px] font-bold text-[#c5a880]/80 tracking-widest uppercase"
+                  style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
+                >
+                  Listening...
+                </span>
+              </div>
+              <span className="text-[9px] text-brand-muted/40 font-medium select-none">
+                {voice.currentVolume > 0.08 ? 'Voice detected' : 'Waiting for speech...'}
+              </span>
+            </div>
+          )}
+
           {/* Input */}
           <form onSubmit={handleSend} className="max-w-2xl mx-auto relative flex items-center gap-2">
             <div className="relative flex-1">
+              {/* Mic button — hidden when browser doesn’t support MediaRecorder */}
+              {voice.isSupported && (
+                <button
+                  id="voice-mic-button"
+                  type="button"
+                  onClick={toggleVoice}
+                  disabled={isStreaming || uploading}
+                  title={voice.isRecording ? 'Stop recording' : 'Voice input'}
+                  aria-label={voice.isRecording ? 'Stop recording' : 'Start voice input'}
+                  className={`absolute left-3 top-3.5 p-0.5 transition-all duration-150 active:scale-95 rounded z-10 disabled:opacity-20 ${
+                    voice.isRecording
+                      ? 'text-[#c5a880] voice-pulse-ring'
+                      : 'text-[#8e95a2] hover:text-[#c5a880] hover:bg-white/5'
+                  }`}
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+              )}
               <input
                 ref={inputRef}
                 type="text"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  // User manually edited — detach from live transcript
+                  if (voice.isRecording) voice.clearTranscript()
+                }}
                 disabled={isStreaming || uploading}
-                placeholder={isStreaming ? "Agent is thinking..." : (attachedFile ? "Add prompt details for the agent..." : "Submit an inquiry...")}
-                className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder={
+                  voice.isRecording ? 'Listening...' :
+                  isStreaming ? 'Agent is thinking...' :
+                  attachedFile ? 'Add prompt details for the agent...' : 'Submit an inquiry...'
+                }
+                className={`w-full h-12 bg-[#0d0f11]/80 border rounded-xl pr-14 text-[13.5px] text-brand-text focus:outline-none focus:ring-1 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  voice.isSupported ? 'pl-10' : 'pl-4'
+                } ${
+                  voice.isRecording
+                    ? 'border-[#c5a880]/40 focus:border-[#c5a880]/60 focus:ring-[#c5a880]/20 placeholder-[#c5a880]/50'
+                    : 'border-[#1a1d20] focus:border-[#c5a880]/40 focus:ring-[#c5a880]/15 placeholder-[#8e95a2]/40'
+                }`}
               />
               <button
                 type="button"
@@ -1862,6 +2087,22 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Toast notification container — top-right, non-blocking */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none" aria-live="polite">
+        {toasts.map(t => (
+          <div
+            key={t.id}
+            className={`px-4 py-2.5 rounded-xl border text-[12px] font-semibold tracking-wide shadow-xl shadow-black/40 backdrop-blur-md ${
+              t.type === 'error'
+                ? 'bg-red-950/90 border-red-500/20 text-red-300'
+                : 'bg-[#0d0f11]/90 border-[#c5a880]/20 text-brand-text'
+            }`}
+          >
+            {t.message}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
