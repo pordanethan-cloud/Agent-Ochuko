@@ -2085,6 +2085,8 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
       {/* Hidden Audio Player for TTS */}
       <audio
         ref={audioElementRef}
