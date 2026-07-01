@@ -4,12 +4,20 @@ import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Glo
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
+interface Source {
+  title: string
+  url: string
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
   routing_mode?: string
   routing_reason?: string
   fileAttachment?: { name: string; jobType: 'ocr' | 'vision' }
+  sources?: Source[]
+  imageUrl?: string      // set when a generated image is ready
+  imagePending?: boolean // true while the FLUX job is in-flight
 }
 
 // ─── Inline markdown: bold, italic, code, links ───────────────────────────────
@@ -71,6 +79,53 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
 
   return segments.length === 1 ? segments[0] : <>{segments}</>
 }
+
+// ── ImagePending — shimmer placeholder while FLUX is running ─────────────────
+const ImagePending: React.FC<{ prompt?: string }> = ({ prompt }) => (
+  <div className="flex flex-col gap-2.5 my-1">
+    <div className="w-72 h-52 rounded-2xl bg-[#111316] border border-[#1e2025] overflow-hidden relative">
+      {/* Animated shimmer */}
+      <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_infinite] bg-gradient-to-r from-transparent via-[#c5a880]/5 to-transparent" />
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+        <div className="w-8 h-8 rounded-full border-2 border-[#c5a880]/30 border-t-[#c5a880] animate-spin" />
+        <span className="text-[10px] font-bold text-[#c5a880]/60 tracking-widest uppercase">Generating image…</span>
+      </div>
+    </div>
+    {prompt && (
+      <p className="text-[10px] text-brand-muted/60 italic px-1 max-w-[280px] truncate">{prompt}</p>
+    )}
+  </div>
+)
+
+// ── ImageBubble — premium image card shown once generation is done ───────────
+const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }) => (
+  <div className="flex flex-col gap-2 my-1 group/img">
+    <div className="relative rounded-2xl overflow-hidden border border-[#1e2025] shadow-xl shadow-black/50 w-fit max-w-sm">
+      <img
+        src={url}
+        alt={prompt || 'Generated image'}
+        className="block w-full max-w-sm object-cover transition-transform duration-500 group-hover/img:scale-[1.02]"
+        loading="lazy"
+      />
+      {/* Download overlay on hover */}
+      <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-all duration-300 flex items-end justify-end p-3">
+        <a
+          href={url}
+          download
+          target="_blank"
+          rel="noopener noreferrer"
+          className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#c5a880] text-[#08090a] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          ↓ Download
+        </a>
+      </div>
+    </div>
+    {prompt && (
+      <p className="text-[10px] text-brand-muted/70 italic px-1 max-w-[320px]">{prompt}</p>
+    )}
+  </div>
+)
 
 // ─── Code Block Component with Copy ──────────────────────────────────────────
 const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, content }) => {
@@ -523,6 +578,7 @@ export const Dashboard: React.FC = () => {
   const [isSidebarHovered, setIsSidebarHovered] = useState(false)
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [webSearchStatus, setWebSearchStatus] = useState<'idle' | 'searching' | 'done'>('idle')
+  const [activityLabel, setActivityLabel] = useState<string>('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -705,7 +761,7 @@ export const Dashboard: React.FC = () => {
     } catch (_) {}
   }
 
-  const triggerStream = async (history: Message[], newUserMessage: string) => {
+  const triggerStream = async (history: Message[], newUserMessage: string | Message, overrideConvoId?: string) => {
     // 1. Abort any active stream before launching a new one
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
@@ -716,8 +772,12 @@ export const Dashboard: React.FC = () => {
     setIsStreaming(true)
     setWebSearchStatus('idle')
 
+    const userMessageObj: Message = typeof newUserMessage === 'string'
+      ? { role: 'user', content: newUserMessage }
+      : newUserMessage
+
     // Append the new user message and an assistant placeholder
-    const nextMessages: Message[] = [...history, { role: 'user', content: newUserMessage }]
+    const nextMessages: Message[] = [...history, userMessageObj]
     setMessages([...nextMessages, { role: 'assistant', content: '' }])
 
     try {
@@ -731,7 +791,7 @@ export const Dashboard: React.FC = () => {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          conversation_id: activeConversationId,
+          conversation_id: overrideConvoId || activeConversationId,
           mode,
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
@@ -799,6 +859,85 @@ export const Dashboard: React.FC = () => {
               fetchConversations()
             } else if (data.type === 'web_search_status') {
               setWebSearchStatus(data.status === 'searching' ? 'searching' : 'done')
+              setActivityLabel(data.status === 'searching' ? 'Searching the web...' : 'Search complete.')
+            } else if (data.type === 'search_activity') {
+              if (data.status === 'searching') {
+                setWebSearchStatus('searching')
+                setActivityLabel(data.label || 'Searching...')
+              } else if (data.status === 'done') {
+                setWebSearchStatus('done')
+                setActivityLabel(data.label || 'Search complete.')
+                if (data.sources && data.sources.length > 0) {
+                  // Append sources to the streaming message
+                  setMessages((prev) => {
+                    const updated = [...prev]
+                    if (updated.length > 0) {
+                      const lastMsg = updated[updated.length - 1]
+                      if (lastMsg.role === 'assistant') {
+                        lastMsg.sources = data.sources
+                      }
+                    }
+                    return updated
+                  })
+                }
+              } else if (data.status === 'error') {
+                setWebSearchStatus('idle')
+                setActivityLabel(data.label || 'Search failed.')
+              }
+            } else if (data.type === 'image_gen_queued') {
+              // AI decided to generate an image — show pending bubble and subscribe
+              const imgJobId: string = data.job_id
+              const imgPrompt: string = data.prompt || ''
+
+              // Append a pending image bubble after the (possibly still-streaming) text
+              setMessages((prev) => [
+                ...prev,
+                { role: 'assistant', content: imgPrompt, imagePending: true },
+              ])
+
+              // Subscribe to job completion via Supabase Realtime
+              const imgChannel = supabase
+                .channel(`img-job-${imgJobId}`)
+                .on(
+                  'postgres_changes',
+                  { event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${imgJobId}` },
+                  (imgPayload) => {
+                    const j = imgPayload.new
+                    if (j.status === 'done' && j.result?.image_url) {
+                      setMessages((prev) =>
+                        prev.map((m) =>
+                          m.imagePending && m.content === imgPrompt
+                            ? { ...m, imagePending: false, imageUrl: j.result.image_url }
+                            : m
+                        )
+                      )
+                      imgChannel.unsubscribe()
+                    } else if (j.status === 'failed') {
+                      setMessages((prev) =>
+                        prev.map((m) =>
+                          m.imagePending && m.content === imgPrompt
+                            ? { role: 'assistant', content: 'Image generation failed. Please try again.' }
+                            : m
+                        )
+                      )
+                      imgChannel.unsubscribe()
+                    }
+                  }
+                )
+                .subscribe()
+
+              // 90s stall guard
+              setTimeout(() => {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.imagePending && m.content === imgPrompt
+                      ? { role: 'assistant', content: 'Image generation timed out. Please try again.' }
+                      : m
+                  )
+                )
+                imgChannel.unsubscribe()
+              }, 90_000)
+
             } else if (data.type === 'error') {
               throw new Error(`Agent error: ${data.error}`)
             }
@@ -954,6 +1093,7 @@ export const Dashboard: React.FC = () => {
   }
 
   const triggerAgentJob = async (jobType: 'ocr' | 'vision', blobUrl: string, promptText?: string) => {
+    const historyBeforeJob = [...messages]
     setIsStreaming(true)
 
     let convoId = activeConversationId
@@ -1019,6 +1159,7 @@ export const Dashboard: React.FC = () => {
           async (payload) => {
             const updatedJob = payload.new
             clearTimeout(stallTimer)
+            
             if (updatedJob.status === 'processing') {
                setMessages((prev) => {
                  const next = [...prev]
@@ -1030,27 +1171,31 @@ export const Dashboard: React.FC = () => {
                })
             } else if (updatedJob.status === 'done') {
               const textResult = updatedJob.result?.text || 'No result data returned by the agent.'
-              setMessages((prev) => {
-                const next = [...prev]
-                next[next.length - 1] = {
-                  role: 'assistant',
-                  content: textResult
-                }
-                return next
-              })
-              setIsStreaming(false)
+              
+              // Unsubscribe from Supabase realtime job channel
               channel.unsubscribe()
 
-              // Save the message records to history
+              // Save the system context message containing the analysis results to history
               try {
                 await supabase.from('messages').insert([
-                  { conversation_id: convoId, role: 'user', content: userMsgText, routing_mode: 'discuss' },
-                  { conversation_id: convoId, role: 'assistant', content: textResult, routing_mode: jobType }
+                  {
+                    conversation_id: convoId,
+                    role: 'system',
+                    content: `[System Context: The user has attached a file. Analysis result: ${textResult}]`,
+                    routing_mode: 'discuss'
+                  }
                 ])
-                fetchConversations()
               } catch (dbErr) {
-                console.error('Failed to commit messages to history:', dbErr)
+                console.error('Failed to commit system context to history:', dbErr)
               }
+
+              // Trigger the stream response using the LLM. 
+              // We pass the userMessageObj with the fileAttachment to keep the UI chip rendered!
+              await triggerStream(historyBeforeJob, {
+                role: 'user',
+                content: userMsgText,
+                fileAttachment
+              }, convoId)
             } else if (updatedJob.status === 'failed') {
               const errMsg = updatedJob.error || 'Background analysis encountered an error.'
               setMessages((prev) => {
@@ -1116,6 +1261,69 @@ export const Dashboard: React.FC = () => {
     }
   }
 
+  // ── Hybrid Search (Google grounding + Azure synthesis) ───────────────────
+  // Patterns that should bypass the normal stream and use the grounding endpoint
+  const SEARCH_INTENT_PATTERNS = [
+    /^(search|look up|find|what('s| is) (happening|the latest|new)|latest|news|current|today|right now|who (is|are|won)|when (is|did|will)|where (is|are)|how much (is|does))/i,
+    /^\/(search|web|google)\s+/i,
+  ]
+
+  const triggerHybridSearch = async (userPrompt: string) => {
+    const nextMessages: Message[] = [...messages, { role: 'user', content: userPrompt }]
+    setMessages([...nextMessages, { role: 'assistant', content: '' }])
+    setIsStreaming(true)
+    setWebSearchStatus('searching')
+
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) throw new Error('Authentication session not found.')
+
+      const res = await fetch(`${API_BASE}/v1/search/ask-hybrid`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ prompt: userPrompt }),
+      })
+
+      setWebSearchStatus('done')
+
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`
+        try { const d = await res.json(); errMsg = d?.detail || errMsg } catch (_) {}
+        throw new Error(errMsg)
+      }
+
+      const data = await res.json()
+      const answer: string = data.answer || ''
+      const sources: Source[] = Array.isArray(data.sources) ? data.sources : []
+
+      setMessages((prev) => {
+        const updated = [...prev]
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          content: answer,
+          sources: sources.length > 0 ? sources : undefined,
+        }
+        return updated
+      })
+    } catch (err: any) {
+      setWebSearchStatus('idle')
+      const explanation = getFriendlyErrorMessage(err.message || 'unknown')
+      setMessages((prev) => {
+        const updated = [...prev]
+        updated[updated.length - 1] = { role: 'assistant', content: explanation }
+        return updated
+      })
+    } finally {
+      setIsStreaming(false)
+      setWebSearchStatus('idle')
+      setTimeout(() => inputRef.current?.focus(), 0)
+    }
+  }
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -1133,8 +1341,13 @@ export const Dashboard: React.FC = () => {
 
     const userMessage = input.trim()
     setInput('')
-    // Force focus back to input immediately so user can type ahead while streaming
     setTimeout(() => inputRef.current?.focus(), 0)
+
+    // Route to hybrid search if the message matches a web-search intent pattern
+    if (SEARCH_INTENT_PATTERNS.some((p) => p.test(userMessage))) {
+      await triggerHybridSearch(userMessage)
+      return
+    }
 
     await triggerStream(messages, userMessage)
   }
@@ -1394,7 +1607,7 @@ export const Dashboard: React.FC = () => {
                             <>
                               <Globe className="w-3.5 h-3.5 text-[#c5a880] animate-pulse" />
                               <span className="text-[11px] text-[#c5a880]/70 font-semibold tracking-wide">
-                                Searching the web...
+                                {activityLabel || 'Searching the web...'}
                               </span>
                             </>
                           ) : (
@@ -1406,6 +1619,12 @@ export const Dashboard: React.FC = () => {
                             ))
                           )}
                         </div>
+                      ) : msg.imagePending ? (
+                        // FLUX generation in progress — shimmer placeholder
+                        <ImagePending prompt={msg.content || undefined} />
+                      ) : msg.imageUrl ? (
+                        // Image ready — premium bubble with download
+                        <ImageBubble url={msg.imageUrl} prompt={msg.content || undefined} />
                       ) : (
                         // Rendered markdown
                         <div className="space-y-0.5">
@@ -1413,6 +1632,34 @@ export const Dashboard: React.FC = () => {
                         </div>
                       )}
                     </div>
+
+                    {/* Source badges — shown below assistant bubbles when hybrid search is used */}
+                    {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-1 px-1">
+                        {msg.sources.map((src, si) => (
+                          <a
+                            key={si}
+                            href={src.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={src.url}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[#1e2025] bg-[#0d0f11]/80 hover:border-[#c5a880]/40 hover:bg-[#c5a880]/5 transition-all duration-150 group/badge max-w-[220px]"
+                          >
+                            {/* Favicon */}
+                            <img
+                              src={`https://www.google.com/s2/favicons?sz=16&domain=${new URL(src.url).hostname}`}
+                              alt=""
+                              className="w-3 h-3 rounded-sm shrink-0 opacity-70 group-hover/badge:opacity-100"
+                              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                            />
+                            <span className="text-[10px] font-semibold text-[#8e95a2] group-hover/badge:text-[#c5a880] truncate tracking-tight transition-colors duration-150">
+                              {src.title.length > 28 ? src.title.slice(0, 28) + '…' : src.title}
+                            </span>
+                            <span className="text-[9px] text-[#8e95a2]/40 group-hover/badge:text-[#c5a880]/50 shrink-0 transition-colors duration-150">↗</span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Actions Row at the bottom (outside the bubble), visible on hover */}
                     {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (

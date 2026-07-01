@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import itertools
 from datetime import datetime, timezone, timedelta
 import azure.functions as func
 from supabase import create_client, Client
@@ -406,6 +407,49 @@ def get_vision_client():
     return _vision_client
 
 
+# Round-robin iterator over HuggingFace API keys for load distribution
+_hf_key_cycle = None
+
+def _get_next_hf_key() -> str:
+    """Returns the next HuggingFace API key from the comma-separated pool, cycling round-robin."""
+    global _hf_key_cycle
+    if _hf_key_cycle is None:
+        raw = os.environ.get("HUGGINGFACE_API_KEYS", "")
+        keys = [k.strip() for k in raw.split(",") if k.strip()]
+        if not keys:
+            raise RuntimeError("HUGGINGFACE_API_KEYS is not configured.")
+        _hf_key_cycle = itertools.cycle(keys)
+    return next(_hf_key_cycle)
+
+
+def _upload_image_to_blob(image_bytes: bytes, blob_name: str) -> str:
+    """
+    Uploads raw image bytes to the 'agent-outputs' container in Azure Blob Storage.
+    Returns the public blob URL (without SAS — container must allow public read or
+    a separate SAS read URL is generated as needed by the frontend).
+    """
+    from azure.storage.blob import BlobServiceClient
+    conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    if not conn_str:
+        raise RuntimeError("AZURE_STORAGE_CONNECTION_STRING is not configured.")
+
+    blob_service = BlobServiceClient.from_connection_string(conn_str)
+    container_name = "agent-outputs"
+
+    # Ensure container exists (no-op if already present)
+    container_client = blob_service.get_container_client(container_name)
+    try:
+        container_client.create_container()
+    except Exception:
+        pass  # Already exists
+
+    blob_client = container_client.get_blob_client(blob_name)
+    blob_client.upload_blob(image_bytes, overwrite=True, content_settings=None)
+
+    account_name = blob_service.account_name
+    return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"
+
+
 def get_read_sas_url(blob_url: str) -> str:
     """Generates a short-lived read-only SAS URL for the given direct blob URL."""
     conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
@@ -544,16 +588,43 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
                 raise ValueError("Missing blob_url in input_metadata.")
 
             prompt = input_metadata.get("prompt", "Describe the content in this image.")
-            logger.info(f"Running Computer Vision analysis on: {blob_url} with prompt: {prompt}")
+            logger.info(f"Running Azure OpenAI Vision analysis on: {blob_url} with prompt: {prompt}")
 
-            vision_client = get_vision_client()
-            describe_res = vision_client.describe_image(read_sas_url)
-            description = ""
-            if describe_res.captions:
-                description = describe_res.captions[0].text
+            openai_client = get_openai()
+            # Retrieve solve deployment from App Configuration (falls back to gpt-5.4-mini)
+            model_deployment = get_appconfig_value("SOLVE_MODEL_DEPLOYMENT", "gpt-5.4-mini")
+
+            # Call Azure OpenAI Chat Completion with the SAS image URL
+            response = openai_client.chat.completions.create(
+                model=model_deployment,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text", 
+                                "text": (
+                                    "Analyze this image in detail. If there is text in the image, "
+                                    "transcribe all of it accurately. If it is a diagram or document, "
+                                    "explain its structure and contents. User instructions: " + prompt
+                                )
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": read_sas_url
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_completion_tokens=800
+            )
+
+            description = response.choices[0].message.content
 
             result_data = {
-                "text": f"Vision analysis: {description}"
+                "text": description
             }
 
             # Increment user's monthly Vision quota
@@ -570,6 +641,137 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
                     "period": period,
                     "vision_calls_used": 1
                 }).execute()
+
+        elif job_type == "image_gen":
+            import requests as _requests
+
+            prompt = input_metadata.get("prompt", "")
+            style = input_metadata.get("style", "photorealistic")
+            if not prompt:
+                raise ValueError("Missing prompt in input_metadata for image_gen job.")
+
+            # Build a style-enhanced prompt
+            style_prefix = {
+                "photorealistic": "photorealistic, high quality, detailed, 8k",
+                "illustration": "digital illustration, vibrant colors, artistic",
+                "abstract": "abstract art, creative, expressive, vivid",
+                "sketch": "pencil sketch, hand-drawn, fine lines, detailed",
+            }.get(style, "")
+            full_prompt = f"{prompt}, {style_prefix}".strip(", ")
+
+            logger.info(f"Running HuggingFace FLUX image generation. prompt: {full_prompt[:80]}")
+
+            # Cycle through models and keys on failure as per IMPLEMENTATION_PLAN.md
+            raw_models = os.environ.get("HUGGINGFACE_IMAGE_MODEL", "black-forest-labs/FLUX.1-dev")
+            model_sequence = [m.strip() for m in raw_models.split(",") if m.strip()]
+            if not model_sequence:
+                model_sequence = ["black-forest-labs/FLUX.1-dev"]
+
+            # Additional fallback options specified in implementation plan
+            for fallback_model in ["black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-xl-base-1.0"]:
+                if fallback_model not in model_sequence:
+                    model_sequence.append(fallback_model)
+
+            raw_keys = os.environ.get("HUGGINGFACE_API_KEYS", "")
+            keys_pool = [k.strip() for k in raw_keys.split(",") if k.strip()]
+            max_keys = max(1, len(keys_pool))
+
+            hf_response = None
+            last_error = None
+
+            # Loop through the model hierarchy
+            for model_id in model_sequence:
+                logger.info(f"Attempting image generation with model: {model_id}")
+                hf_api_url = f"https://api-inference.huggingface.co/models/{model_id}"
+
+                # Try all available keys for this model
+                for attempt in range(1, max_keys + 1):
+                    hf_key = _get_next_hf_key()
+                    masked_key = f"{hf_key[:6]}...{hf_key[-4:]}" if len(hf_key) > 10 else "short_key"
+                    logger.info(f"Using HuggingFace key {masked_key} (attempt {attempt}/{max_keys}) for model {model_id}...")
+
+                    try:
+                        res = _requests.post(
+                            hf_api_url,
+                            headers={
+                                "Authorization": f"Bearer {hf_key}",
+                                "Content-Type": "application/json",
+                            },
+                            json={"inputs": full_prompt},
+                            timeout=120,
+                        )
+
+                        if res.status_code == 200:
+                            hf_response = res
+                            break
+                        else:
+                            logger.warning(
+                                f"Key {masked_key} failed for model {model_id} with status {res.status_code}: {res.text[:150]}"
+                            )
+                            last_error = f"Model {model_id} with key {masked_key} returned {res.status_code}: {res.text[:150]}"
+                    except Exception as e:
+                        logger.warning(f"Request failed for model {model_id} with key {masked_key}: {e}")
+                        last_error = f"Model {model_id} error: {str(e)}"
+
+                if hf_response:
+                    logger.info(f"Image generation succeeded using model: {model_id}")
+                    break
+
+            if not hf_response:
+                raise RuntimeError(
+                    f"All HuggingFace models and keys exhausted or rate-limited. Last error: {last_error}"
+                )
+
+            image_bytes = hf_response.content
+            if not image_bytes or len(image_bytes) < 1000:
+                raise RuntimeError("HuggingFace returned an empty or invalid image response.")
+
+
+
+            # Upload PNG to Azure Blob Storage
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            blob_name = f"generated/{user_id}/{job_id}_{timestamp}.png"
+            raw_blob_url = _upload_image_to_blob(image_bytes, blob_name)
+
+            # Generate a 24-hour read SAS URL so the frontend can display it directly
+            image_url = get_read_sas_url(raw_blob_url)
+            # Override expiry to 24h for generated images (longer than the default 1h)
+            try:
+                from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+                conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
+                parts = {}
+                for item in conn_str.split(";"):
+                    if "=" in item:
+                        k, v = item.split("=", 1)
+                        parts[k.strip()] = v.strip()
+                acct = parts.get("AccountName", "")
+                acct_key = parts.get("AccountKey", "")
+                if acct and acct_key:
+                    sas = generate_blob_sas(
+                        account_name=acct,
+                        container_name="agent-outputs",
+                        blob_name=blob_name,
+                        account_key=acct_key,
+                        permission=BlobSasPermissions(read=True),
+                        expiry=datetime.now(timezone.utc) + timedelta(hours=24),
+                    )
+                    image_url = f"https://{acct}.blob.core.windows.net/agent-outputs/{blob_name}?{sas}"
+            except Exception as sas_err:
+                logger.warning("Could not generate 24h SAS for image, using default: %s", sas_err)
+
+            result_data = {"image_url": image_url, "prompt": prompt, "style": style}
+
+            # Increment monthly image_gen quota
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+            quota_res = db.table("agent_quotas").select("image_gen_calls_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
+            if quota_res and hasattr(quota_res, "data") and quota_res.data:
+                current = quota_res.data.get("image_gen_calls_used", 0) or 0
+                db.table("agent_quotas").update({"image_gen_calls_used": current + 1}).eq("user_id", user_id).eq("period", period).execute()
+            else:
+                db.table("agent_quotas").upsert({"user_id": user_id, "period": period, "image_gen_calls_used": 1}, on_conflict="user_id,period").execute()
+
+            logger.info("Image generated and uploaded. job_id=%s url=%.80s", job_id, image_url)
+
 
         else:
             raise ValueError(f"Unsupported job type: '{job_type}'")

@@ -281,9 +281,36 @@ async def generate_image_with_key_rotation(prompt: str) -> bytes:
     raise RuntimeError(f"All Hugging Face keys and fallback models exhausted. Last error: {last_error}")
 ```
 
-**Consequence**: No DALL-E or Azure AI Image Gen deployment inside Azure AI Foundry (saving student subscription credits). Requires storing a comma-separated list of Hugging Face keys in Key Vault, but provides high-quality image generation at zero operational cost.
+**Consequence**: No DALL-E or Azure AI Image Gen deployment inside Azure AI Foundry (saving student subscription credits). Requires storing a comma-separated list of Hugging Face keys in Key Vault, but provides high-quality image generation at zero operational cost using the key-cycling and model-cascading fallback mechanism.
 
 ---
+
+### ADR-008: Web Search Grounding — Google Gemini Grounding + Azure OpenAI Synthesis (Two-Phase Hybrid Search)
+
+**Decision**: Replace Azure/Bing-native web search with a two-phase hybrid search pattern using Google Grounding (Gemini 2.5 Flash) and Azure OpenAI (GPT-5.4/Mini).
+
+**Reasoning**:
+- Google Search Grounding provides significantly more accurate, relevant, and fresh results than Bing-native web search for general/enterprise queries.
+- **Phase 1 (Retrieval)**: Gemini 2.5 Flash acts as a lightweight, high-speed grounding tool solely to query Google and retrieve structured grounding metadata (snippets, titles, URLs). It does not draft the final response.
+- **Phase 2 (Synthesis)**: The retrieved snippets are formatted as a live web context block and injected into the system prompt of the configured Azure OpenAI model (GPT-5.4 or GPT-5.4 Mini) for enterprise reasoning, structured synthesis, and citations. This guarantees the user receives a grounded response powered by Azure and Google Search, completely free of default Gemini writing style or constraints.
+
+**Consequence**: Bypasses the need for expensive Azure Cognitive Search resources. Integrates the `search_web` function tool natively so the AI decides autonomously when to query Google.
+
+---
+
+### ADR-009: Agentic Image Generation Orchestration — Autonomous AI Tool Calls
+
+**Decision**: Drop slash commands (`/draw`, `/image`) and manual regex triggers. Enable Ochuko to decide autonomously when to invoke image generation via real-time tool calling.
+
+**Reasoning**:
+- Improves user experience by making the assistant feel agentic and conversational.
+- The AI is registered with a `generate_image` function tool. When a query is conversational or requests visuals, the model emits a function call.
+- The FastAPI chat SSE stream intercepts the call, emits an `image_gen_queued` status block, enqueues the task to Azure Queue Storage, and immediately returns. The frontend displays a premium shimmer loading state and listens to Supabase Realtime for completion.
+
+**Consequence**: Smooth user experience with non-blocking stream iteration.
+
+---
+
 
 ## 2.5. Model Architecture — The Intelligence Layer
 
@@ -2242,7 +2269,7 @@ Frontend           →  Only: SUPABASE_URL + SUPABASE_ANON_KEY (public, safe)
 - [ ] `ocr_worker` Azure Function (QueueTrigger → Document Intelligence)
 - [ ] `vision_worker` Azure Function (QueueTrigger → Computer Vision)
 - [ ] `speech_stt_worker` + `speech_tts_worker` Azure Functions
-- [ ] `image_gen_worker` Azure Function (QueueTrigger → Hugging Face FLUX → Blob)
+- [x] `image_gen_worker` Azure Function (QueueTrigger → Hugging Face FLUX → Blob)
 - [ ] `file_gen_worker` Azure Function (QueueTrigger → python-docx/reportlab/openpyxl → Blob)
 - [ ] `poison_handler` Azure Function: marks failed jobs + notifies frontend
 - [ ] Voice UI: record button → blob → enqueue STT job → transcript into input bar

@@ -29,6 +29,12 @@ class VisionRequest(BaseModel):
     prompt: str = Field("Describe the content in this image.", description="The prompt/inquiry for vision analysis")
 
 
+class ImageGenRequest(BaseModel):
+    conversation_id: str = Field(..., description="The conversation UUID associated with this job")
+    prompt: str = Field(..., description="Text description of the image to generate")
+    style: str = Field("photorealistic", description="Visual style: photorealistic | illustration | abstract | sketch")
+
+
 class JobResponse(BaseModel):
     job_id: str = Field(..., description="The created background job UUID")
     status: str = Field("pending", description="The current status of the job")
@@ -233,3 +239,95 @@ async def queue_vision_job(
     except Exception as e:
         logger.error("Failed to queue Vision job for user %s: %s", user_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail="Unable to queue the image analysis job. Please try again.")
+
+
+@router.post("/image-gen", response_model=JobResponse, status_code=202, summary="Queue an AI image generation task")
+async def queue_image_gen_job(
+    payload: ImageGenRequest,
+    user: Dict[str, Any] = Depends(verify_jwt)
+) -> JobResponse:
+    """
+    Validates monthly image-gen quota, inserts a pending task into the jobs table,
+    enqueues it to Azure Queue Storage for FLUX processing, and returns 202 Accepted.
+
+    This endpoint is the direct/fallback path. The primary path is the AI tool call
+    intercepted in chat.py — Ochuko calls generate_image autonomously during streaming.
+    """
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in JWT.")
+
+    conversation_id = payload.conversation_id.strip()
+    prompt = payload.prompt.strip()
+    style = payload.style.strip() or "photorealistic"
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    supabase = get_supabase_admin()
+
+    try:
+        # 1. Enforce monthly image-gen quota
+        current_period = datetime.now(timezone.utc).strftime("%Y-%m")
+        quota_res = _safe_execute(
+            supabase.table("agent_quotas")
+            .select("image_gen_calls_used")
+            .eq("user_id", user_id)
+            .eq("period", current_period)
+            .maybe_single()
+        )
+        calls_used = 0
+        if quota_res and quota_res.data and isinstance(quota_res.data, dict):
+            calls_used = quota_res.data.get("image_gen_calls_used", 0) or 0
+
+        settings_res = _safe_execute(
+            supabase.table("admin_settings")
+            .select("value")
+            .eq("key", "max_image_gen_calls")
+            .maybe_single()
+        )
+        limit = 50  # conservative default
+        if settings_res and settings_res.data and isinstance(settings_res.data, dict):
+            try:
+                limit = int(settings_res.data.get("value", 50))
+            except (ValueError, TypeError):
+                limit = 50
+
+        if calls_used >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Monthly image generation quota exceeded ({calls_used}/{limit} images generated)."
+            )
+
+        # 2. Ensure conversation row exists before inserting the job (avoids FK violation)
+        _ensure_conversation(supabase, conversation_id, user_id)
+
+        # 3. Insert pending job row
+        job_data = {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "type": "image_gen",
+            "status": "pending",
+            "input_metadata": {"prompt": prompt, "style": style}
+        }
+        job_res = _safe_execute(supabase.table("jobs").insert(job_data))
+        if not job_res or not job_res.data:
+            raise HTTPException(status_code=500, detail="Could not create the background job. Please try again.")
+
+        job_id = job_res.data[0]["id"]
+
+        # 4. Dispatch to Azure Queue Storage
+        enqueue_job(
+            job_id=job_id,
+            job_type="image_gen",
+            input_metadata={"prompt": prompt, "style": style},
+            user_id=user_id
+        )
+
+        return JobResponse(job_id=job_id, status="pending")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to queue image-gen job for user %s: %s", user_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to queue the image generation job. Please try again.")

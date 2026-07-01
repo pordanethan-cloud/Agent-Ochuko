@@ -12,6 +12,7 @@ from app.api.v1.endpoints.admin_appcfg import router as admin_appcfg_router
 from app.api.v1.endpoints.conversations import router as conversations_router
 from app.api.v1.endpoints.files import router as files_router
 from app.api.v1.endpoints.agents import router as agents_router
+from app.api.v1.endpoints.search import router as search_router
 from app.middleware import (
     MaintenanceGuardMiddleware,
     BlockGuardMiddleware,
@@ -98,6 +99,7 @@ app.include_router(admin_appcfg_router, prefix="/v1/admin", tags=["admin"])
 app.include_router(conversations_router, prefix="/v1/conversations", tags=["conversations"])
 app.include_router(files_router, prefix="/v1/files", tags=["files"])
 app.include_router(agents_router, prefix="/v1/agents", tags=["agents"])
+app.include_router(search_router, prefix="/v1/search", tags=["search"])
 
 
 # ── Health & Readiness Probes ─────────────────────────────────────────────

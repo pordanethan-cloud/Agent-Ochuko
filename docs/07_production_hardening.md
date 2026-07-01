@@ -189,7 +189,7 @@
 - [ ] **Azure OpenAI down**: FastAPI returns `503` with `Retry-After: 30` header — frontend shows "AI service temporarily unavailable, please try again shortly"
 - [ ] **Supabase down**: health check marks degraded — in-flight streams can complete, new requests get `503`
 - [ ] **Azure Queue down**: agent endpoints return `503` instead of silently failing — frontend shows clear error
-- [ ] **Hugging Face all keys exhausted**: `image_gen_worker` writes `status = 'failed'` with error "Image generation temporarily unavailable" — frontend shows human-readable message, not stack trace
+- [x] **Hugging Face all keys exhausted**: `image_gen_worker` writes `status = 'failed'` with error "Image generation temporarily unavailable" — frontend shows human-readable message, not stack trace
 - [ ] **Groq Whisper down**: `speech_stt_worker` falls back to Azure Speech STT (if configured) or fails gracefully with error message
 - [ ] **Frontend SSE stream breaks mid-response**: `useStream.ts` implements auto-reconnect — if stream drops, show partial response with "(Response interrupted — click to retry)" button
 - [ ] **Supabase Realtime drops**: `useJob.ts` fallback polling — if no Realtime update received within 15 seconds for a pending job, poll `GET /v1/jobs/{id}` every 10 seconds

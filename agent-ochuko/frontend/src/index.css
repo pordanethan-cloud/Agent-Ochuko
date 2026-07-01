@@ -51,3 +51,8 @@
   animation-duration: 900ms;
 }
 
+/* Image generation pending shimmer */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}

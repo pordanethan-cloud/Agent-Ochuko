@@ -2,6 +2,12 @@
 
 > **Prerequisite**: Phases 0–4 are complete. You have: Azure infra provisioned, FastAPI backend with full middleware stack, React chat UI with streaming, Google OAuth, full RBAC/ABAC/ReBAC security model, all agent workers (OCR, Vision, Speech, Image Gen, File Gen) processing via Azure Queue Storage, and Supabase Realtime pushing results to the frontend.
 
+
+## Completed Out-Of-Scope Enhancements (Completed June 2026)
+- [x] **Google Search Grounding (Two-Phase Hybrid Search)**: Integrated Gemini 2.5 Flash as an ultra-fast retrieval tool for Google searches, feeding grounding context directly to Azure OpenAI Responses API for final synthesis.
+- [x] **Agentic Image Generation Orchestration**: Replaced manual slash commands with autonomous tool calling. Ochuko decides when to invoke FLUX image generation via `generate_image` tool calls.
+- [x] **Robust FLUX Key Cycling & Model Fallback Sequence**: The background worker rotates round-robin across all HuggingFace API keys on rate limit/failure events, and cascades from `FLUX.1-dev` → `FLUX.1-schnell` → `stable-diffusion-xl` on total exhaustion.
+
 ---
 
 ## Phase 5 — Admin Dashboard
@@ -300,7 +306,7 @@ Picking up from Phase 6.1:
 - [ ] **Azure OpenAI down**: FastAPI returns `503 Service Temporarily Unavailable` with `Retry-After: 30` header — frontend shows "AI service is temporarily unavailable, please try again shortly"
 - [ ] **Supabase down**: health check marks degraded — existing streams can complete (in-flight), new requests get 503
 - [ ] **Azure Queue down**: agent endpoints return 503 instead of silently failing — frontend shows clear error
-- [ ] **Hugging Face all keys exhausted**: `image_gen_worker` writes `status = 'failed'` with error "Image generation temporarily unavailable" — frontend shows human-readable message, not stack trace
+- [x] **Hugging Face all keys exhausted**: `image_gen_worker` writes `status = 'failed'` with error "Image generation temporarily unavailable" — frontend shows human-readable message, not stack trace
 - [ ] **Groq Whisper down**: `speech_stt_worker` falls back to Azure Speech STT (if configured) or fails gracefully
 - [ ] **Frontend SSE stream breaks mid-response**: `useStream.ts` implements auto-reconnect — if stream drops, show partial response with "(Response interrupted — click to retry)" button
 - [ ] **Supabase Realtime drops**: `useJob.ts` implements fallback polling — if no Realtime update received within 15 seconds for a pending job, poll `GET /v1/jobs/{id}` every 10 seconds
@@ -539,7 +545,7 @@ Picking up from Phase 6.1:
 - [ ] Voice output: click play on assistant message → audio plays
 - [ ] OCR: upload 5-page PDF → all pages extracted, rendered in chat with table formatting
 - [ ] Vision: upload image → description appears in chat
-- [ ] Image gen: request image → generated image appears in chat (may take 10–30s)
+- [x] Image gen: request image → generated image appears in chat (may take 10–30s)
 - [ ] File gen: request DOCX → download button appears → file downloads correctly
 - [ ] Block: admin blocks user → user's next request returns 403 with clear message
 - [ ] Suspend: admin suspends user → user's next request returns 403 → admin activates → user resumes

@@ -1,6 +1,6 @@
-# app/api/v1/endpoints/chat.py
 import os
 import json
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,6 +12,9 @@ from app.core.config import get_config
 from app.core import model_router
 from openai import AsyncAzureOpenAI
 from app.services.supabase_admin import get_supabase_admin
+from app.services.queue_dispatcher import enqueue_job
+from google import genai
+from google.genai import types as genai_types
 
 logger = logging.getLogger("app.api.v1.endpoints.chat")
 router = APIRouter()
@@ -49,6 +52,135 @@ def get_openai_client() -> AsyncAzureOpenAI:
             api_version=api_version
         )
     return _openai_client
+
+
+async def _perform_google_search(query: str, synthesis_deployment: str = "") -> Dict[str, Any]:
+    """
+    Two-phase multi-cloud hybrid search (reference architecture):
+
+    Phase 1 — Google Retrieval (Gemini 2.5 Flash, google-genai SDK)
+        Triggers the Google Search grounding tool to pull live web snippets
+        and source metadata. Gemini is used ONLY for retrieval — it is the
+        lightest, fastest path to real-time Google results.
+
+    Phase 2 — Azure Synthesis (Azure OpenAI Responses API, async)
+        The raw Google context is packaged into a system prompt and forwarded
+        to the Azure OpenAI deployment for accurate, structured synthesis.
+        Azure reasons over the live data; Gemini retrieves it.
+
+    Returns { "answer": str, "sources": [{"title": str, "url": str}] }
+    """
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    if not google_api_key:
+        raise RuntimeError("GOOGLE_API_KEY is not configured.")
+
+    # ── Phase 1: Google Grounding via Gemini 2.5 Flash ────────────────────
+    # Run the synchronous google-genai call off the event loop thread
+    def _google_retrieval_phase() -> tuple:
+        g_client = genai.Client(api_key=google_api_key)
+        g_response = g_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=query,
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                temperature=0.1,  # near-zero: we want faithful retrieval, not creativity
+            ),
+        )
+
+        search_chunks: List[str] = []
+        sources: List[Dict[str, str]] = []
+        seen_urls: set = set()
+
+        if g_response.candidates and g_response.candidates[0].grounding_metadata:
+            metadata = g_response.candidates[0].grounding_metadata
+
+            # Build deduplicated source list from grounding_chunks
+            for chunk in (getattr(metadata, "grounding_chunks", []) or []):
+                web = getattr(chunk, "web", None)
+                if web:
+                    url = getattr(web, "uri", "") or ""
+                    title = getattr(web, "title", "") or url
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        sources.append({"title": title, "url": url})
+
+            # Extract actual text segments from grounding_supports (preferred)
+            for support in (getattr(metadata, "grounding_supports", []) or []):
+                segment = getattr(support, "segment", None)
+                text = (getattr(segment, "text", "") or "").strip()
+                if text:
+                    search_chunks.append(text)
+
+        # Fallback: if grounding_supports is empty, format source titles as context
+        if not search_chunks and sources:
+            for s in sources[:6]:
+                search_chunks.append(f"Source: {s['title']}\nURL: {s['url']}")
+
+        google_context = "\n\n".join(search_chunks[:14]) if search_chunks else "No live web results found."
+        return google_context, sources[:8]
+
+    google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
+
+    # ── Phase 2: Azure OpenAI Responses API Synthesis (async) ─────────────
+    # The Google context is injected into the system prompt so Azure OpenAI
+    # synthesises a grounded, cited answer — never raw Gemini output.
+    deploy = (
+        synthesis_deployment
+        or os.getenv("SOLVE_MODEL_DEPLOYMENT")
+        or os.getenv("AZURE_OPENAI_SOLVE_DEPLOYMENT")
+        or "gpt-4o-mini"
+    )
+
+    system_prompt = (
+        "You are an elite enterprise AI assistant. "
+        "Answer the user's question accurately using the real-time web context below, "
+        "retrieved directly from Google Search. Cite sources when referencing specific facts.\n\n"
+        "--- GOOGLE LIVE WEB CONTEXT ---\n"
+        f"{google_context}\n"
+        "--- END CONTEXT ---"
+    )
+
+    az_client = get_openai_client()
+    az_response = await az_client.responses.create(
+        model=deploy,
+        input=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ],
+    )
+
+    answer: str = az_response.output_text or ""
+    return {"answer": answer, "sources": sources}
+
+
+async def _enqueue_image_gen(user_id: str, conversation_id: str, prompt: str, style: str = "") -> str:
+    """
+    Creates a pending image_gen job row in Supabase and dispatches it to the
+    Azure Queue Storage. Returns the new job_id.
+    """
+    supabase = get_supabase_admin()
+    job_data = {
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "type": "image_gen",
+        "status": "pending",
+        "input_metadata": {"prompt": prompt, "style": style or "photorealistic"},
+    }
+    job_res = supabase.table("jobs").insert(job_data).execute()
+    if not job_res.data:
+        raise RuntimeError("Failed to create image_gen job row in database.")
+    job_id: str = job_res.data[0]["id"]
+
+    # enqueue_job is synchronous — run it off the event loop thread
+    await asyncio.to_thread(
+        enqueue_job,
+        job_id=job_id,
+        job_type="image_gen",
+        input_metadata={"prompt": prompt, "style": style or "photorealistic"},
+        user_id=user_id,
+    )
+    logger.info("Enqueued image_gen job %s for user %s — prompt: %.60s", job_id, user_id, prompt)
+    return job_id
 
 
 async def mock_stream_generator():
@@ -111,7 +243,8 @@ async def chat_stream_generator(
 
     Emits SSE events:
       - routing_info:        model deployment and routing mode metadata
-      - web_search_status:   "searching" when web search starts, "done" when complete
+      - search_activity:     step-by-step status while Google search runs
+      - image_gen_queued:    when AI decides to generate an image
       - content_block_delta: incremental text chunk
       - response_id:         the response ID to persist and pass on next turn
       - [DONE]:              stream termination signal
@@ -145,8 +278,54 @@ async def chat_stream_generator(
 
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
-            # Web search is always available — model decides via tool_choice:auto
-            "tools": [{"type": "web_search_preview"}],
+            # Tools the model may call autonomously during the conversation
+            "tools": [
+                # Google-powered web search — AI calls this instead of Azure/Bing
+                {
+                    "type": "function",
+                    "name": "search_web",
+                    "description": (
+                        "Search the web using Google for current, real-time information. "
+                        "Call this whenever the user asks about recent events, news, prices, "
+                        "people, weather, or anything that requires up-to-date knowledge."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The precise search query to submit to Google",
+                            }
+                        },
+                        "required": ["query"],
+                    },
+                },
+                # Image generation — AI calls this when the user wants a visual
+                {
+                    "type": "function",
+                    "name": "generate_image",
+                    "description": (
+                        "Generate a high-quality image from a text description. "
+                        "Call this whenever the user asks to create, draw, paint, visualise, "
+                        "render, or generate any image, illustration, photo, or picture."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "Detailed, descriptive image generation prompt",
+                            },
+                            "style": {
+                                "type": "string",
+                                "enum": ["photorealistic", "illustration", "abstract", "sketch"],
+                                "description": "Visual style for the image",
+                            },
+                        },
+                        "required": ["prompt"],
+                    },
+                },
+            ],
             "tool_choice": "auto",
         }
 
@@ -180,20 +359,127 @@ async def chat_stream_generator(
                                 + "\n\n"
                             )
 
-                        # Web search lifecycle events → forward status to frontend
+                        # Function tool calls — AI autonomously called one of our tools
+                        elif event.type == "response.output_item.done":
+                            item = getattr(event, "item", None)
+                            if item is None or getattr(item, "type", None) != "function_call":
+                                pass  # not a function call, skip
+
+                            elif getattr(item, "name", None) == "search_web":
+                                # —— Google Web Search ——————————————————————
+                                try:
+                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
+                                    query = args.get("query", "")
+                                    if query:
+                                        # Tell the frontend: search is starting
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "search_activity",
+                                                "status": "searching",
+                                                "label": f"Searching Google for: {query[:60]}",
+                                            })
+                                            + "\n\n"
+                                        )
+                                        search_result = await _perform_google_search(query, synthesis_deployment=deployment)
+                                        sources = search_result.get("sources", [])
+                                        snippet = search_result.get("answer", "")[:1200]
+
+                                        # Tell the frontend: search done + sources ready
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "search_activity",
+                                                "status": "done",
+                                                "label": f"Found {len(sources)} source(s)",
+                                                "sources": sources,
+                                            })
+                                            + "\n\n"
+                                        )
+
+                                        # Inject the search result as a text block so the model
+                                        # can reference it in its streamed reply
+                                        grounding_text = (
+                                            f"[Google Search Result for: {query}]\n"
+                                            f"{snippet}\n"
+                                            f"Sources: {', '.join(s['url'] for s in sources[:5])}"
+                                        )
+                                        assistant_content += grounding_text
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "content_block_delta",
+                                                "delta": {"text": ""},  # empty — content injected server-side
+                                            })
+                                            + "\n\n"
+                                        )
+                                except Exception as search_err:
+                                    logger.error("Google search tool call failed: %s", search_err)
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "search_activity",
+                                            "status": "error",
+                                            "label": "Web search failed, using training knowledge.",
+                                        })
+                                        + "\n\n"
+                                    )
+
+                            elif getattr(item, "name", None) == "generate_image":
+                                # —— Image Generation ——————————————————————
+                                try:
+                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
+                                    img_prompt = args.get("prompt", "")
+                                    img_style = args.get("style", "photorealistic")
+                                    if img_prompt:
+                                        # Tell the frontend: image job is queued
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "search_activity",
+                                                "status": "searching",
+                                                "label": "Generating image with FLUX...",
+                                            })
+                                            + "\n\n"
+                                        )
+                                        job_id = await _enqueue_image_gen(
+                                            user_id, conversation_id, img_prompt, img_style
+                                        )
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "image_gen_queued",
+                                                "job_id": job_id,
+                                                "prompt": img_prompt,
+                                            })
+                                            + "\n\n"
+                                        )
+                                except Exception as img_err:
+                                    logger.error("Failed to enqueue image_gen job: %s", img_err)
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "search_activity",
+                                            "status": "error",
+                                            "label": "Image generation could not be started.",
+                                        })
+                                        + "\n\n"
+                                    )
+
+                        # Legacy web_search_preview events — forward if they somehow still appear
                         elif event.type in (
                             "response.web_search_call.in_progress",
                             "response.web_search_call.searching",
                         ):
                             yield (
                                 "data: "
-                                + json.dumps({"type": "web_search_status", "status": "searching"})
+                                + json.dumps({"type": "search_activity", "status": "searching", "label": "Searching the web..."})
                                 + "\n\n"
                             )
                         elif event.type == "response.web_search_call.completed":
                             yield (
                                 "data: "
-                                + json.dumps({"type": "web_search_status", "status": "done"})
+                                + json.dumps({"type": "search_activity", "status": "done", "label": "Search complete."})
                                 + "\n\n"
                             )
                 except Exception as iter_err:
