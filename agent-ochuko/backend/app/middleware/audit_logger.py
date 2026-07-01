@@ -14,6 +14,7 @@ Logged fields:
 import time
 import logging
 import os
+from datetime import datetime, timezone
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from supabase import create_client
@@ -34,11 +35,18 @@ def _get_supabase():
 
 
 def _write_audit_log(entry: dict):
-    """Background task: writes audit log entry to Supabase."""
+    """Background task: writes audit log entry to Supabase and updates last_seen."""
     try:
         db = _get_supabase()
         if db:
             db.table("audit_log").insert(entry).execute()
+            
+            # Also update last_seen for the active user if user_id is present
+            user_id = entry.get("user_id")
+            if user_id:
+                db.table("profiles").update({
+                    "last_seen": datetime.now(timezone.utc).isoformat()
+                }).eq("id", user_id).execute()
     except Exception as e:
         # Never fail the request because of audit logging
         logger.error(f"Failed to write audit log: {e}")

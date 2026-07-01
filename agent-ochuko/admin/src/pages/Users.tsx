@@ -21,6 +21,7 @@ interface UserRow {
   google_sub: string;
   token_budgets: TokenBudget | null;
   agent_calls_this_month: number;
+  total_tokens_used?: number;
 }
 
 interface UsersResponse {
@@ -128,6 +129,9 @@ export function Users() {
   const fmt = (date: string | null) =>
     date ? new Date(date).toLocaleDateString() : "—";
 
+  const fmtDateTime = (date: string | null) =>
+    date ? new Date(date).toLocaleString() : "—";
+
   return (
     <div className="p-6">
       {/* Header row */}
@@ -232,14 +236,19 @@ export function Users() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-slate-300">
-                      {u.token_budgets
-                        ? `${u.token_budgets.tokens_used.toLocaleString()} / ${u.token_budgets.budget_limit.toLocaleString()}`
-                        : "—"}
+                      <div className="font-medium text-slate-200">
+                        {(u.total_tokens_used ?? 0).toLocaleString()}
+                      </div>
+                      <div className="text-slate-500 text-xs">
+                        {u.token_budgets
+                          ? `Today: ${u.token_budgets.tokens_used.toLocaleString()} / ${u.token_budgets.budget_limit.toLocaleString()}`
+                          : "Today: —"}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-slate-300">
                       {(u.agent_calls_this_month ?? 0).toLocaleString()}
                     </td>
-                    <td className="px-4 py-3 text-slate-400">{fmt(u.last_seen)}</td>
+                    <td className="px-4 py-3 text-slate-400">{fmtDateTime(u.last_seen)}</td>
                     <td className="px-4 py-3 text-slate-400">{fmt(u.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">

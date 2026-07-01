@@ -238,7 +238,7 @@ async def update_budget(
 
 @router.get("/usage", summary="Token usage stats (last N days)")
 async def get_usage(
-    days: int = Query(30, ge=1, le=90),
+    days: int = Query(30, ge=1, le=3650),
     admin: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     data = admin_service.get_usage_stats(days=days)

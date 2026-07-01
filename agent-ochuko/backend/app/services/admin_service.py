@@ -89,6 +89,9 @@ def list_users(page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
         
         # Extract the token budget row for the current day (YYYY-MM-DD)
         budgets = u.get("token_budgets") or []
+        total_tokens_used = sum(b.get("tokens_used") or 0 for b in budgets)
+        u["total_tokens_used"] = total_tokens_used
+
         current_budget = next((b for b in budgets if b.get("period") == current_date_str), None)
         if current_budget:
             u["token_budgets"] = {

@@ -50,13 +50,15 @@ export function Usage() {
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [timeframe, setTimeframe] = useState<number>(30);
 
   useEffect(() => {
-    adminGet<UsageResponse>("/v1/admin/usage?days=30")
+    setLoading(true);
+    adminGet<UsageResponse>(`/v1/admin/usage?days=${timeframe}`)
       .then(setData)
       .catch(e => setError((e as Error).message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [timeframe]);
 
   if (loading) return <Loading />;
   if (error)   return <ErrorMsg msg={error} />;
@@ -67,14 +69,36 @@ export function Usage() {
 
   return (
     <div className="p-6 space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-white mb-1">Usage</h1>
-        <p className="text-slate-400 text-sm">
-          Token consumption over the last 30 days.{" "}
-          <span className="text-slate-600 text-xs italic">
-            (Updates hourly once background aggregation is active — Phase 6.)
-          </span>
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white mb-1">Usage</h1>
+          <p className="text-slate-400 text-sm">
+            Token consumption over the selected period.{" "}
+            <span className="text-slate-600 text-xs italic">
+              (Updates hourly once background aggregation is active — Phase 6.)
+            </span>
+          </p>
+        </div>
+
+        <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 self-start sm:self-auto">
+          {[
+            { label: "Last Week", value: 7 },
+            { label: "Last Month", value: 30 },
+            { label: "Lifetime", value: 3650 },
+          ].map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setTimeframe(opt.value)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                timeframe === opt.value
+                  ? "bg-indigo-600 text-white"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Daily token chart */}

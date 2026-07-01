@@ -614,9 +614,32 @@ export const Dashboard: React.FC = () => {
     blobUrl: string
     fileId: string
   } | null>(null)
+  const [pastedText, setPastedText] = useState<{
+    content: string
+    name: string
+    sizeBytes: number
+  } | null>(null)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData('text')
+    if (text.length > 400 || text.includes('\n')) {
+      e.preventDefault()
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+      let title = 'Pasted Text'
+      if (lines.length > 0) {
+        const firstLine = lines[0]
+        title = firstLine.length > 25 ? `${firstLine.substring(0, 25)}...` : firstLine
+      }
+      setPastedText({
+        content: text,
+        name: title,
+        sizeBytes: new Blob([text]).size,
+      })
+    }
+  }
 
   const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
   const [conversations, setConversations] = useState<any[]>([])
@@ -1486,10 +1509,18 @@ export const Dashboard: React.FC = () => {
       return
     }
 
-    if (!input.trim()) return
+    if (!input.trim() && !pastedText) return
 
-    const userMessage = input.trim()
+    let userMessage = input.trim()
     setInput('')
+
+    if (pastedText) {
+      userMessage = userMessage
+        ? `${userMessage}\n\n[Pasted Content: ${pastedText.name}]\n\`\`\`\n${pastedText.content}\n\`\`\``
+        : `[Pasted Content: ${pastedText.name}]\n\`\`\`\n${pastedText.content}\n\`\`\``
+      setPastedText(null)
+    }
+
     setTimeout(() => inputRef.current?.focus(), 0)
 
     // Route to hybrid search if the message matches a web-search intent pattern
@@ -1939,6 +1970,28 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
+          {/* Pasted Text Preview */}
+          {pastedText && (
+            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025] rounded-lg">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#c5a880]" />
+                <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[220px]">
+                  {pastedText.name}
+                </span>
+                <span className="text-[9px] text-[#c5a880] tracking-wider uppercase bg-[#c5a880]/10 px-1.5 py-0.5 rounded border border-[#c5a880]/20 font-bold font-mono">
+                  {(pastedText.sizeBytes / 1024).toFixed(1)} KB
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPastedText(null)}
+                className="p-1 text-[#8e95a2] hover:text-red-400 transition"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Uploading progress indicator */}
           {uploading && (
             <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025]/50 rounded-lg animate-pulse">
@@ -1993,6 +2046,7 @@ export const Dashboard: React.FC = () => {
                 ref={inputRef}
                 type="text"
                 value={input}
+                onPaste={handlePaste}
                 onChange={(e) => {
                   setInput(e.target.value)
                   // User manually edited — detach from live transcript
@@ -2002,7 +2056,8 @@ export const Dashboard: React.FC = () => {
                 placeholder={
                   voice.isRecording ? 'Listening...' :
                   isStreaming ? 'Agent is thinking...' :
-                  attachedFile ? 'Add prompt details for the agent...' : 'Submit an inquiry...'
+                  attachedFile ? 'Add prompt details for the agent...' :
+                  pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
                 }
                 className={`w-full h-12 bg-[#0d0f11]/80 border rounded-xl pr-14 text-[13.5px] text-brand-text focus:outline-none focus:ring-1 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed input-masked-fade ${
                   voice.isSupported ? 'pl-10' : 'pl-4 no-mic'
@@ -2038,7 +2093,7 @@ export const Dashboard: React.FC = () => {
             ) : (
               <button
                 type="submit"
-                disabled={uploading || (!input.trim() && !attachedFile)}
+                disabled={uploading || (!input.trim() && !attachedFile && !pastedText)}
                 aria-label="Send"
                 className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
               >
