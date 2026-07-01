@@ -489,8 +489,12 @@ def _upload_image_to_blob(image_bytes: bytes, blob_name: str) -> str:
     except Exception:
         pass  # Already exists
 
+    from azure.storage.blob import ContentSettings
     blob_client = container_client.get_blob_client(blob_name)
-    blob_client.upload_blob(image_bytes, overwrite=True, content_settings=None)
+    blob_client.upload_blob(
+        image_bytes, overwrite=True,
+        content_settings=ContentSettings(content_type="image/png")
+    )
 
     account_name = blob_service.account_name
     return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"

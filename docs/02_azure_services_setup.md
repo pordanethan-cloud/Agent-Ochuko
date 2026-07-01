@@ -16,7 +16,7 @@
 | Azure Blob Storage | `agentochukostore` | Store uploaded files + AI-generated files |
 | Azure App Configuration | `agent-ochuko-appconfig` | Store model names + feature flags (no redeploy needed) |
 | Azure Key Vault | `agent-ochuko-kv` | Store all secrets securely |
-| Azure Container Apps | `agent-ochuko-api` | Host your FastAPI backend |
+| Azure Container Apps | `agent-ochuko-aca` | Host your FastAPI backend |
 | Azure Functions | `agent-ochuko-functions` | Background jobs (cron, quota reset, etc.) |
 
 > [!NOTE]

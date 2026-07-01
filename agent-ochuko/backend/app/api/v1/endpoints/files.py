@@ -17,7 +17,7 @@ from app.services.azure_blob import generate_upload_sas_url
 logger = logging.getLogger("app.api.v1.endpoints.files")
 router = APIRouter()
 
-ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg",".docx", ".jpeg", ".webp", ".gif"}
 
 
 class UploadRequest(BaseModel):
