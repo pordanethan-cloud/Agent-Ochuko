@@ -126,6 +126,77 @@ def get_appconfig_value(key: str, default: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Image Prompt Expander (Responses API)
+# ---------------------------------------------------------------------------
+
+IMAGE_PROMPT_EXPANDER_SYSTEM_PROMPT = """
+Role: Expert AI Image Prompt Director for the FLUX.1-dev diffusion model.
+Task: Transform a short, informal user request into a technically precise, visually rich image generation prompt.
+
+INSTRUCTIONS (follow literally, in order):
+1. Read the user's request. Identify the core subject, even if only implied.
+2. Expand across exactly four layers: subject, environment, lighting_and_composition, artistic_style.
+3. For each layer, use concrete technical vocabulary — camera lens (e.g. 85mm, 35mm anamorphic), 
+   film stock or render engine, specific lighting behavior (e.g. rim lighting, volumetric haze, 
+   golden hour side-light), material and texture descriptors (e.g. brushed steel, matte cotton, 
+   subsurface scattering on skin).
+4. Do not use these words under any circumstance: photorealistic, hyperdetailed, 8k, stunning, 
+   beautiful, epic, masterpiece. If you want to convey realism, describe the specific optical or 
+   material property that creates it instead.
+5. Keep total length of final_expanded_prompt under 120 words. FLUX prompt adherence degrades past this.
+6. If the user's request implies content that is sexual, violent, or depicts a real identifiable 
+   person, do not expand it — return an empty final_expanded_prompt and set a "rejected": true field 
+   with a one-line reason instead.
+
+OUTPUT FORMAT: Return ONLY a raw JSON object. No markdown fences, no preamble, no commentary.
+Schema: {"subject": string, "environment": string, "lighting_and_composition": string, 
+"artistic_style": string, "final_expanded_prompt": string, "rejected": boolean, "reason": string}
+""".strip()
+
+def _expand_prompt(prompt: str) -> dict:
+    """
+    Expands a basic prompt into a structured FLUX prompt using Azure OpenAI Responses API.
+    Retries once on JSON parse failure.
+    """
+    deployment = get_appconfig_value("PROMPT_EXPANDER_MODEL_DEPLOYMENT", "gpt-5.4-mini")
+    openai_client = get_openai()
+    
+    for attempt in range(2):
+        try:
+            logger.info(f"Running prompt expansion via deployment {deployment} (attempt {attempt+1}/2)...")
+            response = openai_client.responses.create(
+                model=deployment,
+                input=[
+                    {"role": "system", "content": IMAGE_PROMPT_EXPANDER_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            raw_text = (response.output_text or "").strip()
+            if raw_text.startswith("```"):
+                lines = raw_text.splitlines()
+                if len(lines) > 2:
+                    raw_text = "\n".join(lines[1:-1]).strip()
+            
+            data = json.loads(raw_text)
+            if "final_expanded_prompt" in data and "rejected" in data:
+                return data
+            
+            raise ValueError("Parsed JSON missing required keys: 'final_expanded_prompt' or 'rejected'.")
+        except Exception as e:
+            logger.warning(f"Prompt expansion attempt {attempt+1} failed: {e}")
+            if attempt == 1:
+                return {
+                    "subject": prompt,
+                    "environment": "",
+                    "lighting_and_composition": "",
+                    "artistic_style": "",
+                    "final_expanded_prompt": prompt,
+                    "rejected": False,
+                    "reason": str(e)
+                }
+
+
+# ---------------------------------------------------------------------------
 # CRON 1: Daily Token Budget Reset (0 0 * * * UTC)
 # ---------------------------------------------------------------------------
 
@@ -649,6 +720,16 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
                 model=model_deployment,
                 messages=[
                     {
+                        "role": "system",
+                        "content": (
+                            "You are Ochuko, an elite enterprise AI assistant. "
+                            "Analyze the image and user instructions with confidence and clinical precision. "
+                            "Make reasonable assumptions on ambiguous details rather than asking clarifying questions. "
+                            "Do not moralize, lecture, or add unnecessary warnings/disclaimers. "
+                            "Be direct, crisp, and professional."
+                        )
+                    },
+                    {
                         "role": "user",
                         "content": [
                             {
@@ -700,15 +781,13 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             if not prompt:
                 raise ValueError("Missing prompt in input_metadata for image_gen job.")
 
-            # Build a style-enhanced prompt
-            style_prefix = {
-                "photorealistic": "photorealistic, high quality, detailed, 8k",
-                "illustration": "digital illustration, vibrant colors, artistic",
-                "abstract": "abstract art, creative, expressive, vivid",
-                "sketch": "pencil sketch, hand-drawn, fine lines, detailed",
-            }.get(style, "")
-            full_prompt = f"{prompt}, {style_prefix}".strip(", ")
+            # Expand the prompt using Azure OpenAI responses API
+            expanded = _expand_prompt(prompt)
+            if expanded.get("rejected"):
+                reason = expanded.get("reason", "Prompt rejected by expander guidelines.")
+                raise ValueError(f"Prompt expansion rejected: {reason}")
 
+            full_prompt = expanded.get("final_expanded_prompt", prompt)
             logger.info(f"Running HuggingFace FLUX image generation. prompt: {full_prompt[:80]}")
 
             # Cycle through models and keys on failure as per IMPLEMENTATION_PLAN.md
@@ -776,7 +855,18 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             if not image_bytes or len(image_bytes) < 1000:
                 raise RuntimeError("HuggingFace returned an empty or invalid image response.")
 
-
+            # Save a local copy to the user's Pictures folder if running locally
+            try:
+                pictures_dir = os.path.expanduser("~/Pictures")
+                if os.path.exists(pictures_dir):
+                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    local_filename = f"ochuko_{job_id}_{timestamp}.png"
+                    local_path = os.path.join(pictures_dir, local_filename)
+                    with open(local_path, "wb") as f:
+                        f.write(image_bytes)
+                    logger.info(f"Saved a local copy of the generated image to: {local_path}")
+            except Exception as save_local_err:
+                logger.warning(f"Could not save copy to local Pictures folder: {save_local_err}")
 
             # Upload PNG to Azure Blob Storage
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -809,7 +899,16 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             except Exception as sas_err:
                 logger.warning("Could not generate 24h SAS for image, using default: %s", sas_err)
 
-            result_data = {"image_url": image_url, "prompt": prompt, "style": style}
+            result_data = {
+                "image_url": image_url,
+                "prompt": prompt,
+                "style": style,
+                "expanded_prompt": full_prompt,
+                "subject": expanded.get("subject", ""),
+                "environment": expanded.get("environment", ""),
+                "lighting_and_composition": expanded.get("lighting_and_composition", ""),
+                "artistic_style": expanded.get("artistic_style", "")
+            }
 
             # Increment monthly image_gen quota
             period = datetime.now(timezone.utc).strftime("%Y-%m")

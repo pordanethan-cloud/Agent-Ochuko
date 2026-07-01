@@ -108,8 +108,8 @@ async def ask_hybrid_engine(
       the configured Azure OpenAI deployment for structured, cited synthesis.
     """
 
-    # ── Phase 1: Google Grounding ────────────────────────────────────────────
-    def _google_retrieval_phase():
+    # ── Phase 1: Google Grounding (async) ────────────────────────────────────
+    async def _google_retrieval_phase():
         from google import genai                          # type: ignore[import]
         from google.genai import types as genai_types    # type: ignore[import]
 
@@ -126,7 +126,7 @@ async def ask_hybrid_engine(
         for idx, key in enumerate(keys):
             try:
                 g_client = genai.Client(api_key=key)
-                g_response = g_client.models.generate_content(
+                g_response = await g_client.aio.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=query.prompt,
                     config=genai_types.GenerateContentConfig(
@@ -182,7 +182,7 @@ async def ask_hybrid_engine(
         raise last_exc or RuntimeError("All Gemini API keys failed.")
 
     try:
-        google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
+        google_context, sources = await _google_retrieval_phase()
     except Exception as exc:
         import traceback
         print("--- SEARCH ENDPOINT GOOGLE RETRIEVAL PHASE ERROR (FALLBACK TO AZURE KNOWLEDGE) ---")

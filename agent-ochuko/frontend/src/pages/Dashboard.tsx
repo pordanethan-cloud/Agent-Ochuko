@@ -1915,7 +1915,13 @@ export const Dashboard: React.FC = () => {
                           >
                             {/* Favicon */}
                             <img
-                              src={`https://www.google.com/s2/favicons?sz=16&domain=${new URL(src.url).hostname}`}
+                              src={`https://www.google.com/s2/favicons?sz=16&domain=${(() => {
+                                try {
+                                  return new URL(src.url).hostname
+                                } catch (_) {
+                                  return ''
+                                }
+                              })()}`}
                               alt=""
                               className="w-3 h-3 rounded-sm shrink-0 opacity-70 group-hover/badge:opacity-100"
                               onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}

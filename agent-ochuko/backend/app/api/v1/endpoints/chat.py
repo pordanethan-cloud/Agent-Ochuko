@@ -30,10 +30,9 @@ _OCHUKO_RULE = (
     "When recommending: give the single best answer first, then justify briefly. No option-dumping.\n\n"
     "Formatting: technical/code work gets headers + tight bullets. Strategic/casual talk gets prose, no bullets. "
     "Bullets, when used, are one line each — never multi-sentence.\n\n"
-    "Judgment: give the user reasonable benefit of the doubt on ambiguous requests; default to the legal, constructive read. "
-    "Correct factual errors directly, don't just agree. Never moralize or lecture.\n\n"
+    "Judgment: Make reasonable assumptions on ambiguous requests rather than asking clarifying questions. Give the user the benefit of the doubt; default to the legal, constructive read. Correct factual errors directly, don't just agree. Never moralize or lecture.\n\n"
     "If a request is clearly illegal or harmful: decline in one sentence, offer the nearest legitimate alternative, move on. No hedging.\n\n"
-    "Ask at most one question per turn. Keep momentum.\n\n"
+    "Do not ask clarifying questions unless it is completely impossible to proceed without doing so. Proceed directly to answering. Keep momentum.\n\n"
 )
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
@@ -81,9 +80,8 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
     if not google_api_key:
         raise RuntimeError("GOOGLE_API_KEY is not configured.")
 
-    # ── Phase 1: Google Grounding via Gemini 2.5 Flash ────────────────────
-    # Run the synchronous google-genai call off the event loop thread
-    def _google_retrieval_phase() -> tuple:
+    # ── Phase 1: Google Grounding via Gemini 2.5 Flash (async) ────────────
+    async def _google_retrieval_phase() -> tuple:
         keys = []
         for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
             key = os.getenv(var_name)
@@ -97,7 +95,7 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
         for idx, key in enumerate(keys):
             try:
                 g_client = genai.Client(api_key=key)
-                g_response = g_client.models.generate_content(
+                g_response = await g_client.aio.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=query,
                     config=genai_types.GenerateContentConfig(
@@ -145,7 +143,7 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
         raise last_exc or RuntimeError("All Gemini API keys failed.")
 
     try:
-        google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
+        google_context, sources = await _google_retrieval_phase()
     except Exception as e:
         import traceback
         print("--- CHAT GOOGLE RETRIEVAL PHASE ERROR (FALLBACK TO AZURE KNOWLEDGE) ---")
@@ -387,177 +385,202 @@ async def chat_stream_generator(
         stream_failed = False
         error_message = ""
 
-        try:
-            async with client.responses.stream(**stream_kwargs) as stream:
-                try:
-                    async for event in stream:
-                        # Text delta events
-                        if event.type == "response.output_text.delta":
-                            assistant_content += event.delta
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "content_block_delta", "delta": {"text": event.delta}})
-                                + "\n\n"
-                            )
+        current_input = stream_kwargs["input"]
+        current_previous_response_id = previous_response_id
 
-                        # Function tool calls — AI autonomously called one of our tools
-                        elif event.type == "response.output_item.done":
-                            item = getattr(event, "item", None)
-                            if item is None or getattr(item, "type", None) != "function_call":
-                                pass  # not a function call, skip
+        loop_active = True
+        while loop_active and not stream_failed:
+            loop_active = False  # Reset for this iteration
+            tool_calls_to_execute = []
 
-                            elif getattr(item, "name", None) == "search_web":
-                                # —— Google Web Search ——————————————————————
-                                try:
-                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
-                                    query = args.get("query", "")
-                                    if query:
-                                        # Tell the frontend: search is starting
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "searching",
-                                                "label": f"Searching Google for: {query[:60]}",
-                                            })
-                                            + "\n\n"
-                                        )
-                                        search_result = await _perform_google_search(query, synthesis_deployment=deployment)
-                                        sources = search_result.get("sources", [])
-                                        snippet = search_result.get("answer", "")[:1200]
+            iter_kwargs = stream_kwargs.copy()
+            if current_previous_response_id:
+                iter_kwargs["previous_response_id"] = current_previous_response_id
+                iter_kwargs["input"] = current_input
+            else:
+                iter_kwargs["input"] = current_input
+                iter_kwargs.pop("previous_response_id", None)
 
-                                        # Tell the frontend: search done + sources ready
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "done",
-                                                "label": f"Found {len(sources)} source(s)",
-                                                "sources": sources,
-                                            })
-                                            + "\n\n"
-                                        )
-
-                                        # Inject the search result as a text block so the model
-                                        # can reference it in its streamed reply
-                                        grounding_text = (
-                                            f"[Google Search Result for: {query}]\n"
-                                            f"{snippet}\n"
-                                            f"Sources: {', '.join(s['url'] for s in sources[:5])}"
-                                        )
-                                        assistant_content += grounding_text
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "content_block_delta",
-                                                "delta": {"text": ""},  # empty — content injected server-side
-                                            })
-                                            + "\n\n"
-                                        )
-                                except Exception as search_err:
-                                    import traceback
-                                    print("--- GOOGLE SEARCH TOOL EXCEPTION ---")
-                                    traceback.print_exc()
-                                    print("-------------------------------------")
-                                    logger.error("Google search tool call failed: %s", search_err, exc_info=True)
-                                    yield (
-                                        "data: "
-                                        + json.dumps({
-                                            "type": "search_activity",
-                                            "status": "error",
-                                            "label": f"Web search failed: {str(search_err)}",
-                                        })
-                                        + "\n\n"
-                                    )
-
-                            elif getattr(item, "name", None) == "generate_image":
-                                # —— Image Generation ——————————————————————
-                                try:
-                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
-                                    img_prompt = args.get("prompt", "")
-                                    img_style = args.get("style", "photorealistic")
-                                    if img_prompt:
-                                        # Tell the frontend: image job is queued
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "searching",
-                                                "label": "Generating image with FLUX...",
-                                            })
-                                            + "\n\n"
-                                        )
-                                        job_id = await _enqueue_image_gen(
-                                            user_id, conversation_id, img_prompt, img_style
-                                        )
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "image_gen_queued",
-                                                "job_id": job_id,
-                                                "prompt": img_prompt,
-                                            })
-                                            + "\n\n"
-                                        )
-                                except Exception as img_err:
-                                    logger.error("Failed to enqueue image_gen job: %s", img_err)
-                                    yield (
-                                        "data: "
-                                        + json.dumps({
-                                            "type": "search_activity",
-                                            "status": "error",
-                                            "label": "Image generation could not be started.",
-                                        })
-                                        + "\n\n"
-                                    )
-
-                        # Legacy web_search_preview events — forward if they somehow still appear
-                        elif event.type in (
-                            "response.web_search_call.in_progress",
-                            "response.web_search_call.searching",
-                        ):
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "search_activity", "status": "searching", "label": "Searching the web..."})
-                                + "\n\n"
-                            )
-                        elif event.type == "response.web_search_call.completed":
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "search_activity", "status": "done", "label": "Search complete."})
-                                + "\n\n"
-                            )
-                except Exception as iter_err:
-                    stream_failed = True
-                    error_message = str(iter_err)
-                    logger.error(f"Error during stream iteration: {iter_err}")
-
-                if not stream_failed:
+            try:
+                async with client.responses.stream(**iter_kwargs) as stream:
                     try:
-                        final_response = await stream.get_final_response()
-                        response_id = final_response.id if final_response else None
-                        if response_id:
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "response_id", "response_id": response_id})
-                                + "\n\n"
-                            )
+                        async for event in stream:
+                            # Text delta events
+                            if event.type == "response.output_text.delta":
+                                assistant_content += event.delta
+                                yield (
+                                    "data: "
+                                    + json.dumps({"type": "content_block_delta", "delta": {"text": event.delta}})
+                                    + "\n\n"
+                                )
 
-                        # Extract actual token usage details
-                        if final_response and hasattr(final_response, "usage") and final_response.usage:
-                            prompt_tokens = getattr(final_response.usage, "prompt_tokens", 0) or 0
-                            completion_tokens = getattr(final_response.usage, "completion_tokens", 0) or 0
-                    except Exception as final_err:
-                        logger.warning(f"Could not retrieve final response or tokens: {final_err}")
-                        # If get_final_response fails but we streamed content, don't crash the conversation
-                        if not assistant_content:
-                            stream_failed = True
-                            error_message = str(final_err)
+                            # Function tool calls — collect them to execute after the stream finishes this turn
+                            elif event.type == "response.output_item.done":
+                                item = getattr(event, "item", None)
+                                if item is not None and getattr(item, "type", None) == "function_call":
+                                    tool_calls_to_execute.append(item)
 
-        except Exception as stream_init_err:
-            stream_failed = True
-            error_message = str(stream_init_err)
-            logger.error(f"Error initializing stream: {stream_init_err}")
+                            # Legacy web_search_preview events — forward if they somehow still appear
+                            elif event.type in (
+                                "response.web_search_call.in_progress",
+                                "response.web_search_call.searching",
+                            ):
+                                yield (
+                                    "data: "
+                                    + json.dumps({"type": "search_activity", "status": "searching", "label": "Searching the web..."})
+                                    + "\n\n"
+                                )
+                            elif event.type == "response.web_search_call.completed":
+                                yield (
+                                    "data: "
+                                    + json.dumps({"type": "search_activity", "status": "done", "label": "Search complete."})
+                                    + "\n\n"
+                                )
+                    except Exception as iter_err:
+                        stream_failed = True
+                        error_message = str(iter_err)
+                        logger.error(f"Error during stream iteration: {iter_err}")
+
+                    # After the stream for this iteration completes, process any collected tool calls
+                    if not stream_failed:
+                        try:
+                            final_response = await stream.get_final_response()
+                            response_id = final_response.id if final_response else None
+
+                            if final_response and hasattr(final_response, "usage") and final_response.usage:
+                                prompt_tokens += getattr(final_response.usage, "prompt_tokens", 0) or 0
+                                completion_tokens += getattr(final_response.usage, "completion_tokens", 0) or 0
+
+                            if tool_calls_to_execute and response_id:
+                                outputs = []
+                                for item in tool_calls_to_execute:
+                                    call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
+                                    name = getattr(item, "name", None)
+
+                                    if name == "search_web":
+                                        try:
+                                            args = json.loads(getattr(item, "arguments", "{}") or "{}")
+                                            query = args.get("query", "")
+                                            if query:
+                                                yield (
+                                                    "data: "
+                                                    + json.dumps({
+                                                        "type": "search_activity",
+                                                        "status": "searching",
+                                                        "label": f"Searching Google for: {query[:60]}",
+                                                    })
+                                                    + "\n\n"
+                                                )
+                                                search_result = await _perform_google_search(query, synthesis_deployment=deployment)
+                                                sources = search_result.get("sources", [])
+                                                snippet = search_result.get("answer", "")[:1200]
+
+                                                yield (
+                                                    "data: "
+                                                    + json.dumps({
+                                                        "type": "search_activity",
+                                                        "status": "done",
+                                                        "label": f"Found {len(sources)} source(s)",
+                                                        "sources": sources,
+                                                    })
+                                                    + "\n\n"
+                                                )
+
+                                                tool_output = snippet + "\n" + "\n".join(s['url'] for s in sources[:5])
+                                                outputs.append({
+                                                    "type": "function_call_output",
+                                                    "call_id": call_id,
+                                                    "output": tool_output
+                                                })
+                                        except Exception as search_err:
+                                            logger.error("Google search tool call failed: %s", search_err, exc_info=True)
+                                            yield (
+                                                "data: "
+                                                + json.dumps({
+                                                    "type": "search_activity",
+                                                    "status": "error",
+                                                    "label": f"Web search failed: {str(search_err)}",
+                                                })
+                                                + "\n\n"
+                                            )
+                                            outputs.append({
+                                                "type": "function_call_output",
+                                                "call_id": call_id,
+                                                "output": f"Error searching the web: {str(search_err)}"
+                                            })
+
+                                    elif name == "generate_image":
+                                        try:
+                                            args = json.loads(getattr(item, "arguments", "{}") or "{}")
+                                            img_prompt = args.get("prompt", "")
+                                            img_style = args.get("style", "photorealistic")
+                                            if img_prompt:
+                                                yield (
+                                                    "data: "
+                                                    + json.dumps({
+                                                        "type": "search_activity",
+                                                        "status": "searching",
+                                                        "label": "Generating image with FLUX...",
+                                                    })
+                                                    + "\n\n"
+                                                )
+                                                job_id = await _enqueue_image_gen(
+                                                    user_id, conversation_id, img_prompt, img_style
+                                                )
+                                                yield (
+                                                    "data: "
+                                                    + json.dumps({
+                                                        "type": "image_gen_queued",
+                                                        "job_id": job_id,
+                                                        "prompt": img_prompt,
+                                                    })
+                                                    + "\n\n"
+                                                )
+                                                outputs.append({
+                                                    "type": "function_call_output",
+                                                    "call_id": call_id,
+                                                    "output": f"Image generation job successfully queued with ID: {job_id}."
+                                                })
+                                        except Exception as img_err:
+                                            logger.error("Failed to enqueue image_gen job: %s", img_err)
+                                            yield (
+                                                "data: "
+                                                + json.dumps({
+                                                    "type": "search_activity",
+                                                    "status": "error",
+                                                    "label": "Image generation could not be started.",
+                                                })
+                                                + "\n\n"
+                                            )
+                                            outputs.append({
+                                                "type": "function_call_output",
+                                                "call_id": call_id,
+                                                "output": f"Failed to start image generation: {str(img_err)}"
+                                            })
+
+                                if outputs:
+                                    current_previous_response_id = response_id
+                                    current_input = outputs
+                                    loop_active = True
+
+                            elif response_id:
+                                # No tool calls to execute, and response finished normally. Yield response_id.
+                                yield (
+                                    "data: "
+                                    + json.dumps({"type": "response_id", "response_id": response_id})
+                                    + "\n\n"
+                                )
+
+                        except Exception as final_err:
+                            logger.warning(f"Could not retrieve final response or tokens: {final_err}")
+                            if not assistant_content:
+                                stream_failed = True
+                                error_message = str(final_err)
+
+            except Exception as stream_init_err:
+                stream_failed = True
+                error_message = str(stream_init_err)
+                logger.error(f"Error initializing stream: {stream_init_err}")
 
         if stream_failed:
             lower_err = error_message.lower()
