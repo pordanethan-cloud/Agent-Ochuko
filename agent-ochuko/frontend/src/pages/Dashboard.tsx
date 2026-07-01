@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../utils/supabaseClient'
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2 } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useVoice } from '../hooks/useVoice'
 import { useJob } from '../hooks/useJob'
 
@@ -80,6 +80,31 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
   }
 
   return segments.length === 1 ? segments[0] : <>{segments}</>
+}
+
+interface ParsedMessage {
+  textPrefix: string
+  hasPastedText: boolean
+  pastedName?: string
+  pastedContent?: string
+}
+
+function parsePastedText(content: string): ParsedMessage {
+  const pattern = /(?:\r?\n\r?\n)?\[Pasted Content: (.*?)\]\r?\n```\r?\n([\s\S]*?)```$/
+  const match = content.match(pattern)
+  if (match) {
+    const textPrefix = content.slice(0, match.index).trim()
+    return {
+      textPrefix,
+      hasPastedText: true,
+      pastedName: match[1],
+      pastedContent: match[2].trim(),
+    }
+  }
+  return {
+    textPrefix: content,
+    hasPastedText: false,
+  }
 }
 
 // ── ImagePending — shimmer placeholder while FLUX is running ─────────────────
@@ -619,6 +644,8 @@ export const Dashboard: React.FC = () => {
     name: string
     sizeBytes: number
   } | null>(null)
+  const [expandedPastedMessages, setExpandedPastedMessages] = useState<Record<number, boolean>>({})
+  const [copiedPastedIndex, setCopiedPastedIndex] = useState<number | null>(null)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1776,9 +1803,70 @@ export const Dashboard: React.FC = () => {
                             )}
                           </div>
                         ) : (
-                          <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
-                            {msg.content}
-                          </p>
+                          (() => {
+                            const parsed = parsePastedText(msg.content)
+                            if (parsed.hasPastedText) {
+                              const isExpanded = !!expandedPastedMessages[i]
+                              return (
+                                <div className="space-y-2">
+                                  {parsed.textPrefix && (
+                                    <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
+                                      {parsed.textPrefix}
+                                    </p>
+                                  )}
+                                  <div
+                                    onClick={() => setExpandedPastedMessages(prev => ({ ...prev, [i]: !prev[i] }))}
+                                    className="flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg bg-[#c5a880]/8 border border-[#c5a880]/20 cursor-pointer hover:bg-[#c5a880]/15 transition-all duration-150 select-none max-w-sm"
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
+                                      <div className="min-w-0">
+                                        <p className="text-[11px] font-bold text-[#c5a880] uppercase tracking-widest leading-none mb-1">
+                                          Pasted Content
+                                        </p>
+                                        <p className="text-[12px] text-brand-text/90 font-medium truncate">
+                                          {parsed.pastedName}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="text-[#8e95a2] hover:text-[#c5a880] shrink-0">
+                                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                    </div>
+                                  </div>
+                                  
+                                  {isExpanded && (
+                                    <div className="bg-[#0d0f11] border border-[#1e2025] rounded-lg p-3 relative group/panel">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          navigator.clipboard.writeText(parsed.pastedContent || '')
+                                          setCopiedPastedIndex(i)
+                                          setTimeout(() => setCopiedPastedIndex(null), 2000)
+                                        }}
+                                        className="absolute right-2 top-2 p-1.5 rounded bg-white/5 hover:bg-white/10 text-[#8e95a2] hover:text-brand-text transition opacity-0 group-hover/panel:opacity-100"
+                                        title="Copy content"
+                                      >
+                                        {copiedPastedIndex === i ? (
+                                          <Check className="w-3 h-3 text-green-400" />
+                                        ) : (
+                                          <Copy className="w-3 h-3" />
+                                        )}
+                                      </button>
+                                      <pre className="text-[11.5px] font-mono text-brand-text/80 overflow-x-auto max-h-96 whitespace-pre-wrap break-all pr-8 select-text">
+                                        {parsed.pastedContent}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            }
+                            return (
+                              <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
+                                {msg.content}
+                              </p>
+                            )
+                          })()
                         )
                       ) : msg.content === '' && isStreaming ? (
                         // Typing / searching indicator — appears immediately before first token
