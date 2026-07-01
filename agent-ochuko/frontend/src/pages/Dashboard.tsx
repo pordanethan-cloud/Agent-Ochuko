@@ -913,10 +913,11 @@ export const Dashboard: React.FC = () => {
                       )
                       imgChannel.unsubscribe()
                     } else if (j.status === 'failed') {
+                      console.error("Image generation job failed:", j.error)
                       setMessages((prev) =>
                         prev.map((m) =>
                           m.imagePending && m.content === imgPrompt
-                            ? { role: 'assistant', content: 'Image generation failed. Please try again.' }
+                            ? { role: 'assistant', content: `Image generation failed: ${j.error || 'Please try again.'}` }
                             : m
                         )
                       )
@@ -952,6 +953,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return // silently exit
+      console.error("Agent chat stream failed:", err)
       const explanation = getFriendlyErrorMessage(err.message || 'unknown')
       setMessages((prev) => {
         const updated = [...prev]
