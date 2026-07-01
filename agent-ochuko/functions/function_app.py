@@ -12,9 +12,9 @@ from openai import AzureOpenAI
 
 # ── DNS-over-HTTPS monkeypatch to bypass regional Azure DNS limitations ────
 def resolve_dns_doh(hostname: str) -> str:
-    # Try Google DoH first
+    # Try Google DoH first (via direct IP to avoid bootstrap DNS lookup)
     try:
-        url = f"https://dns.google/resolve?name={hostname}&type=1"
+        url = f"https://8.8.8.8/resolve?name={hostname}&type=1"
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=3.0) as response:
             res_data = json.loads(response.read().decode())
@@ -25,9 +25,9 @@ def resolve_dns_doh(hostname: str) -> str:
     except Exception as e:
         logging.warning(f"Google DNS DoH resolution failed for {hostname}: {e}")
 
-    # Try Cloudflare DoH fallback
+    # Try Cloudflare DoH fallback (via direct IP to avoid bootstrap DNS lookup)
     try:
-        url = f"https://cloudflare-dns.com/dns-query?name={hostname}&type=A"
+        url = f"https://1.1.1.1/dns-query?name={hostname}&type=A"
         req = urllib.request.Request(url, headers={"Accept": "application/dns-json"})
         with urllib.request.urlopen(req, timeout=3.0) as response:
             res_data = json.loads(response.read().decode())
@@ -43,7 +43,7 @@ def resolve_dns_doh(hostname: str) -> str:
 _original_getaddrinfo = socket.getaddrinfo
 
 def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    if host == "api-inference.huggingface.co":
+    if host == "router.huggingface.co":
         ip = resolve_dns_doh(host)
         if ip:
             logging.info(f"DNS Patched: resolved {host} to {ip}")
@@ -728,7 +728,7 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             # Loop through the model hierarchy
             for model_id in model_sequence:
                 logger.info(f"Attempting image generation with model: {model_id}")
-                hf_api_url = f"https://api-inference.huggingface.co/models/{model_id}"
+                hf_api_url = f"https://router.huggingface.co/hf-inference/models/{model_id}"
 
                 # Try all available keys for this model
                 for attempt in range(1, max_keys + 1):
