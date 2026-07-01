@@ -1,4 +1,4 @@
-﻿# SYNOPSIS
+# SYNOPSIS
 #     Updates the Supabase JWT, Storage, and Cognitive secrets in Azure Key Vault.
 # DESCRIPTION
 #     This script parses the local backend/.env file and updates the Azure Key Vault secrets.
@@ -38,6 +38,11 @@ Get-Content $envPath | ForEach-Object {
         elseif ($key -eq "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") { $Secrets["AZURE-DOCUMENT-INTELLIGENCE-ENDPOINT"] = $val }
         elseif ($key -eq "AZURE_VISION_KEY") { $Secrets["AZURE-VISION-KEY"] = $val }
         elseif ($key -eq "AZURE_VISION_ENDPOINT") { $Secrets["AZURE-VISION-ENDPOINT"] = $val }
+        elseif ($key -eq "GOOGLE_API_KEY") { $Secrets["GOOGLE-API-KEY"] = $val }
+        elseif ($key -eq "GEMINI_API_KEY") { $Secrets["GEMINI-API-KEY"] = $val }
+        elseif ($key -eq "GEMINI_API_KEY_2") { $Secrets["GEMINI-API-KEY-2"] = $val }
+        elseif ($key -eq "GEMINI_API_KEY_3") { $Secrets["GEMINI-API-KEY-3"] = $val }
+        elseif ($key -eq "GEMINI_API_KEY_4") { $Secrets["GEMINI-API-KEY-4"] = $val }
     }
 }
 
