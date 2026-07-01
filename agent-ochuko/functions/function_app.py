@@ -3,10 +3,56 @@ import json
 import logging
 import itertools
 from datetime import datetime, timezone, timedelta
+import socket
+import urllib.request
 import azure.functions as func
 from supabase import create_client, Client
 from azure.appconfiguration import AzureAppConfigurationClient
 from openai import AzureOpenAI
+
+# ── DNS-over-HTTPS monkeypatch to bypass regional Azure DNS limitations ────
+def resolve_dns_doh(hostname: str) -> str:
+    # Try Google DoH first
+    try:
+        url = f"https://dns.google/resolve?name={hostname}&type=1"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=3.0) as response:
+            res_data = json.loads(response.read().decode())
+            if "Answer" in res_data:
+                for answer in res_data["Answer"]:
+                    if answer.get("type") == 1:  # Type A
+                        return answer.get("data")
+    except Exception as e:
+        logging.warning(f"Google DNS DoH resolution failed for {hostname}: {e}")
+
+    # Try Cloudflare DoH fallback
+    try:
+        url = f"https://cloudflare-dns.com/dns-query?name={hostname}&type=A"
+        req = urllib.request.Request(url, headers={"Accept": "application/dns-json"})
+        with urllib.request.urlopen(req, timeout=3.0) as response:
+            res_data = json.loads(response.read().decode())
+            if "Answer" in res_data:
+                for answer in res_data["Answer"]:
+                    if answer.get("type") == 1:  # Type A
+                        return answer.get("data")
+    except Exception as e:
+        logging.warning(f"Cloudflare DNS DoH resolution failed for {hostname}: {e}")
+        
+    return None
+
+_original_getaddrinfo = socket.getaddrinfo
+
+def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if host == "api-inference.huggingface.co":
+        ip = resolve_dns_doh(host)
+        if ip:
+            logging.info(f"DNS Patched: resolved {host} to {ip}")
+            return _original_getaddrinfo(ip, port, family, type, proto, flags)
+    return _original_getaddrinfo(host, port, family, type, proto, flags)
+
+socket.getaddrinfo = patched_getaddrinfo
+# ───────────────────────────────────────────────────────────────────────────
+
 
 # Initialize logging
 logger = logging.getLogger("azure.functions.crons")
