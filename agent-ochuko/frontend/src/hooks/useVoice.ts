@@ -57,6 +57,7 @@ export type VoiceError =
 
 export interface VoiceState {
   isRecording: boolean
+  isTranscribing: boolean
   /** 0–1 normalised volume, updated ~20 fps. Drives the waveform overlay. */
   currentVolume: number
   /** Accumulated grammar-corrected transcript from all chunks so far */
@@ -79,6 +80,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const [currentVolume, setCurrentVolume] = useState(0)
   const [transcribedText, setTranscribedText] = useState('')
   const [error, setError] = useState<VoiceError>(null)
@@ -100,6 +102,8 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
 
     const token = (await supabase.auth.getSession()).data.session?.access_token
     if (!token) return
+
+    setIsTranscribing(true)
 
     const attemptUpload = async (): Promise<string> => {
       const form = new FormData()
@@ -126,9 +130,12 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
         newText = await attemptUpload()
       } catch {
         setError('transcription_failed')
+        setIsTranscribing(false)
         // Non-fatal: keep recording, user sees a toast from the parent component
         return
       }
+    } finally {
+      setIsTranscribing(false)
     }
 
     if (newText) {
@@ -305,6 +312,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
 
   return {
     isRecording,
+    isTranscribing,
     currentVolume,
     transcribedText,
     error,

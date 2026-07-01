@@ -2004,14 +2004,15 @@ export const Dashboard: React.FC = () => {
                   isStreaming ? 'Agent is thinking...' :
                   attachedFile ? 'Add prompt details for the agent...' : 'Submit an inquiry...'
                 }
-                className={`w-full h-12 bg-[#0d0f11]/80 border rounded-xl pr-14 text-[13.5px] text-brand-text focus:outline-none focus:ring-1 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
-                  voice.isSupported ? 'pl-10' : 'pl-4'
+                className={`w-full h-12 bg-[#0d0f11]/80 border rounded-xl pr-14 text-[13.5px] text-brand-text focus:outline-none focus:ring-1 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed input-masked-fade ${
+                  voice.isSupported ? 'pl-10' : 'pl-4 no-mic'
                 } ${
                   voice.isRecording
                     ? 'border-[#c5a880]/40 focus:border-[#c5a880]/60 focus:ring-[#c5a880]/20 placeholder-[#c5a880]/50'
                     : 'border-[#1a1d20] focus:border-[#c5a880]/40 focus:ring-[#c5a880]/15 placeholder-[#8e95a2]/40'
                 }`}
               />
+              {voice.isTranscribing && <div className="input-loading-bar" aria-hidden />}
               <button
                 type="button"
                 onClick={handleTriggerUpload}

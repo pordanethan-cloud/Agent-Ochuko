@@ -78,3 +78,53 @@
 div[aria-live="polite"] > div {
   animation: toast-slide-in 0.2s ease-out forwards;
 }
+
+/* ── Claude-like horizontal text underlapping fade mask ──────────────────── */
+.input-masked-fade {
+  --mask-left-start: 8px;
+  --mask-left-end: 44px;
+  --mask-right-start: 56px;
+  --mask-right-end: 12px;
+
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent var(--mask-left-start),
+    #fff var(--mask-left-end),
+    #fff calc(100% - var(--mask-right-start)),
+    transparent calc(100% - var(--mask-right-end))
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent var(--mask-left-start),
+    #fff var(--mask-left-end),
+    #fff calc(100% - var(--mask-right-start)),
+    transparent calc(100% - var(--mask-right-end))
+  );
+}
+
+.input-masked-fade.no-mic {
+  --mask-left-start: 4px;
+  --mask-left-end: 16px;
+}
+
+/* ── Dictation/Transcription sliding loading bar ─────────────────────────── */
+.input-loading-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2.2px;
+  background: linear-gradient(to right, transparent, #c5a880, transparent);
+  background-size: 200% 100%;
+  animation: loading-slide 1.4s infinite linear;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+@keyframes loading-slide {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
