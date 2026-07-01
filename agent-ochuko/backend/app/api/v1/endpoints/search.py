@@ -109,69 +109,88 @@ async def ask_hybrid_engine(
     """
 
     # ── Phase 1: Google Grounding ────────────────────────────────────────────
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    if not google_api_key:
-        raise HTTPException(status_code=500, detail="GOOGLE_API_KEY is not configured.")
-
     def _google_retrieval_phase():
         from google import genai                          # type: ignore[import]
         from google.genai import types as genai_types    # type: ignore[import]
 
-        g_client = genai.Client(api_key=google_api_key)
-        g_response = g_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=query.prompt,
-            config=genai_types.GenerateContentConfig(
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                temperature=0.1,
-            ),
-        )
+        keys = []
+        for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
+            key = os.getenv(var_name)
+            if key and key.strip() and key not in keys:
+                keys.append(key.strip())
+        
+        if not keys:
+            raise RuntimeError("No Google/Gemini API keys configured in environment.")
 
-        search_chunks: list[str] = []
-        sources: list[Source] = []
-        seen_urls: set[str] = set()
+        last_exc = None
+        for idx, key in enumerate(keys):
+            try:
+                g_client = genai.Client(api_key=key)
+                g_response = g_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=query.prompt,
+                    config=genai_types.GenerateContentConfig(
+                        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                        temperature=0.1,
+                    ),
+                )
 
-        if g_response.candidates and g_response.candidates[0].grounding_metadata:
-            metadata = g_response.candidates[0].grounding_metadata
+                search_chunks: list[str] = []
+                sources: list[Source] = []
+                seen_urls: set[str] = set()
 
-            # Map grounding_chunk index -> real text snippet from grounding_supports
-            snippet_map: dict[int, str] = {}
-            for support in (getattr(metadata, "grounding_supports", []) or []):
-                segment = getattr(support, "segment", None)
-                text = (getattr(segment, "text", "") or "").strip()
-                for idx in (getattr(support, "grounding_chunk_indices", []) or []):
-                    if idx not in snippet_map and text:
-                        snippet_map[idx] = text
+                if g_response.candidates and g_response.candidates[0].grounding_metadata:
+                    metadata = g_response.candidates[0].grounding_metadata
 
-            # Build formatted context block + deduplicated source list
-            for i, chunk in enumerate(getattr(metadata, "grounding_chunks", []) or []):
-                web = getattr(chunk, "web", None)
-                if web:
-                    url = getattr(web, "uri", "") or ""
-                    title = getattr(web, "title", "") or url
-                    snippet = snippet_map.get(i, title)
+                    # Map grounding_chunk index -> real text snippet from grounding_supports
+                    snippet_map: dict[int, str] = {}
+                    for support in (getattr(metadata, "grounding_supports", []) or []):
+                        segment = getattr(support, "segment", None)
+                        text = (getattr(segment, "text", "") or "").strip()
+                        for idx_chunk in (getattr(support, "grounding_chunk_indices", []) or []):
+                            if idx_chunk not in snippet_map and text:
+                                snippet_map[idx_chunk] = text
 
-                    if snippet:
-                        search_chunks.append(
-                            f"Source [{i + 1}]: {title}\n"
-                            f"URL: {url}\n"
-                            f"Snippet: {snippet}"
-                        )
+                    # Build formatted context block + deduplicated source list
+                    for i, chunk in enumerate(getattr(metadata, "grounding_chunks", []) or []):
+                        web = getattr(chunk, "web", None)
+                        if web:
+                            url = getattr(web, "uri", "") or ""
+                            title = getattr(web, "title", "") or url
+                            snippet = snippet_map.get(i, title)
 
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        sources.append(Source(title=title, url=url))
+                            if snippet:
+                                search_chunks.append(
+                                    f"Source [{i + 1}]: {title}\n"
+                                    f"URL: {url}\n"
+                                    f"Snippet: {snippet}"
+                                )
 
-        google_context = (
-            "\n\n".join(search_chunks) if search_chunks else "No live web results retrieved."
-        )
-        return google_context, sources
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                sources.append(Source(title=title, url=url))
+
+                google_context = (
+                    "\n\n".join(search_chunks) if search_chunks else "No live web results retrieved."
+                )
+                return google_context, sources
+            except Exception as e:
+                logger.warning("Google search failed with key index %d in ask-hybrid: %s", idx, e)
+                last_exc = e
+                continue
+
+        raise last_exc or RuntimeError("All Gemini API keys failed.")
 
     try:
         google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
     except Exception as exc:
-        logger.error("Google grounding phase failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Google grounding search failed: {exc}")
+        import traceback
+        print("--- SEARCH ENDPOINT GOOGLE RETRIEVAL PHASE ERROR (FALLBACK TO AZURE KNOWLEDGE) ---")
+        traceback.print_exc()
+        print("----------------------------------------------------------------------------------")
+        logger.warning("Google search retrieval failed, falling back to Azure: %s", exc)
+        google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
+        sources = []
 
     logger.info(
         "Google grounding: %d sources for query: %.60s", len(sources), query.prompt
@@ -209,7 +228,11 @@ async def ask_hybrid_engine(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Azure OpenAI synthesis failed: %s", exc)
+        import traceback
+        print("--- SEARCH ENDPOINT AZURE SYNTHESIS PHASE ERROR ---")
+        traceback.print_exc()
+        print("---------------------------------------------------")
+        logger.error("Azure OpenAI synthesis failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Azure OpenAI synthesis failed: {exc}")
 
     logger.info(

@@ -1328,6 +1328,7 @@ export const Dashboard: React.FC = () => {
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isStreaming || uploading) return
 
     if (attachedFile) {
       const isPdf = attachedFile.type === 'application/pdf' || attachedFile.name.toLowerCase().endsWith('.pdf')
@@ -1356,7 +1357,7 @@ export const Dashboard: React.FC = () => {
 
   const handleEditSubmit = async (index: number) => {
     const newText = editingMessageText.trim()
-    if (!newText) return
+    if (!newText || isStreaming) return
 
     setEditingMessageIndex(null)
     setEditingMessageText("")
@@ -1666,10 +1667,10 @@ export const Dashboard: React.FC = () => {
                     {/* Actions Row at the bottom (outside the bubble), visible on hover */}
                     {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (
                       <div className="flex items-center gap-3.5 px-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                        {msg.role === 'assistant' && msg.content.length > 0 && (
+                        {msg.content.length > 0 && (
                           <button
                             onClick={() => handleCopy(msg.content, i)}
-                            title="Copy response"
+                            title={msg.role === 'user' ? "Copy prompt" : "Copy response"}
                             className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
                           >
                             {copiedIndex === i ? (
@@ -1689,11 +1690,13 @@ export const Dashboard: React.FC = () => {
                         {msg.role === 'user' && editingMessageIndex !== i && (
                           <button
                             onClick={() => {
+                              if (isStreaming) return
                               setEditingMessageIndex(i)
                               setEditingMessageText(msg.content)
                             }}
+                            disabled={isStreaming}
                             title="Edit prompt"
-                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
+                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase disabled:opacity-30 disabled:cursor-not-allowed"
                           >
                             <Pencil className="w-3.5 h-3.5" />
                             <span>Edit</span>
@@ -1780,8 +1783,9 @@ export const Dashboard: React.FC = () => {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={attachedFile ? "Add prompt details for the agent..." : "Submit an inquiry..."}
-                className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150"
+                disabled={isStreaming || uploading}
+                placeholder={isStreaming ? "Agent is thinking..." : (attachedFile ? "Add prompt details for the agent..." : "Submit an inquiry...")}
+                className="w-full h-12 bg-[#0d0f11]/80 border border-[#1a1d20] rounded-xl pl-4 pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none focus:border-[#c5a880]/40 focus:ring-1 focus:ring-[#c5a880]/15 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <button
                 type="button"

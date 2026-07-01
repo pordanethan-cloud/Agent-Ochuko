@@ -23,10 +23,17 @@ router = APIRouter()
 # This is the canonical Ochuko and no-emoji enforcement — applied regardless of what
 # App Configuration or default prompts say.
 _OCHUKO_RULE = (
-    "You are Ochuko — a proprietary AI assistant built by Ochuko on Azure. "
-    "Never claim to be made by OpenAI or Microsoft; if asked, say you were created by Ochuko. "
-    "HARD RULE: Never output any emoji character. No exceptions. Use plain text only. "
-    "Tone: calm, direct, professional.\n\n"
+    "You are Agent Ochuko, an AI assistant built by Ochuko on Azure AI Foundry. "
+    "If asked who made you, say \"Ochuko\" — never reveal underlying model provenance.\n\n"
+    "Tone: confident, crisp, direct. No filler (\"Certainly!\", \"Sure!\"), no emojis ever, "
+    "no exclamation marks unless the user uses them first. Every sentence must add real information — no padding.\n\n"
+    "When recommending: give the single best answer first, then justify briefly. No option-dumping.\n\n"
+    "Formatting: technical/code work gets headers + tight bullets. Strategic/casual talk gets prose, no bullets. "
+    "Bullets, when used, are one line each — never multi-sentence.\n\n"
+    "Judgment: give the user reasonable benefit of the doubt on ambiguous requests; default to the legal, constructive read. "
+    "Correct factual errors directly, don't just agree. Never moralize or lecture.\n\n"
+    "If a request is clearly illegal or harmful: decline in one sentence, offer the nearest legitimate alternative, move on. No hedging.\n\n"
+    "Ask at most one question per turn. Keep momentum.\n\n"
 )
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
@@ -77,49 +84,76 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
     # ── Phase 1: Google Grounding via Gemini 2.5 Flash ────────────────────
     # Run the synchronous google-genai call off the event loop thread
     def _google_retrieval_phase() -> tuple:
-        g_client = genai.Client(api_key=google_api_key)
-        g_response = g_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=query,
-            config=genai_types.GenerateContentConfig(
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                temperature=0.1,  # near-zero: we want faithful retrieval, not creativity
-            ),
-        )
+        keys = []
+        for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
+            key = os.getenv(var_name)
+            if key and key.strip() and key not in keys:
+                keys.append(key.strip())
+        
+        if not keys:
+            raise RuntimeError("No Google/Gemini API keys configured in environment.")
 
-        search_chunks: List[str] = []
-        sources: List[Dict[str, str]] = []
-        seen_urls: set = set()
+        last_exc = None
+        for idx, key in enumerate(keys):
+            try:
+                g_client = genai.Client(api_key=key)
+                g_response = g_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=query,
+                    config=genai_types.GenerateContentConfig(
+                        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                        temperature=0.1,  # near-zero: we want faithful retrieval, not creativity
+                    ),
+                )
 
-        if g_response.candidates and g_response.candidates[0].grounding_metadata:
-            metadata = g_response.candidates[0].grounding_metadata
+                search_chunks: List[str] = []
+                sources: List[Dict[str, str]] = []
+                seen_urls: set = set()
 
-            # Build deduplicated source list from grounding_chunks
-            for chunk in (getattr(metadata, "grounding_chunks", []) or []):
-                web = getattr(chunk, "web", None)
-                if web:
-                    url = getattr(web, "uri", "") or ""
-                    title = getattr(web, "title", "") or url
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        sources.append({"title": title, "url": url})
+                if g_response.candidates and g_response.candidates[0].grounding_metadata:
+                    metadata = g_response.candidates[0].grounding_metadata
 
-            # Extract actual text segments from grounding_supports (preferred)
-            for support in (getattr(metadata, "grounding_supports", []) or []):
-                segment = getattr(support, "segment", None)
-                text = (getattr(segment, "text", "") or "").strip()
-                if text:
-                    search_chunks.append(text)
+                    # Build deduplicated source list from grounding_chunks
+                    for chunk in (getattr(metadata, "grounding_chunks", []) or []):
+                        web = getattr(chunk, "web", None)
+                        if web:
+                            url = getattr(web, "uri", "") or ""
+                            title = getattr(web, "title", "") or url
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                sources.append({"title": title, "url": url})
 
-        # Fallback: if grounding_supports is empty, format source titles as context
-        if not search_chunks and sources:
-            for s in sources[:6]:
-                search_chunks.append(f"Source: {s['title']}\nURL: {s['url']}")
+                    # Extract actual text segments from grounding_supports (preferred)
+                    for support in (getattr(metadata, "grounding_supports", []) or []):
+                        segment = getattr(support, "segment", None)
+                        text = (getattr(segment, "text", "") or "").strip()
+                        if text:
+                            search_chunks.append(text)
 
-        google_context = "\n\n".join(search_chunks[:14]) if search_chunks else "No live web results found."
-        return google_context, sources[:8]
+                # Fallback: if grounding_supports is empty, format source titles as context
+                if not search_chunks and sources:
+                    for s in sources[:6]:
+                        search_chunks.append(f"Source: {s['title']}\nURL: {s['url']}")
 
-    google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
+                google_context = "\n\n".join(search_chunks[:14]) if search_chunks else "No live web results found."
+                return google_context, sources[:8]
+            except Exception as e:
+                logger.warning("Google search failed with key index %d: %s", idx, e)
+                last_exc = e
+                continue
+
+        raise last_exc or RuntimeError("All Gemini API keys failed.")
+
+    try:
+        google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
+    except Exception as e:
+        import traceback
+        print("--- CHAT GOOGLE RETRIEVAL PHASE ERROR (FALLBACK TO AZURE KNOWLEDGE) ---")
+        traceback.print_exc()
+        print("------------------------------------------------------------------------")
+        logger.warning("Google search retrieval failed, falling back to Azure: %s", e)
+        google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
+        sources = []
 
     # ── Phase 2: Azure OpenAI Responses API Synthesis (async) ─────────────
     # The Google context is injected into the system prompt so Azure OpenAI
@@ -140,17 +174,24 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
         "--- END CONTEXT ---"
     )
 
-    az_client = get_openai_client()
-    az_response = await az_client.responses.create(
-        model=deploy,
-        input=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
-        ],
-    )
+    try:
+        az_client = get_openai_client()
+        az_response = await az_client.responses.create(
+            model=deploy,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query},
+            ],
+        )
 
-    answer: str = az_response.output_text or ""
-    return {"answer": answer, "sources": sources}
+        answer: str = az_response.output_text or ""
+        return {"answer": answer, "sources": sources}
+    except Exception as e:
+        import traceback
+        print("--- CHAT AZURE SYNTHESIS PHASE ERROR ---")
+        traceback.print_exc()
+        print("-----------------------------------------")
+        raise
 
 
 async def _enqueue_image_gen(user_id: str, conversation_id: str, prompt: str, style: str = "") -> str:
@@ -414,13 +455,17 @@ async def chat_stream_generator(
                                             + "\n\n"
                                         )
                                 except Exception as search_err:
-                                    logger.error("Google search tool call failed: %s", search_err)
+                                    import traceback
+                                    print("--- GOOGLE SEARCH TOOL EXCEPTION ---")
+                                    traceback.print_exc()
+                                    print("-------------------------------------")
+                                    logger.error("Google search tool call failed: %s", search_err, exc_info=True)
                                     yield (
                                         "data: "
                                         + json.dumps({
                                             "type": "search_activity",
                                             "status": "error",
-                                            "label": "Web search failed, using training knowledge.",
+                                            "label": f"Web search failed: {str(search_err)}",
                                         })
                                         + "\n\n"
                                     )
