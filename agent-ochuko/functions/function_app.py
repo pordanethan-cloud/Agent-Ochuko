@@ -809,12 +809,12 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
 
             # Increment monthly image_gen quota
             period = datetime.now(timezone.utc).strftime("%Y-%m")
-            quota_res = db.table("agent_quotas").select("image_gen_calls_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
+            quota_res = db.table("agent_quotas").select("image_gen_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
             if quota_res and hasattr(quota_res, "data") and quota_res.data:
-                current = quota_res.data.get("image_gen_calls_used", 0) or 0
-                db.table("agent_quotas").update({"image_gen_calls_used": current + 1}).eq("user_id", user_id).eq("period", period).execute()
+                current = quota_res.data.get("image_gen_used", 0) or 0
+                db.table("agent_quotas").update({"image_gen_used": current + 1}).eq("user_id", user_id).eq("period", period).execute()
             else:
-                db.table("agent_quotas").upsert({"user_id": user_id, "period": period, "image_gen_calls_used": 1}, on_conflict="user_id,period").execute()
+                db.table("agent_quotas").upsert({"user_id": user_id, "period": period, "image_gen_used": 1}, on_conflict="user_id,period").execute()
 
             logger.info("Image generated and uploaded. job_id=%s url=%.80s", job_id, image_url)
 

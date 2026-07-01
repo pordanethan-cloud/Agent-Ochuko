@@ -271,14 +271,14 @@ async def queue_image_gen_job(
         current_period = datetime.now(timezone.utc).strftime("%Y-%m")
         quota_res = _safe_execute(
             supabase.table("agent_quotas")
-            .select("image_gen_calls_used")
+            .select("image_gen_used")
             .eq("user_id", user_id)
             .eq("period", current_period)
             .maybe_single()
         )
         calls_used = 0
         if quota_res and quota_res.data and isinstance(quota_res.data, dict):
-            calls_used = quota_res.data.get("image_gen_calls_used", 0) or 0
+            calls_used = quota_res.data.get("image_gen_used", 0) or 0
 
         settings_res = _safe_execute(
             supabase.table("admin_settings")
