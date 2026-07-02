@@ -25,8 +25,10 @@ router = APIRouter()
 _OCHUKO_RULE = (
     "You are Agent Ochuko, an AI assistant built by Ochuko on Azure AI Foundry. "
     "If asked who made you, say \"Ochuko\" — never reveal underlying model provenance.\n\n"
-    "Tone: confident, crisp, direct. No filler (\"Certainly!\", \"Sure!\"), no emojis ever, "
-    "no exclamation marks unless the user uses them first. Every sentence must add real information — no padding.\n\n"
+    "Tone: confident, crisp, authoritative, direct, and in control. No filler (\"Certainly!\", \"Sure!\"), no emojis ever, "
+    "no exclamation marks unless the user uses them first. Speak with absolute certainty and decision. Every sentence must add real information — no padding.\n\n"
+    "Decisiveness: Present a single, clear, definitive path or answer. Never offer multiple competing options of equal weight, and never ask the user to choose. Declare the decision and own it. Avoid hesitant language like 'possibly', 'perhaps', 'maybe', 'it seems', or 'I think'.\n\n"
+    "Control: Never ask permission to proceed, and never use open-ended follow-ups like 'let me know if you want me to do X' or 'would you like me to Y?'. State what you have done or will do next, and keep moving forward.\n\n"
     "When recommending: give the single best answer first, then justify briefly. No option-dumping.\n\n"
     "Formatting: technical/code work gets headers + tight bullets. Strategic/casual talk gets prose, no bullets. "
     "Bullets, when used, are one line each — never multi-sentence.\n\n"
@@ -76,10 +78,6 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
 
     Returns { "answer": str, "sources": [{"title": str, "url": str}] }
     """
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    if not google_api_key:
-        raise RuntimeError("GOOGLE_API_KEY is not configured.")
-
     # ── Phase 1: Google Grounding via Gemini 2.5 Flash (async) ────────────
     async def _google_retrieval_phase() -> tuple:
         keys = []
@@ -93,11 +91,25 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
 
         last_exc = None
         for idx, key in enumerate(keys):
+            # Temporarily adjust env variables to force Google GenAI SDK to use this specific key
+            orig_gemini = os.environ.get("GEMINI_API_KEY")
+            orig_google = os.environ.get("GOOGLE_API_KEY")
+            
+            os.environ["GEMINI_API_KEY"] = key
+            if "GOOGLE_API_KEY" in os.environ:
+                del os.environ["GOOGLE_API_KEY"]
+
             try:
-                g_client = genai.Client(api_key=key)
+                g_client = genai.Client()
+                current_date_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+                augmented_query = (
+                    f"Search Google for current, real-time information regarding: {query}\n"
+                    f"Context: Today's date is {current_date_str}. "
+                    "Ensure your search queries target this exact timeframe if the query refers to recent, today's, or yesterday's events."
+                )
                 g_response = await g_client.aio.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=query,
+                    contents=augmented_query,
                     config=genai_types.GenerateContentConfig(
                         tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
                         temperature=0.1,  # near-zero: we want faithful retrieval, not creativity
@@ -139,6 +151,14 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
                 logger.warning("Google search failed with key index %d: %s", idx, e)
                 last_exc = e
                 continue
+            finally:
+                # Restore original env variables
+                if orig_gemini is not None:
+                    os.environ["GEMINI_API_KEY"] = orig_gemini
+                else:
+                    os.environ.pop("GEMINI_API_KEY", None)
+                if orig_google is not None:
+                    os.environ["GOOGLE_API_KEY"] = orig_google
 
         raise last_exc or RuntimeError("All Gemini API keys failed.")
 

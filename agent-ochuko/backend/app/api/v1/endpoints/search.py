@@ -19,6 +19,7 @@ Auth:  Requires a valid JWT (same guard as the chat endpoints).
 import os
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -124,11 +125,25 @@ async def ask_hybrid_engine(
 
         last_exc = None
         for idx, key in enumerate(keys):
+            # Temporarily adjust env variables to force Google GenAI SDK to use this specific key
+            orig_gemini = os.environ.get("GEMINI_API_KEY")
+            orig_google = os.environ.get("GOOGLE_API_KEY")
+            
+            os.environ["GEMINI_API_KEY"] = key
+            if "GOOGLE_API_KEY" in os.environ:
+                del os.environ["GOOGLE_API_KEY"]
+
             try:
-                g_client = genai.Client(api_key=key)
+                g_client = genai.Client()
+                current_date_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+                augmented_prompt = (
+                    f"Search Google for current, real-time information regarding: {query.prompt}\n"
+                    f"Context: Today's date is {current_date_str}. "
+                    "Ensure your search queries target this exact timeframe if the query refers to recent, today's, or yesterday's events."
+                )
                 g_response = await g_client.aio.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=query.prompt,
+                    contents=augmented_prompt,
                     config=genai_types.GenerateContentConfig(
                         tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
                         temperature=0.1,
@@ -178,6 +193,14 @@ async def ask_hybrid_engine(
                 logger.warning("Google search failed with key index %d in ask-hybrid: %s", idx, e)
                 last_exc = e
                 continue
+            finally:
+                # Restore original env variables
+                if orig_gemini is not None:
+                    os.environ["GEMINI_API_KEY"] = orig_gemini
+                else:
+                    os.environ.pop("GEMINI_API_KEY", None)
+                if orig_google is not None:
+                    os.environ["GOOGLE_API_KEY"] = orig_google
 
         raise last_exc or RuntimeError("All Gemini API keys failed.")
 
