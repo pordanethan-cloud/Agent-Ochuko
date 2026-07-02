@@ -1245,11 +1245,13 @@ export const Dashboard: React.FC = () => {
 
       const { upload_url, blob_url, file_id } = await sasRes.json()
 
-      // 2. Perform direct PUT upload to Azure Blob Storage
+      // 2. Perform direct PUT upload to Cloudflare R2 / Azure Blob Storage
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
         xhr.open('PUT', upload_url)
-        xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob')
+        if (upload_url.includes('blob.core.windows.net')) {
+          xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob')
+        }
         xhr.setRequestHeader('Content-Type', file.type)
 
         xhr.upload.onprogress = (evt) => {
@@ -1263,7 +1265,7 @@ export const Dashboard: React.FC = () => {
           if (xhr.status === 201 || xhr.status === 200) {
             resolve()
           } else {
-            reject(new Error(`Azure Blob Storage returned status ${xhr.status}`))
+            reject(new Error(`Storage upload returned status ${xhr.status}`))
           }
         }
 

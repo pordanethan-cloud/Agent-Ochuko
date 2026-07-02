@@ -45,6 +45,7 @@ def load_config() -> None:
         for item in fetched_items:
             # Overwrite environment baseline with App Config values
             _CONFIG_CACHE[item.key] = item.value
+            os.environ[item.key] = item.value
             count += 1
             
         logger.info(f"Loaded {count} configurations from Azure App Configuration.")

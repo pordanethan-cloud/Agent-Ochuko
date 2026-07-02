@@ -571,8 +571,89 @@ def _upload_image_to_blob(image_bytes: bytes, blob_name: str) -> str:
     return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"
 
 
+def _upload_to_r2(data: bytes, filename: str, content_type: str) -> str:
+    """
+    Uploads raw bytes to Cloudflare R2 bucket.
+    Returns the public URL using R2_PUBLIC_DOMAIN.
+    """
+    import boto3
+    from botocore.config import Config
+
+    access_key = os.environ.get("R2_ACCESS_KEY_ID")
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+    endpoint = os.environ.get("R2_ENDPOINT")
+    bucket_name = os.environ.get("R2_BUCKET_NAME", "octal-ehr-files")
+    public_domain = os.environ.get("R2_PUBLIC_DOMAIN", "https://pub-3aabaa1c09b9c0da240f1ae5ed8d8478.r2.dev")
+
+    if not access_key or not secret_key or not endpoint:
+        raise RuntimeError("Cloudflare R2 configuration credentials are not configured.")
+
+    # Create boto3 client for R2 (S3-compatible)
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=Config(signature_version="s3v4")
+    )
+
+    s3_client.put_object(
+        Bucket=bucket_name,
+        Key=filename,
+        Body=data,
+        ContentType=content_type
+    )
+
+    domain = public_domain.rstrip("/")
+    filename = filename.lstrip("/")
+    return f"{domain}/{filename}"
+
+
+
 def get_read_sas_url(blob_url: str) -> str:
     """Generates a short-lived read-only SAS URL for the given direct blob URL."""
+    # Check if this is an R2 URL (or not an Azure Blob URL)
+    if ".blob.core.windows.net/" not in blob_url:
+        try:
+            import boto3
+            from botocore.config import Config
+            
+            access_key = os.environ.get("R2_ACCESS_KEY_ID")
+            secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+            endpoint = os.environ.get("R2_ENDPOINT")
+            bucket_name = os.environ.get("R2_BUCKET_NAME", "agent-ochuko-storage")
+            public_domain = os.environ.get("R2_PUBLIC_DOMAIN", "")
+            
+            if access_key and secret_key and endpoint:
+                s3_client = boto3.client(
+                    "s3",
+                    endpoint_url=endpoint,
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
+                    config=Config(signature_version="s3v4")
+                )
+                
+                # Parse the R2 Key from the URL
+                r2_domain_host = public_domain.split("://")[-1].split("/")[0] if public_domain else ""
+                if r2_domain_host and r2_domain_host in blob_url:
+                    key = blob_url.split(r2_domain_host)[-1].lstrip("/")
+                else:
+                    # Fallback parser if domain doesn't match
+                    key = "/".join(blob_url.split("://")[-1].split("/")[1:])
+                
+                presigned_url = s3_client.generate_presigned_url(
+                    ClientMethod="get_object",
+                    Params={
+                        "Bucket": bucket_name,
+                        "Key": key
+                    },
+                    ExpiresIn=3600  # 1 hour
+                )
+                return presigned_url
+        except Exception as e:
+            logger.warning(f"Failed to generate R2 presigned GET URL: {e}")
+        return blob_url
+
     conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
     if not conn_str:
         return blob_url  # Fallback if connection string is missing
@@ -868,36 +949,11 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             except Exception as save_local_err:
                 logger.warning(f"Could not save copy to local Pictures folder: {save_local_err}")
 
-            # Upload PNG to Azure Blob Storage
+            # Upload PNG to Cloudflare R2
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            blob_name = f"generated/{user_id}/{job_id}_{timestamp}.png"
-            raw_blob_url = _upload_image_to_blob(image_bytes, blob_name)
+            filename = f"generated/{user_id}/{job_id}_{timestamp}.png"
+            image_url = _upload_to_r2(image_bytes, filename, "image/png")
 
-            # Generate a 24-hour read SAS URL so the frontend can display it directly
-            image_url = get_read_sas_url(raw_blob_url)
-            # Override expiry to 24h for generated images (longer than the default 1h)
-            try:
-                from azure.storage.blob import generate_blob_sas, BlobSasPermissions
-                conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "")
-                parts = {}
-                for item in conn_str.split(";"):
-                    if "=" in item:
-                        k, v = item.split("=", 1)
-                        parts[k.strip()] = v.strip()
-                acct = parts.get("AccountName", "")
-                acct_key = parts.get("AccountKey", "")
-                if acct and acct_key:
-                    sas = generate_blob_sas(
-                        account_name=acct,
-                        container_name="agent-outputs",
-                        blob_name=blob_name,
-                        account_key=acct_key,
-                        permission=BlobSasPermissions(read=True),
-                        expiry=datetime.now(timezone.utc) + timedelta(hours=24),
-                    )
-                    image_url = f"https://{acct}.blob.core.windows.net/agent-outputs/{blob_name}?{sas}"
-            except Exception as sas_err:
-                logger.warning("Could not generate 24h SAS for image, using default: %s", sas_err)
 
             result_data = {
                 "image_url": image_url,
@@ -975,49 +1031,10 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             if not audio_bytes or len(audio_bytes) < 500:
                 raise RuntimeError("Azure Speech returned an empty or invalid audio response.")
 
-            # Upload audio to Azure Blob Storage (container: agent-audio)
-            from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
-            conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-            if not conn_str:
-                raise RuntimeError("AZURE_STORAGE_CONNECTION_STRING is not configured.")
-
-            blob_service = BlobServiceClient.from_connection_string(conn_str)
-            container_name = "agent-audio"
-            container_client = blob_service.get_container_client(container_name)
-            try:
-                container_client.create_container()
-            except Exception:
-                pass  # Already exists
-
+            # Upload audio to Cloudflare R2
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            blob_name = f"tts/{user_id}/{job_id}_{timestamp}.mp3"
-            blob_client_obj = container_client.get_blob_client(blob_name)
-            blob_client_obj.upload_blob(
-                audio_bytes, overwrite=True,
-                content_settings=ContentSettings(content_type="audio/mpeg")
-            )
-
-            # Generate 1-hour read SAS URL
-            parts = {}
-            for item in conn_str.split(";"):
-                if "=" in item:
-                    k, v = item.split("=", 1)
-                    parts[k.strip()] = v.strip()
-            acct = parts.get("AccountName", "")
-            acct_key = parts.get("AccountKey", "")
-            raw_blob_url = f"https://{acct}.blob.core.windows.net/{container_name}/{blob_name}"
-
-            sas_url = raw_blob_url  # fallback
-            if acct and acct_key:
-                sas = generate_blob_sas(
-                    account_name=acct,
-                    container_name=container_name,
-                    blob_name=blob_name,
-                    account_key=acct_key,
-                    permission=BlobSasPermissions(read=True),
-                    expiry=datetime.now(timezone.utc) + timedelta(hours=1),
-                )
-                sas_url = f"{raw_blob_url}?{sas}"
+            filename = f"tts/{user_id}/{job_id}_{timestamp}.mp3"
+            sas_url = _upload_to_r2(audio_bytes, filename, "audio/mpeg")
 
             result_data = {"blob_url": sas_url, "voice": voice}
 

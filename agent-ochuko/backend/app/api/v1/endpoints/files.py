@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.core.jwt_validator import verify_jwt
 from app.services.supabase_admin import get_supabase_admin
-from app.services.azure_blob import generate_upload_sas_url
+from app.services.cloudflare_r2 import generate_r2_upload_url
 
 logger = logging.getLogger("app.api.v1.endpoints.files")
 router = APIRouter()
@@ -64,30 +64,22 @@ async def get_upload_sas(
     blob_name = f"{user_id}/{conversation_id}/{unique_id}_{filename}"
 
     try:
-        # 3. Generate SAS URL
-        upload_url = generate_upload_sas_url(
-            container_name="uploads",
-            blob_name=blob_name,
-            expiry_minutes=15
+        # 3. Generate R2 Presigned Upload URL
+        file_path = f"uploads/{blob_name}"
+        upload_url = generate_r2_upload_url(
+            filename=file_path,
+            content_type=mime_type,
+            expiry_seconds=900
         )
 
-        # 4. Construct direct blob reference URL (without SAS token)
-        conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        account_name = ""
-        for item in (conn_str or "").split(";"):
-            if item.startswith("AccountName="):
-                account_name = item.split("=")[1].strip()
-                break
-
-        if not account_name:
-            account_name = "agentochukostore"
-
-        blob_url = f"https://{account_name}.blob.core.windows.net/uploads/{blob_name}"
+        # 4. Construct direct public R2 reference URL
+        public_domain = os.getenv("R2_PUBLIC_DOMAIN", "https://pub-3aabaa1c09b9c0da240f1ae5ed8d8478.r2.dev").rstrip("/")
+        blob_url = f"{public_domain}/{file_path}"
 
         return UploadResponse(
             upload_url=upload_url,
             blob_url=blob_url,
-            file_id=f"uploads/{blob_name}"
+            file_id=file_path
         )
 
     except Exception as e:
