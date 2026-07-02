@@ -43,6 +43,15 @@ def load_config() -> None:
         fetched_items = client.list_configuration_settings(label_filter="production")
         count = 0
         for item in fetched_items:
+            # Do NOT overwrite environment variables with unresolved Key Vault reference JSON strings.
+            # The Container App runtime already injects resolved Key Vault secrets into the environment.
+            if item.content_type and "keyvaultref" in item.content_type:
+                logger.info(f"Skipping App Config overwrite for Key Vault reference: {item.key}")
+                continue
+            if item.value and item.value.strip().startswith('{"uri":'):
+                logger.info(f"Skipping App Config overwrite for Key Vault URI reference: {item.key}")
+                continue
+
             # Overwrite environment baseline with App Config values
             _CONFIG_CACHE[item.key] = item.value
             os.environ[item.key] = item.value
