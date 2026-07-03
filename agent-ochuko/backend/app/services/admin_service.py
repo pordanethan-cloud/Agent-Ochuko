@@ -209,45 +209,54 @@ def get_usage_stats(days: int = 30) -> Dict[str, Any]:
 def get_top_users(limit: int = 5) -> List[Dict[str, Any]]:
     """Return top N users by total token consumption (input + output)."""
     db = get_supabase_admin()
+    top_list = []
     try:
         response = db.rpc(
             "get_top_users_by_tokens",
             {"p_limit": limit},
         ).execute()
         if response.data:
-            return response.data
+            # The RPC returns user_id, display_name, email (null), and total_tokens
+            top_list = response.data
     except Exception as e:
         logger.warning("Failed to call get_top_users_by_tokens RPC, falling back to in-memory: %s", e)
 
-    # Fallback: Query messages and aggregate in-memory
-    try:
-        res = (
-            db.table("messages")
-            .select("tokens_input, tokens_output, conversations(user_id)")
-            .eq("role", "assistant")
-            .execute()
-        )
-        data = res.data or []
-        user_sums = {}
-        for m in data:
-            convo = m.get("conversations", {})
-            u_id = convo.get("user_id") if isinstance(convo, dict) else None
-            if not u_id:
-                continue
-            tokens = (m.get("tokens_input") or 0) + (m.get("tokens_output") or 0)
-            user_sums[u_id] = user_sums.get(u_id, 0) + tokens
+    if not top_list:
+        # Fallback: Query messages and aggregate in-memory
+        try:
+            res = (
+                db.table("messages")
+                .select("tokens_input, tokens_output, conversations(user_id)")
+                .eq("role", "assistant")
+                .execute()
+            )
+            data = res.data or []
+            user_sums = {}
+            for m in data:
+                convo = m.get("conversations", {})
+                u_id = convo.get("user_id") if isinstance(convo, dict) else None
+                if not u_id:
+                    continue
+                tokens = (m.get("tokens_input") or 0) + (m.get("tokens_output") or 0)
+                user_sums[u_id] = user_sums.get(u_id, 0) + tokens
 
-        # Sort and limit
-        sorted_users = sorted(user_sums.items(), key=lambda x: x[1], reverse=True)[:limit]
+            # Sort and limit
+            sorted_users = sorted(user_sums.items(), key=lambda x: x[1], reverse=True)[:limit]
+            for uid, total in sorted_users:
+                top_list.append({
+                    "user_id": uid,
+                    "total_tokens": total
+                })
+        except Exception as e:
+            logger.error("Failed in-memory fallback for top users: %s", e)
 
-        # Get profiles to resolve names
-        top_list = []
-        if sorted_users:
-            u_ids = [uid for uid, _ in sorted_users]
+    # Always resolve display names and emails for the users in top_list
+    if top_list:
+        try:
+            u_ids = [u["user_id"] for u in top_list]
             profiles_res = db.table("profiles").select("id, display_name").in_("id", u_ids).execute()
             prof_map = {p["id"]: p.get("display_name") for p in (profiles_res.data or [])}
 
-            # Resolve emails using list_users (or just map what we can)
             email_map = {}
             try:
                 auth_users_res = db.auth.admin.list_users()
@@ -264,21 +273,16 @@ def get_top_users(limit: int = 5) -> List[Dict[str, Any]]:
                     if uid and email:
                         email_map[uid] = email
             except Exception as ex:
-                logger.error("Failed to list auth users in top users fallback: %s", ex)
+                logger.error("Failed to list auth users in top users email resolution: %s", ex)
 
-            for uid, total in sorted_users:
-                email = email_map.get(uid) or "unknown@domain.com"
-                display_name = prof_map.get(uid) or email.split("@")[0]
-                top_list.append({
-                    "user_id": uid,
-                    "display_name": display_name,
-                    "email": email,
-                    "total_tokens": total
-                })
-        return top_list
-    except Exception as e:
-        logger.error("Failed in-memory fallback for top users: %s", e)
-        return []
+            for u in top_list:
+                uid = u["user_id"]
+                u["email"] = email_map.get(uid) or u.get("email") or "unknown@domain.com"
+                u["display_name"] = prof_map.get(uid) or u.get("display_name") or u["email"].split("@")[0]
+        except Exception as e:
+            logger.error("Failed to resolve profile names or emails for top users: %s", e)
+
+    return top_list
 
 
 

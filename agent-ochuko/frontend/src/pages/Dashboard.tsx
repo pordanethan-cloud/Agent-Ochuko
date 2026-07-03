@@ -198,6 +198,127 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
   )
 }
 
+const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
+  const [isOpen, setIsOpen] = useState(false)
+
+  // Get unique hosts/domains for the favicons
+  const uniqueHosts = React.useMemo(() => {
+    const hosts: string[] = []
+    const seen = new Set<string>()
+    for (const src of sources) {
+      try {
+        const host = new URL(src.url).hostname
+        if (host && !seen.has(host)) {
+          seen.add(host)
+          hosts.push(host)
+        }
+      } catch (_) {}
+    }
+    return hosts
+  }, [sources])
+
+  const displayedFavicons = uniqueHosts.slice(0, 3)
+
+  return (
+    <div className="mt-3.5 pt-3 border-t border-[#1e2025]/40 px-1 select-none">
+      {/* Clickable Header Stack */}
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-3 cursor-pointer group/stack w-fit"
+      >
+        {/* Overlapping circle stack */}
+        <div className="flex items-center">
+          {displayedFavicons.map((host, idx) => (
+            <div 
+              key={idx}
+              className="w-6 h-6 rounded-full border border-[#1e2025] bg-[#0c0d10] flex items-center justify-center overflow-hidden shrink-0 relative transition-all duration-200 hover:translate-y-[-2px] hover:scale-[1.05] shadow-md shadow-black/40"
+              style={{
+                marginLeft: idx > 0 ? '-10px' : '0px',
+                zIndex: 10 - idx,
+              }}
+            >
+              <img
+                src={`https://www.google.com/s2/favicons?sz=64&domain=${host}`}
+                alt=""
+                className="w-4 h-4 rounded-sm object-contain"
+                onError={(e) => {
+                  const target = e.currentTarget as HTMLImageElement;
+                  if (!target.src.includes('duckduckgo.com')) {
+                    target.src = `https://icons.duckduckgo.com/ip3/${host}.ico`;
+                  } else {
+                    target.style.display = 'none';
+                  }
+                }}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Text and Toggle Indicator */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[12px] font-semibold text-[#8e95a2] group-hover/stack:text-[#f0ece4] transition-colors duration-150">
+            {sources.length} {sources.length === 1 ? 'site' : 'sites'}
+          </span>
+          <span className="text-[#8e95a2]/60 group-hover/stack:text-[#c5a880] transition-colors duration-150">
+            {isOpen ? (
+              <ChevronUp className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5" />
+            )}
+          </span>
+        </div>
+      </div>
+
+      {/* Expanded Grid of Source Cards */}
+      {isOpen && (
+        <div className="flex flex-wrap gap-2 mt-3 animate-fadeIn">
+          {sources.map((src, si) => (
+            <a
+              key={si}
+              href={src.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={src.title || src.url}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#1e2025] bg-[#0c0d10]/95 hover:border-[#c5a880]/30 hover:bg-[#c5a880]/5 transition-all duration-200 group/badge max-w-[240px] shadow-sm animate-fadeIn"
+            >
+              <img
+                src={`https://www.google.com/s2/favicons?sz=32&domain=${(() => {
+                  try {
+                    return new URL(src.url).hostname
+                  } catch (_) {
+                    return ''
+                  }
+                })()}`}
+                alt=""
+                className="w-3.5 h-3.5 rounded-sm shrink-0 opacity-75 group-hover/badge:opacity-100 transition-opacity duration-150"
+                onError={(e) => {
+                  const target = e.currentTarget as HTMLImageElement;
+                  if (!target.src.includes('duckduckgo.com')) {
+                    try {
+                      const domain = new URL(src.url).hostname;
+                      target.src = `https://icons.duckduckgo.com/ip3/${domain}.ico`;
+                    } catch (_) {
+                      target.style.display = 'none';
+                    }
+                  } else {
+                    target.style.display = 'none';
+                  }
+                }}
+              />
+              <span className="text-[10.5px] font-medium text-[#8e95a2] group-hover/badge:text-[#f0ece4] truncate tracking-tight transition-colors duration-150">
+                {src.title || src.url}
+              </span>
+              <span className="text-[9px] text-[#8e95a2]/30 group-hover/badge:text-[#c5a880]/70 shrink-0 transition-all duration-150 translate-y-[0.5px] group-hover/badge:translate-x-0.5 group-hover/badge:-translate-y-0.5">
+                ↗
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface ASTBlock {
   type: 'heading' | 'code' | 'blockquote' | 'table' | 'list' | 'hr' | 'paragraph'
   level?: number
@@ -823,6 +944,7 @@ export const Dashboard: React.FC = () => {
     setActiveConversationId('00000000-0000-0000-0000-000000000000')
     setMode('discuss')
     setIsSidebarOpen(false)
+    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   const handleConfirmDelete = async () => {
@@ -880,11 +1002,13 @@ export const Dashboard: React.FC = () => {
           content: m.content,
           routing_mode: m.routing_mode,
           routing_reason: m.routing_reason,
+          sources: m.content_parts?.sources || undefined,
         }))
         setMessages(mapped)
         setActiveConversationId(id)
         setMode(convoMode)
         setIsSidebarOpen(false)
+        setTimeout(() => inputRef.current?.focus(), 0)
       }
     } catch (e) {
       console.error("Failed to load message history:", e)
@@ -912,6 +1036,7 @@ export const Dashboard: React.FC = () => {
         console.error("Failed to update conversation mode:", e)
       }
     }
+    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   useEffect(() => {
@@ -990,6 +1115,8 @@ export const Dashboard: React.FC = () => {
           conversation_id: overrideConvoId || activeConversationId,
           mode,
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          local_time: new Date().toString(),
         }),
         signal: abortController.signal,
       })
@@ -1289,6 +1416,7 @@ export const Dashboard: React.FC = () => {
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
+      setTimeout(() => inputRef.current?.focus(), 0)
     }
   }
 
@@ -1416,6 +1544,7 @@ export const Dashboard: React.FC = () => {
               })
               setIsStreaming(false)
               channel.unsubscribe()
+              setTimeout(() => inputRef.current?.focus(), 0)
             }
           }
         )
@@ -1441,6 +1570,7 @@ export const Dashboard: React.FC = () => {
         })
         setIsStreaming(false)
         channel.unsubscribe()
+        setTimeout(() => inputRef.current?.focus(), 0)
       }, 90_000)
 
     } catch (err: any) {
@@ -1458,6 +1588,7 @@ export const Dashboard: React.FC = () => {
         return next
       })
       setIsStreaming(false)
+      setTimeout(() => inputRef.current?.focus(), 0)
     }
   }
 
@@ -1468,8 +1599,16 @@ export const Dashboard: React.FC = () => {
     /^\/(search|web|google)\s+/i,
   ]
 
-  const triggerHybridSearch = async (userPrompt: string) => {
-    const nextMessages: Message[] = [...messages, { role: 'user', content: userPrompt }]
+  const triggerHybridSearch = async (userPrompt: string, historyOverride?: Message[]) => {
+    let convoId = activeConversationId
+    const isNewConvo = !convoId || convoId === '00000000-0000-0000-0000-000000000000'
+    if (isNewConvo) {
+      convoId = crypto.randomUUID()
+      setActiveConversationId(convoId)
+    }
+
+    const currentHistory = historyOverride || messages
+    const nextMessages: Message[] = [...currentHistory, { role: 'user', content: userPrompt }]
     setMessages([...nextMessages, { role: 'assistant', content: '' }])
     setIsStreaming(true)
     setWebSearchStatus('searching')
@@ -1477,7 +1616,41 @@ export const Dashboard: React.FC = () => {
     try {
       const session = await supabase.auth.getSession()
       const token = session.data.session?.access_token
+      const userId = session.data.session?.user?.id
       if (!token) throw new Error('Authentication session not found.')
+
+      if (isNewConvo && userId) {
+        try {
+          const title = userPrompt.slice(0, 30) + (userPrompt.length > 30 ? '...' : '')
+          await supabase.from('conversations').insert([
+            {
+              id: convoId,
+              user_id: userId,
+              title: title,
+              mode: mode,
+              agent_type: 'chat',
+            }
+          ])
+          fetchConversations()
+        } catch (dbErr) {
+          console.error('Failed to create new conversation for search:', dbErr)
+        }
+      }
+
+      // Save user message to database
+      if (userId) {
+        try {
+          await supabase.from('messages').insert([
+            {
+              conversation_id: convoId,
+              role: 'user',
+              content: userPrompt,
+            }
+          ])
+        } catch (dbErr) {
+          console.error('Failed to save user search message to DB:', dbErr)
+        }
+      }
 
       const res = await fetch(`${API_BASE}/v1/search/ask-hybrid`, {
         method: 'POST',
@@ -1485,7 +1658,12 @@ export const Dashboard: React.FC = () => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ prompt: userPrompt }),
+        body: JSON.stringify({
+          prompt: userPrompt,
+          conversation_id: convoId,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          local_time: new Date().toString(),
+        }),
       })
 
       setWebSearchStatus('done')
@@ -1509,6 +1687,24 @@ export const Dashboard: React.FC = () => {
         }
         return updated
       })
+
+      // Save assistant response to database
+      if (userId) {
+        try {
+          await supabase.from('messages').insert([
+            {
+              conversation_id: convoId,
+              role: 'assistant',
+              content: answer,
+              routing_mode: 'solve',
+              routing_reason: 'Hybrid Search Engine Response',
+              content_parts: sources.length > 0 ? { sources } : null,
+            }
+          ])
+        } catch (dbErr) {
+          console.error('Failed to save assistant search response to DB:', dbErr)
+        }
+      }
     } catch (err: any) {
       setWebSearchStatus('idle')
       const explanation = getFriendlyErrorMessage(err.message || 'unknown')
@@ -1526,7 +1722,27 @@ export const Dashboard: React.FC = () => {
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (isStreaming || uploading) return
+    if (uploading) return
+
+    let historyClean = messages
+    if (isStreaming) {
+      // Abort active stream
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+      const lastMsg = messages[messages.length - 1]
+      if (lastMsg && lastMsg.role === 'assistant') {
+        if (lastMsg.content.length > 0) {
+          historyClean = [
+            ...messages.slice(0, -1),
+            { ...lastMsg, content: lastMsg.content + '\n\n*— stopped —*' }
+          ]
+        } else {
+          historyClean = messages.slice(0, -1)
+        }
+      }
+      setMessages(historyClean)
+    }
 
     if (attachedFile) {
       const isPdf = attachedFile.type === 'application/pdf' || attachedFile.name.toLowerCase().endsWith('.pdf')
@@ -1554,11 +1770,11 @@ export const Dashboard: React.FC = () => {
 
     // Route to hybrid search if the message matches a web-search intent pattern
     if (SEARCH_INTENT_PATTERNS.some((p) => p.test(userMessage))) {
-      await triggerHybridSearch(userMessage)
+      await triggerHybridSearch(userMessage, historyClean)
       return
     }
 
-    await triggerStream(messages, userMessage)
+    await triggerStream(historyClean, userMessage)
   }
 
   const handleEditSubmit = async (index: number) => {
@@ -1903,38 +2119,9 @@ export const Dashboard: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Source badges — shown below assistant bubbles when hybrid search is used */}
+                    {/* Overlapping Sources Stack */}
                     {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-1 px-1">
-                        {msg.sources.map((src, si) => (
-                          <a
-                            key={si}
-                            href={src.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={src.url}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[#1e2025] bg-[#0d0f11]/80 hover:border-[#c5a880]/40 hover:bg-[#c5a880]/5 transition-all duration-150 group/badge max-w-[220px]"
-                          >
-                            {/* Favicon */}
-                            <img
-                              src={`https://www.google.com/s2/favicons?sz=16&domain=${(() => {
-                                try {
-                                  return new URL(src.url).hostname
-                                } catch (_) {
-                                  return ''
-                                }
-                              })()}`}
-                              alt=""
-                              className="w-3 h-3 rounded-sm shrink-0 opacity-70 group-hover/badge:opacity-100"
-                              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
-                            />
-                            <span className="text-[10px] font-semibold text-[#8e95a2] group-hover/badge:text-[#c5a880] truncate tracking-tight transition-colors duration-150">
-                              {src.title.length > 28 ? src.title.slice(0, 28) + '…' : src.title}
-                            </span>
-                            <span className="text-[9px] text-[#8e95a2]/40 group-hover/badge:text-[#c5a880]/50 shrink-0 transition-colors duration-150">↗</span>
-                          </a>
-                        ))}
-                      </div>
+                      <SourcesStack sources={msg.sources} />
                     )}
 
                     {/* Actions Row at the bottom (outside the bubble), visible on hover */}
@@ -2148,10 +2335,9 @@ export const Dashboard: React.FC = () => {
                   // User manually edited — detach from live transcript
                   if (voice.isRecording) voice.clearTranscript()
                 }}
-                disabled={isStreaming || uploading}
+                disabled={uploading}
                 placeholder={
                   voice.isRecording ? 'Listening...' :
-                  isStreaming ? 'Agent is thinking...' :
                   attachedFile ? 'Add prompt details for the agent...' :
                   pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
                 }
@@ -2175,27 +2361,26 @@ export const Dashboard: React.FC = () => {
               </button>
             </div>
 
-            {isStreaming ? (
-              // Stop button — aborts the active model stream only, not Azure background jobs
+            {isStreaming && (
               <button
                 type="button"
                 onClick={handleStop}
                 aria-label="Stop generation"
                 title="Stop generation"
-                className="w-12 h-12 bg-[#1a1c20] border border-[#2b2e35] text-[#c5a880] rounded-xl flex items-center justify-center hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition duration-150 active:scale-95 shadow-md shrink-0 group"
+                className="w-12 h-12 bg-[#1a1c20] border border-[#2b2e35] text-red-400 rounded-xl flex items-center justify-center hover:bg-red-950/15 hover:border-red-900/30 transition duration-150 active:scale-95 shadow-md shrink-0 group"
               >
-                <Square className="w-[14px] h-[14px] fill-[#c5a880] group-hover:fill-[#d4b990] transition duration-150" />
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={uploading || (!input.trim() && !attachedFile && !pastedText)}
-                aria-label="Send"
-                className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
-              >
-                <Send className="w-4 h-4" />
+                <Square className="w-[14px] h-[14px] fill-red-400 group-hover:fill-red-300 transition duration-150" />
               </button>
             )}
+
+            <button
+              type="submit"
+              disabled={uploading || (!input.trim() && !attachedFile && !pastedText)}
+              aria-label="Send"
+              className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
+            >
+              <Send className="w-4 h-4" />
+            </button>
 
             <input
               ref={fileInputRef}

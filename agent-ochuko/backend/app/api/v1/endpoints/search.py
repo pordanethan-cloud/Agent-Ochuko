@@ -1,26 +1,19 @@
 # app/api/v1/endpoints/search.py
 """
-Hybrid Search Engine endpoint.
+Grounded Search Engine endpoint.
 
-Reference architecture (two-phase multi-cloud):
-  Phase 1 — Google Retrieval
-    Gemini 2.5 Flash + google_search tool fetches real-time web snippets
-    and source metadata. Gemini is used ONLY for retrieval.
-
-  Phase 2 — Azure Synthesis
-    Raw Google context is injected into the Azure OpenAI Responses API
-    (async) for accurate, enterprise-grade synthesis. Azure reasons;
-    Gemini retrieves.
+Uses Gemini 2.5 Flash for both web search retrieval and synthesis to provide
+a unified, low-latency grounded search experience.
 
 Route: POST /v1/search/ask-hybrid
 Auth:  Requires a valid JWT (same guard as the chat endpoints).
 """
 
 import os
-import asyncio
+import re
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -30,35 +23,6 @@ from app.core.jwt_validator import verify_jwt
 logger = logging.getLogger("app.api.v1.endpoints.search")
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
-# Lazy-initialised async Azure client
-# ---------------------------------------------------------------------------
-_azure_async_client = None
-
-
-def _get_azure_async_client():
-    """Return a cached AsyncAzureOpenAI client, initialised on first call."""
-    global _azure_async_client
-    if _azure_async_client is None:
-        from openai import AsyncAzureOpenAI
-
-        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-03-01-preview")
-
-        if not endpoint or not api_key:
-            raise HTTPException(
-                status_code=500,
-                detail="Azure OpenAI credentials are not configured on this server.",
-            )
-        _azure_async_client = AsyncAzureOpenAI(
-            azure_endpoint=endpoint,
-            api_key=api_key,
-            api_version=api_version,
-        )
-        logger.info("AsyncAzureOpenAI client initialised for hybrid search.")
-    return _azure_async_client
-
 
 # ---------------------------------------------------------------------------
 # Request / Response models
@@ -66,6 +30,9 @@ def _get_azure_async_client():
 
 class HybridSearchRequest(BaseModel):
     prompt: str
+    conversation_id: Optional[str] = None  # Accept conversation_id to carry history context
+    timezone: Optional[str] = None
+    local_time: Optional[str] = None
 
 
 class Source(BaseModel):
@@ -81,192 +48,173 @@ class HybridSearchResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sanitization Helper
+# ---------------------------------------------------------------------------
+
+def sanitize_text(text: str) -> str:
+    """Censors Google, Gemini, and search engine references to preserve Ochuko identity."""
+    if not text:
+        return ""
+    text = re.sub(r'\bGoogle\s+Search\b', 'Web Search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bGoogle\b', 'Ochuko', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bGemini\b', 'Ochuko', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bgoogle-genai\b', 'Ochuko-engine', text, flags=re.IGNORECASE)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
 
 @router.post(
     "/ask-hybrid",
     response_model=HybridSearchResponse,
-    summary="Google-grounded + Azure-synthesised answer",
-    description=(
-        "Phase 1: Retrieves live web context via Google Gemini grounding. "
-        "Phase 2: Synthesises a cited answer using Azure OpenAI Responses API."
-    ),
+    summary="Grounded search answer",
+    description="Retrieves live web context and synthesises a cited answer using Gemini 2.5 Flash with search grounding.",
 )
 async def ask_hybrid_engine(
     query: HybridSearchRequest,
     user: Dict[str, Any] = Depends(verify_jwt),
-):
+) -> HybridSearchResponse:
     """
-    Two-phase hybrid search.
-
-    Phase 1 — Google Retrieval (Gemini 2.5 Flash, sync SDK run in asyncio thread)
-      Triggers the google_search grounding tool to pull live web snippets and
-      source metadata. Temperature 0.1 for faithful retrieval, not creativity.
-
-    Phase 2 — Azure Synthesis (AsyncAzureOpenAI Responses API, fully async)
-      Raw Google context is packaged into the system prompt and forwarded to
-      the configured Azure OpenAI deployment for structured, cited synthesis.
+    Unified Grounded Search using Gemini.
+    - Loads database conversation history context.
+    - Runs a single generation call on Gemini 2.5 Flash with search grounding tool.
+    - Sanitizes any Google/Gemini branding from the response.
     """
+    from google import genai                          # type: ignore[import]
+    from google.genai import types as genai_types    # type: ignore[import]
+    from app.api.v1.endpoints.chat import _OCHUKO_RULE, build_llm_context
 
-    # ── Phase 1: Google Grounding (async) ────────────────────────────────────
-    async def _google_retrieval_phase():
-        from google import genai                          # type: ignore[import]
-        from google.genai import types as genai_types    # type: ignore[import]
+    # 1. Load conversation history context from Supabase
+    db_messages = []
+    if query.conversation_id and query.conversation_id != "00000000-0000-0000-0000-000000000000":
+        try:
+            db_messages = await build_llm_context(query.conversation_id)
+        except Exception as db_err:
+            logger.error("Failed to load conversation history for search: %s", db_err)
 
-        keys = []
-        for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
-            key = os.getenv(var_name)
-            if key and key.strip() and key not in keys:
-                keys.append(key.strip())
+    # 2. Build system instructions (Ochuko identity + environmental context)
+    ref_time = query.local_time if query.local_time else datetime.now(timezone.utc).strftime("%A, %B %d, %Y %I:%M:%S %p")
+    ref_zone = query.timezone if query.timezone else "UTC"
+
+    time_context = (
+        f"\n\n--- USER TIME & ENVIRONMENT CONTEXT ---\n"
+        f"User Local Time: {ref_time}\n"
+        f"User Timezone: {ref_zone}\n"
+        "Align all temporal terms ('today', 'yesterday', 'tomorrow', 'tonight') with this local timeframe.\n"
+        "--- END CONTEXT ---\n\n"
+    )
+
+    system_instruction = (
+        _OCHUKO_RULE + time_context +
+        "You are Ochuko, an elite AI assistant. "
+        "Use the Google Search tool to find real-time information to answer the user's query. "
+        "Strictly do NOT mention Google, Gemini, Alphabet, or google-genai in your output. "
+        "Do not say 'According to my search' or 'Google Search shows'. "
+        "Just answer the question directly and naturally, citing your sources in your response. "
+        "Your tone must be Ochuko's tone (confident, crisp, authoritative, direct, and in control)."
+    )
+
+    # 3. Load Gemini API keys (round-robin)
+    keys = []
+    for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
+        key = os.getenv(var_name)
+        if key and key.strip() and key not in keys:
+            keys.append(key.strip())
+    
+    if not keys:
+        raise HTTPException(status_code=500, detail="No Gemini API keys configured in environment.")
+
+    last_exc = None
+    for idx, key in enumerate(keys):
+        # Temporarily adjust env variables to force Google GenAI SDK to use this specific key
+        orig_gemini = os.environ.get("GEMINI_API_KEY")
+        orig_google = os.environ.get("GOOGLE_API_KEY")
         
-        if not keys:
-            raise RuntimeError("No Google/Gemini API keys configured in environment.")
+        os.environ["GEMINI_API_KEY"] = key
+        if "GOOGLE_API_KEY" in os.environ:
+            del os.environ["GOOGLE_API_KEY"]
 
-        last_exc = None
-        for idx, key in enumerate(keys):
-            # Temporarily adjust env variables to force Google GenAI SDK to use this specific key
-            orig_gemini = os.environ.get("GEMINI_API_KEY")
-            orig_google = os.environ.get("GOOGLE_API_KEY")
+        try:
+            g_client = genai.Client()
             
-            os.environ["GEMINI_API_KEY"] = key
-            if "GOOGLE_API_KEY" in os.environ:
-                del os.environ["GOOGLE_API_KEY"]
+            # Format history for Gemini API
+            contents = []
+            for msg in db_messages:
+                role = "user" if msg.get("role") == "user" else "model"
+                contents.append({
+                    "role": role,
+                    "parts": [{"text": msg.get("content", "")}]
+                })
+            
+            # Add latest user message
+            contents.append({
+                "role": "user",
+                "parts": [{"text": query.prompt}]
+            })
 
-            try:
-                g_client = genai.Client()
-                current_date_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
-                augmented_prompt = (
-                    f"Search Google for current, real-time information regarding: {query.prompt}\n"
-                    f"Context: Today's date is {current_date_str}. "
-                    "Ensure your search queries target this exact timeframe if the query refers to recent, today's, or yesterday's events."
-                )
-                g_response = await g_client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=augmented_prompt,
-                    config=genai_types.GenerateContentConfig(
-                        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                        temperature=0.1,
-                    ),
-                )
+            # Run generation and grounding together
+            g_response = await g_client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                    temperature=0.2,
+                ),
+            )
 
-                search_chunks: list[str] = []
-                sources: list[Source] = []
-                seen_urls: set[str] = set()
+            # Parse grounding sources
+            sources: list[Source] = []
+            seen_urls: set[str] = set()
+            google_context = ""
 
-                if g_response.candidates and g_response.candidates[0].grounding_metadata:
-                    metadata = g_response.candidates[0].grounding_metadata
+            if g_response.candidates and g_response.candidates[0].grounding_metadata:
+                metadata = g_response.candidates[0].grounding_metadata
 
-                    # Map grounding_chunk index -> real text snippet from grounding_supports
-                    snippet_map: dict[int, str] = {}
-                    for support in (getattr(metadata, "grounding_supports", []) or []):
-                        segment = getattr(support, "segment", None)
-                        text = (getattr(segment, "text", "") or "").strip()
-                        for idx_chunk in (getattr(support, "grounding_chunk_indices", []) or []):
-                            if idx_chunk not in snippet_map and text:
-                                snippet_map[idx_chunk] = text
-
-                    # Build formatted context block + deduplicated source list
-                    for i, chunk in enumerate(getattr(metadata, "grounding_chunks", []) or []):
-                        web = getattr(chunk, "web", None)
-                        if web:
-                            url = getattr(web, "uri", "") or ""
-                            title = getattr(web, "title", "") or url
-                            snippet = snippet_map.get(i, title)
-
-                            if snippet:
-                                search_chunks.append(
-                                    f"Source [{i + 1}]: {title}\n"
-                                    f"URL: {url}\n"
-                                    f"Snippet: {snippet}"
-                                )
-
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
+                for chunk in (getattr(metadata, "grounding_chunks", []) or []):
+                    web = getattr(chunk, "web", None)
+                    if web:
+                        url = getattr(web, "uri", "") or ""
+                        title = getattr(web, "title", "") or url
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            # Do not add direct google search query/result pages as citations
+                            if "google.com/search" not in url.lower():
                                 sources.append(Source(title=title, url=url))
 
-                google_context = (
-                    "\n\n".join(search_chunks) if search_chunks else "No live web results retrieved."
-                )
-                return google_context, sources
-            except Exception as e:
-                logger.warning("Google search failed with key index %d in ask-hybrid: %s", idx, e)
-                last_exc = e
-                continue
-            finally:
-                # Restore original env variables
-                if orig_gemini is not None:
-                    os.environ["GEMINI_API_KEY"] = orig_gemini
-                else:
-                    os.environ.pop("GEMINI_API_KEY", None)
-                if orig_google is not None:
-                    os.environ["GOOGLE_API_KEY"] = orig_google
+                # Collect snippet details for logs
+                search_chunks = []
+                for i, chunk in enumerate(getattr(metadata, "grounding_chunks", []) or []):
+                    web = getattr(chunk, "web", None)
+                    if web:
+                        search_chunks.append(f"Source [{i + 1}]: {getattr(web, 'title', '')}\nURL: {getattr(web, 'uri', '')}")
+                google_context = "\n".join(search_chunks)
 
-        raise last_exc or RuntimeError("All Gemini API keys failed.")
+            answer = g_response.text or ""
+            sanitized_answer = sanitize_text(answer)
 
-    try:
-        google_context, sources = await _google_retrieval_phase()
-    except Exception as exc:
-        import traceback
-        print("--- SEARCH ENDPOINT GOOGLE RETRIEVAL PHASE ERROR (FALLBACK TO AZURE KNOWLEDGE) ---")
-        traceback.print_exc()
-        print("----------------------------------------------------------------------------------")
-        logger.warning("Google search retrieval failed, falling back to Azure: %s", exc)
-        google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
-        sources = []
+            logger.info("Grounded search completed. query=%.60s sources=%d", query.prompt, len(sources))
 
-    logger.info(
-        "Google grounding: %d sources for query: %.60s", len(sources), query.prompt
-    )
+            return HybridSearchResponse(
+                status="success",
+                answer=sanitized_answer,
+                sources=sources,
+                raw_google_context_used=google_context or "No search context details available.",
+            )
 
-    # ── Phase 2: Azure OpenAI Responses API Synthesis (async) ───────────────
-    deployment = (
-        os.getenv("SOLVE_MODEL_DEPLOYMENT")
-        or os.getenv("AZURE_DEPLOYMENT_NAME")
-        or os.getenv("THINK_MODEL_DEPLOYMENT")
-        or "gpt-4o"
-    )
+        except Exception as e:
+            logger.warning("Gemini grounded search failed with key index %d: %s", idx, e)
+            last_exc = e
+            continue
+        finally:
+            # Restore original env variables
+            if orig_gemini is not None:
+                os.environ["GEMINI_API_KEY"] = orig_gemini
+            else:
+                os.environ.pop("GEMINI_API_KEY", None)
+            if orig_google is not None:
+                os.environ["GOOGLE_API_KEY"] = orig_google
 
-    system_prompt = (
-        "You are Ochuko — an elite enterprise AI assistant built on Azure. "
-        "Answer the user's question accurately and professionally. "
-        "Use the real-time web context below, retrieved directly from Google Search, "
-        "to ground your response. Cite sources when referencing specific facts. "
-        "Use plain text only — no emoji.\n\n"
-        "--- GOOGLE LIVE WEB CONTEXT ---\n"
-        f"{google_context}\n"
-        "--- END CONTEXT ---"
-    )
-
-    try:
-        azure_client = _get_azure_async_client()
-        az_response = await azure_client.responses.create(
-            model=deployment,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query.prompt},
-            ],
-        )
-        answer: str = az_response.output_text or ""
-    except HTTPException:
-        raise
-    except Exception as exc:
-        import traceback
-        print("--- SEARCH ENDPOINT AZURE SYNTHESIS PHASE ERROR ---")
-        traceback.print_exc()
-        print("---------------------------------------------------")
-        logger.error("Azure OpenAI synthesis failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Azure OpenAI synthesis failed: {exc}")
-
-    logger.info(
-        "Hybrid search completed for user %s — deployment=%s, sources=%d",
-        user.get("sub", "unknown"), deployment, len(sources),
-    )
-
-    return HybridSearchResponse(
-        status="success",
-        answer=answer,
-        sources=sources,
-        raw_google_context_used=google_context,
-    )
-
+    raise HTTPException(status_code=502, detail=f"Grounded search failed: {str(last_exc)}")

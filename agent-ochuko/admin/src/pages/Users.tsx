@@ -129,8 +129,41 @@ export function Users() {
   const fmt = (date: string | null) =>
     date ? new Date(date).toLocaleDateString() : "—";
 
-  const fmtDateTime = (date: string | null) =>
-    date ? new Date(date).toLocaleString() : "—";
+  const renderLastSeen = (lastSeenStr: string | null) => {
+    if (!lastSeenStr) return <span className="text-slate-500">—</span>;
+    const lastSeen = new Date(lastSeenStr);
+    const now = new Date();
+    const diffMs = now.getTime() - lastSeen.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 5) {
+      return (
+        <div className="flex items-center gap-1.5 text-green-400 font-medium select-none">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500"></span>
+          </span>
+          Active Now
+        </div>
+      );
+    }
+
+    if (diffMins < 60) {
+      return <span className="text-slate-300">{diffMins}m ago</span>;
+    }
+
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) {
+      return <span className="text-slate-300">{diffHours}h ago</span>;
+    }
+
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) {
+      return <span className="text-slate-400">{diffDays}d ago</span>;
+    }
+
+    return <span className="text-slate-400">{lastSeen.toLocaleDateString()}</span>;
+  };
 
   return (
     <div className="p-6">
@@ -248,7 +281,7 @@ export function Users() {
                     <td className="px-4 py-3 text-slate-300">
                       {(u.agent_calls_this_month ?? 0).toLocaleString()}
                     </td>
-                    <td className="px-4 py-3 text-slate-400">{fmtDateTime(u.last_seen)}</td>
+                    <td className="px-4 py-3">{renderLastSeen(u.last_seen)}</td>
                     <td className="px-4 py-3 text-slate-400">{fmt(u.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">

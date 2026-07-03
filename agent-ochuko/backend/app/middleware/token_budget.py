@@ -5,21 +5,13 @@ Token Budget Middleware.
 Enforces daily per-user token budgets on chat endpoints (/v1/responses/stream).
 Uses an atomic UPDATE with RETURNING to prevent race conditions under concurrent requests.
 
-Flow:
-  1. ensure_budget_row(user_id) — creates today's row if missing (inherits custom limits)
-  2. Estimate tokens from message length (rough heuristic: 1 token ≈ 4 chars)
-  3. Atomic pre-deduction:
-       UPDATE token_budgets
-       SET tokens_used = tokens_used + :estimated
-       WHERE user_id = :uid AND period = CURRENT_DATE
-         AND tokens_used + :estimated <= budget_limit
-       RETURNING tokens_used;
-  4. If 0 rows returned → budget exhausted → 429
-  5. After stream completes: reconcile with actual token counts (handled in chat.py)
+Optimised with in-memory caching to skip daily ensure_budget_row checks on warm hits.
 """
 
 import logging
 import os
+import threading
+from datetime import date
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -38,6 +30,12 @@ def _get_supabase():
         if url and key:
             _supabase = create_client(url, key)
     return _supabase
+
+
+# Thread-safe in-memory cache of user daily budget row checks
+_lock = threading.Lock()
+# Maps user_id -> date when ensure_budget_row was last executed
+_ENSURED_BUDGET_ROWS = {}
 
 
 def _estimate_tokens(messages: list) -> int:
@@ -68,11 +66,17 @@ class TokenBudgetMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         try:
-            # 1. Ensure budget row exists for today
-            db.rpc("ensure_budget_row", {"p_user_id": user_id}).execute()
+            # 1. Ensure budget row exists for today (cached per user per day)
+            today = date.today()
+            with _lock:
+                last_ensured_date = _ENSURED_BUDGET_ROWS.get(user_id)
+
+            if last_ensured_date != today:
+                db.rpc("ensure_budget_row", {"p_user_id": user_id}).execute()
+                with _lock:
+                    _ENSURED_BUDGET_ROWS[user_id] = today
 
             # 2. Read the body to estimate tokens (cache for downstream)
-            # Note: We read the raw body and re-attach it for downstream handlers
             body = await request.body()
 
             import json as _json

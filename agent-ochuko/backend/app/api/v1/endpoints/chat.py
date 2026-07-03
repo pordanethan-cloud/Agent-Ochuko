@@ -62,154 +62,106 @@ def get_openai_client() -> AsyncAzureOpenAI:
     return _openai_client
 
 
-async def _perform_google_search(query: str, synthesis_deployment: str = "") -> Dict[str, Any]:
+async def _perform_google_search(
+    query: str, 
+    synthesis_deployment: str = "",
+    local_time: Optional[str] = None,
+    timezone: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Two-phase multi-cloud hybrid search (reference architecture):
-
-    Phase 1 — Google Retrieval (Gemini 2.5 Flash, google-genai SDK)
-        Triggers the Google Search grounding tool to pull live web snippets
-        and source metadata. Gemini is used ONLY for retrieval — it is the
-        lightest, fastest path to real-time Google results.
-
-    Phase 2 — Azure Synthesis (Azure OpenAI Responses API, async)
-        The raw Google context is packaged into a system prompt and forwarded
-        to the Azure OpenAI deployment for accurate, structured synthesis.
-        Azure reasons over the live data; Gemini retrieves it.
-
-    Returns { "answer": str, "sources": [{"title": str, "url": str}] }
+    Retrieves live web context and synthesises a cited answer using Gemini 2.5 Flash.
+    Strictly follows the Ochuko system rules and censors search branding.
     """
-    # ── Phase 1: Google Grounding via Gemini 2.5 Flash (async) ────────────
-    async def _google_retrieval_phase() -> tuple:
-        keys = []
-        for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
-            key = os.getenv(var_name)
-            if key and key.strip() and key not in keys:
-                keys.append(key.strip())
+    keys = []
+    for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
+        key = os.getenv(var_name)
+        if key and key.strip() and key not in keys:
+            keys.append(key.strip())
+    
+    if not keys:
+        raise RuntimeError("No Google/Gemini API keys configured in environment.")
+
+    ref_time = local_time if local_time else datetime.now(timezone.utc).strftime("%A, %B %d, %Y %I:%M:%S %p")
+    ref_zone = timezone if timezone else "UTC"
+
+    # Build system instruction (Ochuko rules)
+    system_instruction = (
+        _OCHUKO_RULE +
+        f"\n\n--- USER TIME & ENVIRONMENT CONTEXT ---\n"
+        f"User Local Time: {ref_time}\n"
+        f"User Timezone: {ref_zone}\n"
+        "Align all temporal terms ('today', 'yesterday', 'tomorrow', 'tonight') with this local timeframe.\n"
+        "--- END CONTEXT ---\n\n"
+        "You are Ochuko, an elite AI assistant. "
+        "Use the Google Search tool to find real-time information to answer the user's query. "
+        "Strictly do NOT mention Google, Gemini, Alphabet, or google-genai in your output. "
+        "Do not say 'According to my search' or 'Google Search shows'. "
+        "Just answer the question directly and naturally, citing your sources in your response. "
+        "Your tone must be Ochuko's tone (confident, crisp, authoritative, direct, and in control)."
+    )
+
+    last_exc = None
+    for idx, key in enumerate(keys):
+        orig_gemini = os.environ.get("GEMINI_API_KEY")
+        orig_google = os.environ.get("GOOGLE_API_KEY")
         
-        if not keys:
-            raise RuntimeError("No Google/Gemini API keys configured in environment.")
+        os.environ["GEMINI_API_KEY"] = key
+        if "GOOGLE_API_KEY" in os.environ:
+            del os.environ["GOOGLE_API_KEY"]
 
-        last_exc = None
-        for idx, key in enumerate(keys):
-            # Temporarily adjust env variables to force Google GenAI SDK to use this specific key
-            orig_gemini = os.environ.get("GEMINI_API_KEY")
-            orig_google = os.environ.get("GOOGLE_API_KEY")
-            
-            os.environ["GEMINI_API_KEY"] = key
-            if "GOOGLE_API_KEY" in os.environ:
-                del os.environ["GOOGLE_API_KEY"]
+        try:
+            g_client = genai.Client()
+            g_response = await g_client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=query,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                    temperature=0.2,
+                ),
+            )
 
-            try:
-                g_client = genai.Client()
-                current_date_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
-                augmented_query = (
-                    f"Search Google for current, real-time information regarding: {query}\n"
-                    f"Context: Today's date is {current_date_str}. "
-                    "Ensure your search queries target this exact timeframe if the query refers to recent, today's, or yesterday's events."
-                )
-                g_response = await g_client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=augmented_query,
-                    config=genai_types.GenerateContentConfig(
-                        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                        temperature=0.1,  # near-zero: we want faithful retrieval, not creativity
-                    ),
-                )
-
-                search_chunks: List[str] = []
-                sources: List[Dict[str, str]] = []
-                seen_urls: set = set()
-
-                if g_response.candidates and g_response.candidates[0].grounding_metadata:
-                    metadata = g_response.candidates[0].grounding_metadata
-
-                    # Build deduplicated source list from grounding_chunks
-                    for chunk in (getattr(metadata, "grounding_chunks", []) or []):
-                        web = getattr(chunk, "web", None)
-                        if web:
-                            url = getattr(web, "uri", "") or ""
-                            title = getattr(web, "title", "") or url
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
+            sources = []
+            seen_urls = set()
+            if g_response.candidates and g_response.candidates[0].grounding_metadata:
+                metadata = g_response.candidates[0].grounding_metadata
+                for chunk in (getattr(metadata, "grounding_chunks", []) or []):
+                    web = getattr(chunk, "web", None)
+                    if web:
+                        url = getattr(web, "uri", "") or ""
+                        title = getattr(web, "title", "") or url
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            if "google.com/search" not in url.lower():
                                 sources.append({"title": title, "url": url})
 
-                    # Extract actual text segments from grounding_supports (preferred)
-                    for support in (getattr(metadata, "grounding_supports", []) or []):
-                        segment = getattr(support, "segment", None)
-                        text = (getattr(segment, "text", "") or "").strip()
-                        if text:
-                            search_chunks.append(text)
+            answer = g_response.text or ""
 
-                # Fallback: if grounding_supports is empty, format source titles as context
-                if not search_chunks and sources:
-                    for s in sources[:6]:
-                        search_chunks.append(f"Source: {s['title']}\nURL: {s['url']}")
+            # Sanitize text to remove Google/Gemini branding
+            import re
+            def sanitize_text(text: str) -> str:
+                if not text:
+                    return ""
+                text = re.sub(r'\bGoogle\s+Search\b', 'Web Search', text, flags=re.IGNORECASE)
+                text = re.sub(r'\bGoogle\b', 'Ochuko', text, flags=re.IGNORECASE)
+                text = re.sub(r'\bGemini\b', 'Ochuko', text, flags=re.IGNORECASE)
+                text = re.sub(r'\bgoogle-genai\b', 'Ochuko-engine', text, flags=re.IGNORECASE)
+                return text
 
-                google_context = "\n\n".join(search_chunks[:14]) if search_chunks else "No live web results found."
-                return google_context, sources[:8]
-            except Exception as e:
-                logger.warning("Google search failed with key index %d: %s", idx, e)
-                last_exc = e
-                continue
-            finally:
-                # Restore original env variables
-                if orig_gemini is not None:
-                    os.environ["GEMINI_API_KEY"] = orig_gemini
-                else:
-                    os.environ.pop("GEMINI_API_KEY", None)
-                if orig_google is not None:
-                    os.environ["GOOGLE_API_KEY"] = orig_google
+            return {"answer": sanitize_text(answer), "sources": sources[:8]}
+        except Exception as e:
+            logger.warning("Google search failed with key index %d: %s", idx, e)
+            last_exc = e
+            continue
+        finally:
+            if orig_gemini is not None:
+                os.environ["GEMINI_API_KEY"] = orig_gemini
+            else:
+                os.environ.pop("GEMINI_API_KEY", None)
+            if orig_google is not None:
+                os.environ["GOOGLE_API_KEY"] = orig_google
 
-        raise last_exc or RuntimeError("All Gemini API keys failed.")
-
-    try:
-        google_context, sources = await _google_retrieval_phase()
-    except Exception as e:
-        import traceback
-        print("--- CHAT GOOGLE RETRIEVAL PHASE ERROR (FALLBACK TO AZURE KNOWLEDGE) ---")
-        traceback.print_exc()
-        print("------------------------------------------------------------------------")
-        logger.warning("Google search retrieval failed, falling back to Azure: %s", e)
-        google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
-        sources = []
-
-    # ── Phase 2: Azure OpenAI Responses API Synthesis (async) ─────────────
-    # The Google context is injected into the system prompt so Azure OpenAI
-    # synthesises a grounded, cited answer — never raw Gemini output.
-    deploy = (
-        synthesis_deployment
-        or os.getenv("SOLVE_MODEL_DEPLOYMENT")
-        or os.getenv("AZURE_OPENAI_SOLVE_DEPLOYMENT")
-        or "gpt-4o-mini"
-    )
-
-    system_prompt = (
-        "You are an elite enterprise AI assistant. "
-        "Answer the user's question accurately using the real-time web context below, "
-        "retrieved directly from Google Search. Cite sources when referencing specific facts.\n\n"
-        "--- GOOGLE LIVE WEB CONTEXT ---\n"
-        f"{google_context}\n"
-        "--- END CONTEXT ---"
-    )
-
-    try:
-        az_client = get_openai_client()
-        az_response = await az_client.responses.create(
-            model=deploy,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
-        )
-
-        answer: str = az_response.output_text or ""
-        return {"answer": answer, "sources": sources}
-    except Exception as e:
-        import traceback
-        print("--- CHAT AZURE SYNTHESIS PHASE ERROR ---")
-        traceback.print_exc()
-        print("-----------------------------------------")
-        raise
+    raise last_exc or RuntimeError("All Gemini API keys failed.")
 
 
 async def _enqueue_image_gen(user_id: str, conversation_id: str, prompt: str, style: str = "") -> str:
@@ -291,6 +243,8 @@ async def chat_stream_generator(
     mode: str,
     estimated_tokens: int,
     previous_response_id: Optional[str] = None,
+    timezone: Optional[str] = None,
+    local_time: Optional[str] = None,
 ):
     """
     Streams a response from the Azure OpenAI Responses API (ADR-002).
@@ -332,33 +286,24 @@ async def chat_stream_generator(
     )
 
     try:
+        # Prepend user datetime & timezone context if available
+        time_context = ""
+        if local_time:
+            time_context = (
+                f"\n\n--- USER TIME & ENVIRONMENT CONTEXT ---\n"
+                f"User Local Time: {local_time}\n"
+                f"User Timezone: {timezone or 'UTC'}\n"
+                "Align all temporal terms ('today', 'yesterday', 'tomorrow', 'tonight') with this local timeframe.\n"
+                "--- END CONTEXT ---\n\n"
+            )
+
         # Prepend the absolute Ochuko identity and no-emoji rule to every system prompt
-        full_system = _OCHUKO_RULE + system_prompt
+        full_system = _OCHUKO_RULE + time_context + system_prompt
 
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
             # Tools the model may call autonomously during the conversation
             "tools": [
-                # Google-powered web search — AI calls this instead of Azure/Bing
-                {
-                    "type": "function",
-                    "name": "search_web",
-                    "description": (
-                        "Search the web using Google for current, real-time information. "
-                        "Call this whenever the user asks about recent events, news, prices, "
-                        "people, weather, or anything that requires up-to-date knowledge."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "The precise search query to submit to Google",
-                            }
-                        },
-                        "required": ["query"],
-                    },
-                },
                 # Image generation — AI calls this when the user wants a visual
                 {
                     "type": "function",
@@ -384,6 +329,25 @@ async def chat_stream_generator(
                         "required": ["prompt"],
                     },
                 },
+                # Web search — AI calls this when the user asks about real-time, current info
+                {
+                    "type": "function",
+                    "name": "search_web",
+                    "description": (
+                        "Search the web for real-time, current information, news, live sports scores, "
+                        "weather, or events that happened after your knowledge cutoff."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query to look up on the web",
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                },
             ],
             "tool_choice": "auto",
         }
@@ -404,6 +368,7 @@ async def chat_stream_generator(
         completion_tokens = 0
         stream_failed = False
         error_message = ""
+        all_sources = []
 
         current_input = stream_kwargs["input"]
         current_previous_response_id = previous_response_id
@@ -468,8 +433,16 @@ async def chat_stream_generator(
                             response_id = final_response.id if final_response else None
 
                             if final_response and hasattr(final_response, "usage") and final_response.usage:
-                                prompt_tokens += getattr(final_response.usage, "prompt_tokens", 0) or 0
-                                completion_tokens += getattr(final_response.usage, "completion_tokens", 0) or 0
+                                prompt_tokens += (
+                                    getattr(final_response.usage, "input_tokens", 0)
+                                    or getattr(final_response.usage, "prompt_tokens", 0)
+                                    or 0
+                                )
+                                completion_tokens += (
+                                    getattr(final_response.usage, "output_tokens", 0)
+                                    or getattr(final_response.usage, "completion_tokens", 0)
+                                    or 0
+                                )
 
                             if tool_calls_to_execute and response_id:
                                 outputs = []
@@ -487,13 +460,27 @@ async def chat_stream_generator(
                                                     + json.dumps({
                                                         "type": "search_activity",
                                                         "status": "searching",
-                                                        "label": f"Searching Google for: {query[:60]}",
+                                                        "label": f"Searching the web for: {query[:60]}",
                                                     })
                                                     + "\n\n"
                                                 )
-                                                search_result = await _perform_google_search(query, synthesis_deployment=deployment)
+                                                search_result = await _perform_google_search(
+                                                    query,
+                                                    synthesis_deployment=deployment,
+                                                    local_time=local_time,
+                                                    timezone=timezone
+                                                )
                                                 sources = search_result.get("sources", [])
-                                                snippet = search_result.get("answer", "")[:1200]
+                                                if sources:
+                                                    all_sources.extend(sources)
+                                                answer = search_result.get("answer", "")
+
+                                                # Stream the search answer directly to the frontend
+                                                yield (
+                                                    "data: "
+                                                    + json.dumps({"type": "content_block_delta", "delta": {"text": answer}})
+                                                    + "\n\n"
+                                                )
 
                                                 yield (
                                                     "data: "
@@ -506,12 +493,10 @@ async def chat_stream_generator(
                                                     + "\n\n"
                                                 )
 
-                                                tool_output = snippet + "\n" + "\n".join(s['url'] for s in sources[:5])
-                                                outputs.append({
-                                                    "type": "function_call_output",
-                                                    "call_id": call_id,
-                                                    "output": tool_output
-                                                })
+                                                assistant_content = answer
+                                                loop_active = False
+                                                outputs = []
+                                                break
                                         except Exception as search_err:
                                             logger.error("Google search tool call failed: %s", search_err, exc_info=True)
                                             yield (
@@ -644,6 +629,17 @@ async def chat_stream_generator(
                 "tokens_input": prompt_tokens,
                 "tokens_output": completion_tokens,
             }
+            if all_sources:
+                # Deduplicate sources by URL
+                seen_urls = set()
+                deduped_sources = []
+                for s in all_sources:
+                    url = s.get("url")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        deduped_sources.append(s)
+                assistant_msg_insert["content_parts"] = {"sources": deduped_sources}
+
             supabase = get_supabase_admin()
             supabase.table("messages").insert(assistant_msg_insert).execute()
 
@@ -741,6 +737,8 @@ async def stream_chat(
     mode = payload.get("mode", "think")
     conversation_id: Optional[str] = payload.get("conversation_id")
     previous_response_id: Optional[str] = payload.get("previous_response_id")
+    timezone = payload.get("timezone")
+    local_time = payload.get("local_time")
 
     if not messages:
         raise HTTPException(status_code=400, detail="Messages list cannot be empty.")
@@ -867,6 +865,8 @@ async def stream_chat(
             mode,
             estimated_tokens,
             previous_response_id,
+            timezone,
+            local_time,
         ),
         media_type="text/event-stream"
     )

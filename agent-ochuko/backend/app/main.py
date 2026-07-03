@@ -2,6 +2,7 @@
 import os
 import time
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,10 +25,6 @@ from app.middleware import (
 
 logger = logging.getLogger("app.main")
 
-# Load configuration eagerly so it is available during module import/setup
-logger.info("Eagerly loading application configuration...")
-load_config()
-
 # Track readiness for /ready probe
 _app_ready = False
 
@@ -35,8 +32,39 @@ _app_ready = False
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _app_ready
-    # Lifespan now logs readiness as config was loaded eagerly
     logger.info("Application lifespan started.")
+    
+    # Asynchronously warm up backend configurations and API connection pools
+    async def warm_up_resources():
+        try:
+            # 1. Load Azure App Configuration in background thread executor
+            loop = asyncio.get_running_loop()
+            logger.info("Lifespan: Loading application configuration from Azure App Config...")
+            await loop.run_in_executor(None, load_config)
+            logger.info("Lifespan: Application configuration loaded successfully.")
+            
+            # 2. Warm up Azure OpenAI Async Client connection pool
+            from app.api.v1.endpoints.chat import get_openai_client
+            get_openai_client()
+            logger.info("Lifespan: Eagerly warmed up Azure OpenAI client pool.")
+        except Exception as err:
+            logger.warning(f"Lifespan: Background resource warmup failed: {err}")
+
+    # Spawn resource warm up concurrently in the background (non-blocking)
+    asyncio.create_task(warm_up_resources())
+
+    # Pre-warm the Supabase JWKS token signature cache in the background (non-blocking)
+    supabase_url = os.getenv("SUPABASE_URL")
+    if supabase_url:
+        try:
+            from app.core.jwt_validator import get_jwks
+            # Use asyncio.create_task to run the pre-warming concurrently in the background
+            # so it does not block the FastAPI server boot or container readiness probes.
+            asyncio.create_task(get_jwks(supabase_url))
+            logger.info("Lifespan: Spawned background task to pre-warm JWKS cache.")
+        except Exception as jwks_err:
+            logger.warning(f"Lifespan: Failed to spawn JWKS pre-warming task: {jwks_err}")
+
     _app_ready = True
     start_config_polling(300)
     yield

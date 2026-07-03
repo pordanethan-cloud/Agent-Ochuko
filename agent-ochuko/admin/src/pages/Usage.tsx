@@ -1,7 +1,7 @@
 // src/pages/Usage.tsx
 import { useEffect, useState } from "react";
 import {
-  LineChart, Line, BarChart, Bar,
+  AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import { adminGet } from "../utils/api";
@@ -26,6 +26,23 @@ interface UsageResponse {
   top_users: TopUser[];
 }
 
+const MODEL_NAME_MAP: Record<string, string> = {
+  "gpt-5.4": "gpt-5.4 (Think)",
+  "gpt-5.4-mini": "gpt-5.4-mini (Solve)",
+  "gpt-5.4-pro": "gpt-5.4-mini (Solve)", // Map pro to mini as requested
+  "gpt-5.4-nano": "gpt-5.4-nano (Discuss)",
+  "unknown": "Other / Unknown"
+};
+
+// Colors for the specific models on the bar chart
+const MODEL_COLORS: Record<string, string> = {
+  "gpt-5.4": "#6366f1",      // Think: Indigo
+  "gpt-5.4-mini": "#10b981", // Solve: Emerald
+  "gpt-5.4-pro": "#10b981",  // Solve (legacy pro): Emerald
+  "gpt-5.4-nano": "#f59e0b", // Discuss/Nano: Amber
+  "unknown": "#64748b"       // Slate
+};
+
 function buildDailyData(messages: Message[]) {
   const byDay: Record<string, number> = {};
   messages.forEach(m => {
@@ -40,10 +57,16 @@ function buildDailyData(messages: Message[]) {
 function buildModelData(messages: Message[]) {
   const byModel: Record<string, number> = {};
   messages.forEach(m => {
-    const model = m.model_used || "unknown";
-    byModel[model] = (byModel[model] ?? 0) + (m.input_tokens || 0) + (m.output_tokens || 0);
+    // Map the model name using our standard mapping (or fallback)
+    const rawModel = m.model_used || "unknown";
+    const mappedModel = MODEL_NAME_MAP[rawModel] ? rawModel : "unknown";
+    byModel[mappedModel] = (byModel[mappedModel] ?? 0) + (m.input_tokens || 0) + (m.output_tokens || 0);
   });
-  return Object.entries(byModel).map(([model, tokens]) => ({ model, tokens }));
+  return Object.entries(byModel).map(([model, tokens]) => ({
+    model,
+    tokens,
+    fill: MODEL_COLORS[model] || "#64748b"
+  }));
 }
 
 export function Usage() {
@@ -68,19 +91,19 @@ export function Usage() {
   const modelData = buildModelData(data.messages);
 
   return (
-    <div className="p-6 space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="p-6 space-y-8 max-w-7xl mx-auto">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-white mb-1">Usage</h1>
+          <h1 className="text-2xl font-bold text-white mb-1">Usage Dashboard</h1>
           <p className="text-slate-400 text-sm">
-            Token consumption over the selected period.{" "}
+            Token consumption metrics and distribution statistics.{" "}
             <span className="text-slate-600 text-xs italic">
-              (Updates hourly once background aggregation is active — Phase 6.)
+              (Updates hourly once background aggregation is active.)
             </span>
           </p>
         </div>
 
-        <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 self-start sm:self-auto">
+        <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 self-start sm:self-auto shadow-inner">
           {[
             { label: "Last Week", value: 7 },
             { label: "Last Month", value: 30 },
@@ -89,9 +112,9 @@ export function Usage() {
             <button
               key={opt.value}
               onClick={() => setTimeframe(opt.value)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
                 timeframe === opt.value
-                  ? "bg-indigo-600 text-white"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
                   : "text-slate-400 hover:text-slate-200"
               }`}
             >
@@ -102,48 +125,95 @@ export function Usage() {
       </div>
 
       {/* Daily token chart */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <h2 className="text-sm font-semibold text-slate-300 mb-4">Daily Token Consumption</h2>
-        <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={dailyData} margin={{ left: 0, right: 10 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 11 }} />
-            <YAxis tick={{ fill: "#64748b", fontSize: 11 }} />
-            <Tooltip
-              contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }}
-              labelStyle={{ color: "#94a3b8" }}
-              itemStyle={{ color: "#818cf8" }}
+      <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5 shadow-lg backdrop-blur-sm">
+        <h2 className="text-sm font-semibold text-slate-200 mb-4 flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
+          Daily Token Consumption
+        </h2>
+        <ResponsiveContainer width="100%" height={240}>
+          <AreaChart data={dailyData} margin={{ top: 10, left: 0, right: 10, bottom: 0 }}>
+            <defs>
+              <linearGradient id="colorTokens" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#6366f1" stopOpacity={0.35}/>
+                <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <XAxis 
+              dataKey="date" 
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }} 
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#334155' }}
             />
-            <Line type="monotone" dataKey="tokens" stroke="#818cf8" strokeWidth={2} dot={false} name="Tokens" />
-          </LineChart>
+            <YAxis 
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }} 
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#334155' }}
+              tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}
+            />
+            <Tooltip
+              contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 12, boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)' }}
+              labelStyle={{ color: "#94a3b8", fontWeight: 600, fontSize: 11 }}
+              itemStyle={{ color: "#818cf8", fontSize: 12 }}
+              formatter={(value) => [Number(value).toLocaleString(), "Tokens"]}
+            />
+            <Area 
+              type="monotone" 
+              dataKey="tokens" 
+              stroke="#6366f1" 
+              strokeWidth={2} 
+              fillOpacity={1} 
+              fill="url(#colorTokens)" 
+              name="Tokens" 
+            />
+          </AreaChart>
         </ResponsiveContainer>
       </div>
 
       {/* Per-model bar chart */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <h2 className="text-sm font-semibold text-slate-300 mb-4">Tokens by Model</h2>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={modelData} margin={{ left: 0, right: 10 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="model" tick={{ fill: "#64748b", fontSize: 11 }} />
-            <YAxis tick={{ fill: "#64748b", fontSize: 11 }} />
-            <Tooltip
-              contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }}
-              itemStyle={{ color: "#34d399" }}
+      <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5 shadow-lg backdrop-blur-sm">
+        <h2 className="text-sm font-semibold text-slate-200 mb-4 flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          Tokens by Model
+        </h2>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={modelData} margin={{ top: 10, left: 0, right: 10, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <XAxis 
+              dataKey="model" 
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }} 
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#334155' }}
+              tickFormatter={(m) => MODEL_NAME_MAP[m] || m}
             />
-            <Bar dataKey="tokens" fill="#34d399" radius={[4, 4, 0, 0]} name="Tokens" />
+            <YAxis 
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }} 
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#334155' }}
+              tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}
+            />
+            <Tooltip
+              contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 12, boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)' }}
+              itemStyle={{ color: "#34d399", fontSize: 12 }}
+              labelStyle={{ color: "#94a3b8" }}
+              formatter={(value) => [Number(value).toLocaleString(), "Tokens"]}
+            />
+            <Bar dataKey="tokens" radius={[6, 6, 0, 0]} name="Tokens" barSize={36} />
           </BarChart>
         </ResponsiveContainer>
       </div>
 
       {/* Top users table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-800">
-          <h2 className="text-sm font-semibold text-slate-300">Top 5 Users by Token Consumption</h2>
+      <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden shadow-lg backdrop-blur-sm">
+        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-indigo-400"></span>
+            Top 5 Users by Token Consumption
+          </h2>
         </div>
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-800">
+            <tr className="text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800 bg-slate-900/20">
               <th className="px-5 py-3 text-left">#</th>
               <th className="px-5 py-3 text-left">Email</th>
               <th className="px-5 py-3 text-right">Total Tokens</th>
@@ -152,16 +222,20 @@ export function Usage() {
           <tbody className="divide-y divide-slate-800">
             {data.top_users.length === 0 ? (
               <tr>
-                <td colSpan={3} className="px-5 py-6 text-center text-slate-500 text-xs">
-                  No data yet — the top-users RPC isn't seeded. Data will appear after usage accrues.
+                <td colSpan={3} className="px-5 py-8 text-center text-slate-500 text-xs">
+                  No data yet — data will appear after usage accrues.
                 </td>
               </tr>
             ) : (
               data.top_users.map((u, i) => (
-                <tr key={u.user_id} className="hover:bg-slate-800/50 transition-colors">
-                  <td className="px-5 py-3 text-slate-500">{i + 1}</td>
-                  <td className="px-5 py-3 text-slate-200">{u.email}</td>
-                  <td className="px-5 py-3 text-right text-slate-300">{u.total_tokens.toLocaleString()}</td>
+                <tr key={u.user_id} className="hover:bg-slate-800/30 transition-colors">
+                  <td className="px-5 py-3.5 text-slate-500 font-semibold">{i + 1}</td>
+                  <td className="px-5 py-3.5">
+                    <div className="text-slate-200 font-medium">{u.email}</div>
+                  </td>
+                  <td className="px-5 py-3.5 text-right font-mono text-slate-300 font-semibold">
+                    {u.total_tokens.toLocaleString()}
+                  </td>
                 </tr>
               ))
             )}
@@ -174,8 +248,9 @@ export function Usage() {
 
 function Loading() {
   return (
-    <div className="p-6 flex items-center justify-center h-64 text-slate-500 text-sm">
-      Loading usage data…
+    <div className="p-6 flex flex-col items-center justify-center h-64 text-slate-400 text-sm space-y-3">
+      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
+      <div>Loading usage data…</div>
     </div>
   );
 }
@@ -183,7 +258,7 @@ function Loading() {
 function ErrorMsg({ msg }: { msg: string }) {
   return (
     <div className="p-6 flex items-center justify-center h-64">
-      <div className="text-red-400 text-sm bg-red-900/20 border border-red-700/30 rounded-xl px-6 py-4">
+      <div className="text-red-400 text-sm bg-red-950/20 border border-red-900/30 rounded-xl px-6 py-4">
         {msg}
       </div>
     </div>

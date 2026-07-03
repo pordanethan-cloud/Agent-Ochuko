@@ -83,7 +83,7 @@ async def load_message_history(
         # 2. Fetch all messages sorted by created_at ascending
         msg_res = (
             supabase.table("messages")
-            .select("id, role, content, routing_mode, routing_reason, is_summary, is_archived_msg, created_at")
+            .select("id, role, content, routing_mode, routing_reason, is_summary, is_archived_msg, created_at, content_parts")
             .eq("conversation_id", id)
             .order("created_at", desc=False)
             .execute()
