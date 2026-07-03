@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import logging
@@ -19,8 +20,11 @@ from google.genai import types as genai_types
 logger = logging.getLogger("app.api.v1.endpoints.chat")
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# Identity & Tone Rule
+# ---------------------------------------------------------------------------
 # Hard rule prepended to every system prompt at the API level.
-# This is the canonical Ochuko and no-emoji enforcement — applied regardless of what
+# Ochuko identity and no-emoji enforcement — applied regardless of what
 # App Configuration or default prompts say.
 _OCHUKO_RULE = (
     "You are Agent Ochuko, an AI assistant built by Ochuko on Azure AI Foundry. "
@@ -62,58 +66,103 @@ def get_openai_client() -> AsyncAzureOpenAI:
     return _openai_client
 
 
-async def _perform_google_search(
-    query: str, 
-    synthesis_deployment: str = "",
+# ---------------------------------------------------------------------------
+# Gemini Search Engine
+# ---------------------------------------------------------------------------
+# Web search is handled exclusively by Gemini 2.5 Flash with Google Search
+# grounding. Azure Bing Search is NOT used anywhere in this system.
+#
+# Key rotation: keys are tried in order at call time. Each key instantiates
+# its own genai.Client(api_key=...) so concurrent requests are fully isolated —
+# no shared env var mutation, no race conditions.
+# ---------------------------------------------------------------------------
+
+def _collect_gemini_keys() -> List[str]:
+    """Returns all configured Gemini API keys in priority order, deduplicated."""
+    seen: set[str] = set()
+    keys: List[str] = []
+    for var in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
+        val = os.getenv(var, "").strip()
+        if val and val not in seen:
+            seen.add(val)
+            keys.append(val)
+    return keys
+
+
+def _sanitize_search_text(text: str) -> str:
+    """Strips Google / Gemini branding from Gemini-generated search answers."""
+    if not text:
+        return ""
+    text = re.sub(r'\bGoogle\s+Search\b', 'Web Search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bGoogle\b', 'Ochuko', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bGemini\b', 'Ochuko', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bgoogle-genai\b', 'Ochuko-engine', text, flags=re.IGNORECASE)
+    return text
+
+
+async def _perform_gemini_search(
+    query: str,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
     local_time: Optional[str] = None,
-    timezone: Optional[str] = None
+    tz: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Retrieves live web context and synthesises a cited answer using Gemini 2.5 Flash.
-    Strictly follows the Ochuko system rules and censors search branding.
+    Executes a grounded web search using Gemini 2.5 Flash + Google Search tool.
+
+    This is the sole web search provider for Agent Ochuko. Azure Bing is not used.
+
+    Args:
+        query:                The user's search query.
+        conversation_history: Full message history from the current conversation,
+                              forwarded so Gemini can resolve references like
+                              "that company" or "the price I mentioned earlier".
+        local_time:           User's local time string for temporal grounding.
+        tz:                   User's IANA timezone string.
+
+    Returns:
+        {"answer": str, "sources": list[{"title": str, "url": str}]}
+
+    Raises:
+        RuntimeError: if all configured Gemini keys fail.
     """
-    keys = []
-    for var_name in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"]:
-        key = os.getenv(var_name)
-        if key and key.strip() and key not in keys:
-            keys.append(key.strip())
-    
+    keys = _collect_gemini_keys()
     if not keys:
-        raise RuntimeError("No Google/Gemini API keys configured in environment.")
+        raise RuntimeError("No Gemini API keys configured. Set GEMINI_API_KEY in environment.")
 
-    ref_time = local_time if local_time else datetime.now(timezone.utc).strftime("%A, %B %d, %Y %I:%M:%S %p")
-    ref_zone = timezone if timezone else "UTC"
+    ref_time = local_time or datetime.now(timezone.utc).strftime("%A, %B %d, %Y %I:%M:%S %p")
+    ref_zone = tz or "UTC"
 
-    # Build system instruction (Ochuko rules)
     system_instruction = (
-        _OCHUKO_RULE +
-        f"\n\n--- USER TIME & ENVIRONMENT CONTEXT ---\n"
+        _OCHUKO_RULE
+        + f"\n\n--- USER TIME & ENVIRONMENT CONTEXT ---\n"
         f"User Local Time: {ref_time}\n"
         f"User Timezone: {ref_zone}\n"
         "Align all temporal terms ('today', 'yesterday', 'tomorrow', 'tonight') with this local timeframe.\n"
         "--- END CONTEXT ---\n\n"
-        "You are Ochuko, an elite AI assistant. "
-        "Use the Google Search tool to find real-time information to answer the user's query. "
-        "Strictly do NOT mention Google, Gemini, Alphabet, or google-genai in your output. "
-        "Do not say 'According to my search' or 'Google Search shows'. "
-        "Just answer the question directly and naturally, citing your sources in your response. "
-        "Your tone must be Ochuko's tone (confident, crisp, authoritative, direct, and in control)."
+        "Use the available search tool to retrieve live web information. "
+        "Do NOT mention Google, Gemini, or any underlying search engine in your output. "
+        "Do not say 'According to my search' or 'Search results show'. "
+        "Answer directly and cite your sources naturally inline."
     )
 
-    last_exc = None
-    for idx, key in enumerate(keys):
-        orig_gemini = os.environ.get("GEMINI_API_KEY")
-        orig_google = os.environ.get("GOOGLE_API_KEY")
-        
-        os.environ["GEMINI_API_KEY"] = key
-        if "GOOGLE_API_KEY" in os.environ:
-            del os.environ["GOOGLE_API_KEY"]
+    # Build Gemini `contents` list: history + current query
+    contents: List[Dict] = []
+    for msg in (conversation_history or []):
+        role = "user" if msg.get("role") == "user" else "model"
+        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+    contents.append({"role": "user", "parts": [{"text": query}]})
 
+    last_exc: Optional[Exception] = None
+    for idx, key in enumerate(keys):
         try:
-            g_client = genai.Client()
+            # Each request gets its own client bound to a specific key.
+            # This is the only correct pattern for async key rotation —
+            # mutating os.environ across coroutines causes race conditions.
+            g_client = genai.Client(api_key=key)
+
             g_response = await g_client.aio.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=query,
+                contents=contents,
                 config=genai_types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
@@ -121,52 +170,39 @@ async def _perform_google_search(
                 ),
             )
 
-            sources = []
-            seen_urls = set()
+            # Extract grounded sources
+            sources: List[Dict[str, str]] = []
+            seen_urls: set[str] = set()
             if g_response.candidates and g_response.candidates[0].grounding_metadata:
-                metadata = g_response.candidates[0].grounding_metadata
-                for chunk in (getattr(metadata, "grounding_chunks", []) or []):
+                for chunk in (getattr(g_response.candidates[0].grounding_metadata, "grounding_chunks", []) or []):
                     web = getattr(chunk, "web", None)
-                    if web:
-                        url = getattr(web, "uri", "") or ""
-                        title = getattr(web, "title", "") or url
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            if "google.com/search" not in url.lower():
-                                sources.append({"title": title, "url": url})
+                    if not web:
+                        continue
+                    url = getattr(web, "uri", "") or ""
+                    title = getattr(web, "title", "") or url
+                    if url and url not in seen_urls and "google.com/search" not in url.lower():
+                        seen_urls.add(url)
+                        sources.append({"title": title, "url": url})
 
-            answer = g_response.text or ""
+            answer = _sanitize_search_text(g_response.text or "")
+            logger.info("Gemini search completed. query=%.60s sources=%d key_idx=%d", query, len(sources), idx)
+            return {"answer": answer, "sources": sources[:8]}
 
-            # Sanitize text to remove Google/Gemini branding
-            import re
-            def sanitize_text(text: str) -> str:
-                if not text:
-                    return ""
-                text = re.sub(r'\bGoogle\s+Search\b', 'Web Search', text, flags=re.IGNORECASE)
-                text = re.sub(r'\bGoogle\b', 'Ochuko', text, flags=re.IGNORECASE)
-                text = re.sub(r'\bGemini\b', 'Ochuko', text, flags=re.IGNORECASE)
-                text = re.sub(r'\bgoogle-genai\b', 'Ochuko-engine', text, flags=re.IGNORECASE)
-                return text
-
-            return {"answer": sanitize_text(answer), "sources": sources[:8]}
-        except Exception as e:
-            logger.warning("Google search failed with key index %d: %s", idx, e)
-            last_exc = e
+        except Exception as exc:
+            logger.warning("Gemini search failed with key index %d: %s", idx, exc)
+            last_exc = exc
             continue
-        finally:
-            if orig_gemini is not None:
-                os.environ["GEMINI_API_KEY"] = orig_gemini
-            else:
-                os.environ.pop("GEMINI_API_KEY", None)
-            if orig_google is not None:
-                os.environ["GOOGLE_API_KEY"] = orig_google
 
-    raise last_exc or RuntimeError("All Gemini API keys failed.")
+    raise last_exc or RuntimeError("All Gemini API keys failed during web search.")
 
+
+# ---------------------------------------------------------------------------
+# Image Generation Job
+# ---------------------------------------------------------------------------
 
 async def _enqueue_image_gen(user_id: str, conversation_id: str, prompt: str, style: str = "") -> str:
     """
-    Creates a pending image_gen job row in Supabase and dispatches it to the
+    Creates a pending image_gen job row in Supabase and dispatches it to
     Azure Queue Storage. Returns the new job_id.
     """
     supabase = get_supabase_admin()
@@ -182,7 +218,6 @@ async def _enqueue_image_gen(user_id: str, conversation_id: str, prompt: str, st
         raise RuntimeError("Failed to create image_gen job row in database.")
     job_id: str = job_res.data[0]["id"]
 
-    # enqueue_job is synchronous — run it off the event loop thread
     await asyncio.to_thread(
         enqueue_job,
         job_id=job_id,
@@ -194,8 +229,12 @@ async def _enqueue_image_gen(user_id: str, conversation_id: str, prompt: str, st
     return job_id
 
 
+# ---------------------------------------------------------------------------
+# Mock stream (scaffold / health check)
+# ---------------------------------------------------------------------------
+
 async def mock_stream_generator():
-    """Fallback mock generator to verify connection if OpenAI is unavailable."""
+    """Fallback mock generator to verify SSE connection if Azure OpenAI is unavailable."""
     yield "data: " + json.dumps({"type": "content_block_delta", "delta": {"text": "Scaffolding "}}) + "\n\n"
     yield "data: " + json.dumps({"type": "content_block_delta", "delta": {"text": "working! "}}) + "\n\n"
     yield "data: " + json.dumps({"type": "content_block_delta", "delta": {"text": "Phase 1 "}}) + "\n\n"
@@ -204,10 +243,14 @@ async def mock_stream_generator():
     yield "data: [DONE]\n\n"
 
 
+# ---------------------------------------------------------------------------
+# Database Context Builder
+# ---------------------------------------------------------------------------
+
 async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
     """
     Builds the context for the LLM by fetching non-archived messages from the database.
-    This automatically includes the summary message (if compaction ran) and recent active turns.
+    Includes summary messages (if compaction ran) and all recent active turns.
     """
     supabase = get_supabase_admin()
     try:
@@ -219,18 +262,18 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
             .order("created_at", desc=False)
             .execute()
         )
-        db_messages = response.data or []
-        formatted_messages = []
-        for msg in db_messages:
-            formatted_messages.append({
-                "role": msg.get("role"),
-                "content": msg.get("content")
-            })
-        return formatted_messages
+        return [
+            {"role": msg.get("role"), "content": msg.get("content")}
+            for msg in (response.data or [])
+        ]
     except Exception as e:
-        logger.error(f"Failed to build LLM context for conversation {conversation_id}: {e}")
+        logger.error("Failed to build LLM context for conversation %s: %s", conversation_id, e)
         return []
 
+
+# ---------------------------------------------------------------------------
+# Stream Generator
+# ---------------------------------------------------------------------------
 
 async def chat_stream_generator(
     messages: List[Dict[str, Any]],
@@ -243,68 +286,62 @@ async def chat_stream_generator(
     mode: str,
     estimated_tokens: int,
     previous_response_id: Optional[str] = None,
-    timezone: Optional[str] = None,
+    tz: Optional[str] = None,
     local_time: Optional[str] = None,
 ):
     """
-    Streams a response from the Azure OpenAI Responses API (ADR-002).
+    Streams a response from the Azure OpenAI Responses API.
 
-    Uses client.responses.stream() — the current-generation interface.
-    Accepts `previous_response_id` for stateful multi-turn: when provided,
-    Azure maintains conversation state server-side and only the new user
-    message needs to be sent (no full message history resend).
+    Tool dispatch:
+      - search_web      → _perform_gemini_search() (Gemini 2.5 Flash + Google Search grounding)
+      - generate_image  → _enqueue_image_gen()     (FLUX via Azure Queue)
+
+    Web search is handled by Gemini exclusively. There is no Azure Bing integration.
+    When search_web fires, Gemini retrieves and synthesises the answer, then the result
+    is streamed directly to the frontend. The Azure model is not asked to re-synthesise
+    the grounded answer — Gemini's output is the final response for that turn.
 
     Emits SSE events:
       - routing_info:        model deployment and routing mode metadata
-      - search_activity:     step-by-step status while Google search runs
+      - conversation_id:     the resolved UUID for this conversation
+      - search_activity:     step-by-step status while Gemini search runs
       - image_gen_queued:    when AI decides to generate an image
       - content_block_delta: incremental text chunk
-      - response_id:         the response ID to persist and pass on next turn
+      - response_id:         response ID to persist and pass on next turn
       - [DONE]:              stream termination signal
     """
     client = get_openai_client()
 
-    # Emit routing metadata so frontend knows which model was used
     yield (
         "data: "
-        + json.dumps({
-            "type": "routing_info",
-            "deployment": deployment,
-            "routing_mode": routing_mode,
-        })
+        + json.dumps({"type": "routing_info", "deployment": deployment, "routing_mode": routing_mode})
         + "\n\n"
     )
 
-    # Emit conversation_id so frontend knows the real UUID of the conversation
     yield (
         "data: "
-        + json.dumps({
-            "type": "conversation_id",
-            "conversation_id": conversation_id,
-        })
+        + json.dumps({"type": "conversation_id", "conversation_id": conversation_id})
         + "\n\n"
     )
 
     try:
-        # Prepend user datetime & timezone context if available
         time_context = ""
         if local_time:
             time_context = (
                 f"\n\n--- USER TIME & ENVIRONMENT CONTEXT ---\n"
                 f"User Local Time: {local_time}\n"
-                f"User Timezone: {timezone or 'UTC'}\n"
+                f"User Timezone: {tz or 'UTC'}\n"
                 "Align all temporal terms ('today', 'yesterday', 'tomorrow', 'tonight') with this local timeframe.\n"
                 "--- END CONTEXT ---\n\n"
             )
 
-        # Prepend the absolute Ochuko identity and no-emoji rule to every system prompt
         full_system = _OCHUKO_RULE + time_context + system_prompt
 
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
-            # Tools the model may call autonomously during the conversation
             "tools": [
-                # Image generation — AI calls this when the user wants a visual
+                # ── Image Generation ──────────────────────────────────────
+                # Triggers when user asks to create/draw/visualise anything.
                 {
                     "type": "function",
                     "name": "generate_image",
@@ -329,20 +366,26 @@ async def chat_stream_generator(
                         "required": ["prompt"],
                     },
                 },
-                # Web search — AI calls this when the user asks about real-time, current info
+                # ── Web Search (Gemini) ───────────────────────────────────
+                # Gemini 2.5 Flash with Google Search grounding is the SOLE
+                # web search provider. Azure Bing is NOT used.
+                # Call this for real-time info, news, live scores, weather,
+                # or anything past the Azure model's knowledge cutoff.
                 {
                     "type": "function",
                     "name": "search_web",
                     "description": (
-                        "Search the web for real-time, current information, news, live sports scores, "
-                        "weather, or events that happened after your knowledge cutoff."
+                        "Search the web for real-time or current information using Gemini's "
+                        "Google Search grounding. Use for news, live events, sports scores, "
+                        "weather, prices, or facts beyond the model's knowledge cutoff. "
+                        "Do NOT use for questions answerable from conversation context alone."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "The search query to look up on the web",
+                                "description": "Precise search query — be specific, avoid filler words",
                             },
                         },
                         "required": ["query"],
@@ -353,14 +396,11 @@ async def chat_stream_generator(
         }
 
         if previous_response_id:
-            # Stateful multi-turn: Azure holds full history — send only the new message
             stream_kwargs["previous_response_id"] = previous_response_id
             user_messages = [m for m in messages if m.get("role") == "user"]
             stream_kwargs["input"] = user_messages[-1:] if user_messages else messages
         else:
-            # First turn or fresh conversation: prepend system prompt + full input list
-            input_list = [{"role": "system", "content": full_system}] + messages
-            stream_kwargs["input"] = input_list
+            stream_kwargs["input"] = [{"role": "system", "content": full_system}] + messages
 
         assistant_content = ""
         response_id = None
@@ -375,7 +415,7 @@ async def chat_stream_generator(
 
         loop_active = True
         while loop_active and not stream_failed:
-            loop_active = False  # Reset for this iteration
+            loop_active = False
             tool_calls_to_execute = []
 
             iter_kwargs = stream_kwargs.copy()
@@ -390,7 +430,6 @@ async def chat_stream_generator(
                 async with client.responses.stream(**iter_kwargs) as stream:
                     try:
                         async for event in stream:
-                            # Text delta events
                             if event.type == "response.output_text.delta":
                                 assistant_content += event.delta
                                 yield (
@@ -399,34 +438,16 @@ async def chat_stream_generator(
                                     + "\n\n"
                                 )
 
-                            # Function tool calls — collect them to execute after the stream finishes this turn
                             elif event.type == "response.output_item.done":
                                 item = getattr(event, "item", None)
                                 if item is not None and getattr(item, "type", None) == "function_call":
                                     tool_calls_to_execute.append(item)
 
-                            # Legacy web_search_preview events — forward if they somehow still appear
-                            elif event.type in (
-                                "response.web_search_call.in_progress",
-                                "response.web_search_call.searching",
-                            ):
-                                yield (
-                                    "data: "
-                                    + json.dumps({"type": "search_activity", "status": "searching", "label": "Searching the web..."})
-                                    + "\n\n"
-                                )
-                            elif event.type == "response.web_search_call.completed":
-                                yield (
-                                    "data: "
-                                    + json.dumps({"type": "search_activity", "status": "done", "label": "Search complete."})
-                                    + "\n\n"
-                                )
                     except Exception as iter_err:
                         stream_failed = True
                         error_message = str(iter_err)
-                        logger.error(f"Error during stream iteration: {iter_err}")
+                        logger.error("Error during stream iteration: %s", iter_err)
 
-                    # After the stream for this iteration completes, process any collected tool calls
                     if not stream_failed:
                         try:
                             final_response = await stream.get_final_response()
@@ -450,6 +471,7 @@ async def chat_stream_generator(
                                     call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
                                     name = getattr(item, "name", None)
 
+                                    # ── search_web → Gemini ───────────────
                                     if name == "search_web":
                                         try:
                                             args = json.loads(getattr(item, "arguments", "{}") or "{}")
@@ -464,18 +486,24 @@ async def chat_stream_generator(
                                                     })
                                                     + "\n\n"
                                                 )
-                                                search_result = await _perform_google_search(
-                                                    query,
-                                                    synthesis_deployment=deployment,
+
+                                                # Forward full conversation history so Gemini
+                                                # can resolve pronouns and prior references.
+                                                search_result = await _perform_gemini_search(
+                                                    query=query,
+                                                    conversation_history=messages,
                                                     local_time=local_time,
-                                                    timezone=timezone
+                                                    tz=tz,
                                                 )
+
                                                 sources = search_result.get("sources", [])
                                                 if sources:
                                                     all_sources.extend(sources)
                                                 answer = search_result.get("answer", "")
 
-                                                # Stream the search answer directly to the frontend
+                                                # Gemini's grounded answer is the final response
+                                                # for this turn — stream it directly to the client.
+                                                # The Azure model does not re-synthesise this content.
                                                 yield (
                                                     "data: "
                                                     + json.dumps({"type": "content_block_delta", "delta": {"text": answer}})
@@ -497,8 +525,9 @@ async def chat_stream_generator(
                                                 loop_active = False
                                                 outputs = []
                                                 break
+
                                         except Exception as search_err:
-                                            logger.error("Google search tool call failed: %s", search_err, exc_info=True)
+                                            logger.error("Gemini search tool call failed: %s", search_err, exc_info=True)
                                             yield (
                                                 "data: "
                                                 + json.dumps({
@@ -511,9 +540,10 @@ async def chat_stream_generator(
                                             outputs.append({
                                                 "type": "function_call_output",
                                                 "call_id": call_id,
-                                                "output": f"Error searching the web: {str(search_err)}"
+                                                "output": f"Search error: {str(search_err)}",
                                             })
 
+                                    # ── generate_image → FLUX via Azure Queue ─
                                     elif name == "generate_image":
                                         try:
                                             args = json.loads(getattr(item, "arguments", "{}") or "{}")
@@ -544,7 +574,7 @@ async def chat_stream_generator(
                                                 outputs.append({
                                                     "type": "function_call_output",
                                                     "call_id": call_id,
-                                                    "output": f"Image generation job successfully queued with ID: {job_id}."
+                                                    "output": f"Image generation job queued with ID: {job_id}.",
                                                 })
                                         except Exception as img_err:
                                             logger.error("Failed to enqueue image_gen job: %s", img_err)
@@ -560,7 +590,7 @@ async def chat_stream_generator(
                                             outputs.append({
                                                 "type": "function_call_output",
                                                 "call_id": call_id,
-                                                "output": f"Failed to start image generation: {str(img_err)}"
+                                                "output": f"Image generation error: {str(img_err)}",
                                             })
 
                                 if outputs:
@@ -569,7 +599,6 @@ async def chat_stream_generator(
                                     loop_active = True
 
                             elif response_id:
-                                # No tool calls to execute, and response finished normally. Yield response_id.
                                 yield (
                                     "data: "
                                     + json.dumps({"type": "response_id", "response_id": response_id})
@@ -577,7 +606,7 @@ async def chat_stream_generator(
                                 )
 
                         except Exception as final_err:
-                            logger.warning(f"Could not retrieve final response or tokens: {final_err}")
+                            logger.warning("Could not retrieve final response or tokens: %s", final_err)
                             if not assistant_content:
                                 stream_failed = True
                                 error_message = str(final_err)
@@ -585,38 +614,34 @@ async def chat_stream_generator(
             except Exception as stream_init_err:
                 stream_failed = True
                 error_message = str(stream_init_err)
-                logger.error(f"Error initializing stream: {stream_init_err}")
+                logger.error("Error initializing stream: %s", stream_init_err)
 
+        # ── Error handling ────────────────────────────────────────────────
         if stream_failed:
             lower_err = error_message.lower()
-            is_guardrail = (
-                "content_filter" in lower_err 
-                or "responsible_ai" in lower_err 
-                or "policy" in lower_err 
-                or "safety" in lower_err
-                or "trigger" in lower_err
-                or "completed event" in lower_err
+            is_guardrail = any(
+                kw in lower_err
+                for kw in ("content_filter", "responsible_ai", "policy", "safety", "trigger", "completed event")
             )
             if is_guardrail:
-                friendly_err = "The request or response was flagged by safety guardrails. Please modify your query and try again."
+                friendly_err = "The request or response was flagged by safety guardrails. Modify your query and try again."
             else:
                 friendly_err = f"A streaming connection issue occurred: {error_message}"
 
             if assistant_content:
-                # Append the safety/early stop notice to the partial text
-                assistant_content += f"\n\n*(Note: Response stopped early: {friendly_err})*"
+                note = f"\n\n*(Note: Response stopped early: {friendly_err})*"
+                assistant_content += note
                 yield (
                     "data: "
-                    + json.dumps({"type": "content_block_delta", "delta": {"text": f"\n\n*(Note: Response stopped early: {friendly_err})*"}})
+                    + json.dumps({"type": "content_block_delta", "delta": {"text": note}})
                     + "\n\n"
                 )
             else:
-                # No content was generated at all, yield error event and exit
                 yield f"data: {json.dumps({'type': 'error', 'error': friendly_err})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
-        # Persist assistant message to the database (even if it was a partial/early stopped message)
+        # ── Persist assistant message ──────────────────────────────────────
         try:
             assistant_msg_insert = {
                 "conversation_id": conversation_id,
@@ -630,15 +655,14 @@ async def chat_stream_generator(
                 "tokens_output": completion_tokens,
             }
             if all_sources:
-                # Deduplicate sources by URL
-                seen_urls = set()
-                deduped_sources = []
+                seen_urls: set[str] = set()
+                deduped: List[Dict] = []
                 for s in all_sources:
                     url = s.get("url")
                     if url and url not in seen_urls:
                         seen_urls.add(url)
-                        deduped_sources.append(s)
-                assistant_msg_insert["content_parts"] = {"sources": deduped_sources}
+                        deduped.append(s)
+                assistant_msg_insert["content_parts"] = {"sources": deduped}
 
             supabase = get_supabase_admin()
             supabase.table("messages").insert(assistant_msg_insert).execute()
@@ -650,11 +674,11 @@ async def chat_stream_generator(
                 try:
                     supabase.rpc("reconcile_token_budget", {
                         "p_user_id": user_id,
-                        "p_diff": diff
+                        "p_diff": diff,
                     }).execute()
-                    logger.info(f"Reconciled token budget for user {user_id} via RPC: diff={diff}")
+                    logger.info("Reconciled token budget for user %s: diff=%d", user_id, diff)
                 except Exception as rpc_err:
-                    logger.warning("Failed to call reconcile_token_budget RPC, falling back to read-modify-write: %s", rpc_err)
+                    logger.warning("reconcile_token_budget RPC failed, falling back: %s", rpc_err)
                     try:
                         current_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                         budget_res = (
@@ -666,14 +690,13 @@ async def chat_stream_generator(
                             .execute()
                         )
                         if budget_res.data:
-                            current_used = budget_res.data.get("tokens_used", 0)
-                            new_used = max(0, current_used + diff)
+                            new_used = max(0, budget_res.data.get("tokens_used", 0) + diff)
                             supabase.table("token_budgets").update({
-                                "tokens_used": new_used
+                                "tokens_used": new_used,
                             }).eq("user_id", user_id).eq("period", current_date_str).execute()
-                            logger.info(f"Reconciled token budget for user {user_id} via fallback: new_used={new_used}")
+                            logger.info("Reconciled token budget for user %s via fallback: new=%d", user_id, new_used)
                     except Exception as fallback_err:
-                        logger.error("Failed in-memory fallback for token budget reconciliation: %s", fallback_err)
+                        logger.error("Token budget fallback reconciliation failed: %s", fallback_err)
 
             # Update message count in conversation
             count_res = (
@@ -683,16 +706,15 @@ async def chat_stream_generator(
                 .execute()
             )
             msg_count = count_res.count if count_res.count is not None else (len(messages) + 2)
-            supabase.table("conversations").update({
-                "message_count": msg_count,
-            }).eq("id", conversation_id).execute()
+            supabase.table("conversations").update({"message_count": msg_count}).eq("id", conversation_id).execute()
 
         except Exception as db_err:
-            logger.error(f"Failed to save assistant response: {db_err}")
+            logger.error("Failed to save assistant response: %s", db_err)
 
-        # Log routing decision to audit log
+        # ── Audit log ─────────────────────────────────────────────────────
         try:
-            audit_entry = {
+            supabase = get_supabase_admin()
+            supabase.table("audit_log").insert({
                 "user_id": user_id,
                 "action": "model_route",
                 "resource_type": "chat",
@@ -703,25 +725,27 @@ async def chat_stream_generator(
                     "conversation_id": conversation_id,
                 },
                 "policy_decision": "ALLOW",
-            }
-            supabase = get_supabase_admin()
-            supabase.table("audit_log").insert(audit_entry).execute()
+            }).execute()
         except Exception as audit_err:
-            logger.error(f"Failed to log routing decision to audit_log: {audit_err}")
+            logger.error("Failed to log routing decision to audit_log: %s", audit_err)
 
         yield "data: [DONE]\n\n"
 
     except Exception as e:
-        logger.error(f"Error in chat stream generator: {e}")
+        logger.error("Error in chat stream generator: %s", e)
         yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
 
+
+# ---------------------------------------------------------------------------
+# Route
+# ---------------------------------------------------------------------------
 
 @router.post("/responses/stream")
 async def stream_chat(
     payload: Dict[str, Any],
     request: Request,
-    user: Dict[str, Any] = Depends(verify_jwt)
+    user: Dict[str, Any] = Depends(verify_jwt),
 ):
     """
     POST /v1/responses/stream
@@ -730,62 +754,55 @@ async def stream_chat(
     Payload fields:
       - messages (list):              Full message history
       - mode (str):                   "think", "solve", or "discuss" (default: "think")
-      - conversation_id (str):        For nano turn tracking and audit
+      - conversation_id (str):        For turn tracking and audit
       - previous_response_id (str):   Response ID from last turn (stateful multi-turn)
+      - timezone (str):               IANA timezone string
+      - local_time (str):             User's local time string
     """
     messages = payload.get("messages", [])
     mode = payload.get("mode", "think")
     conversation_id: Optional[str] = payload.get("conversation_id")
     previous_response_id: Optional[str] = payload.get("previous_response_id")
-    timezone = payload.get("timezone")
+    tz = payload.get("timezone")
     local_time = payload.get("local_time")
 
     if not messages:
         raise HTTPException(status_code=400, detail="Messages list cannot be empty.")
 
-    # If user asks for test, return mock stream
     if messages[-1].get("content") == "__test_scaffold__":
-        return StreamingResponse(
-            mock_stream_generator(),
-            media_type="text/event-stream"
-        )
+        return StreamingResponse(mock_stream_generator(), media_type="text/event-stream")
 
-    # Extract the latest user message text for routing analysis
-    last_user_msg = ""
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            last_user_msg = m.get("content", "")
-            break
+    last_user_msg = next(
+        (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+        "",
+    )
 
     supabase = get_supabase_admin()
     user_id = user.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="User identifier not found in JWT.")
 
-    # 1. Resolve or create conversation in the database
+    # ── Resolve or create conversation ────────────────────────────────────
     is_new_conversation = False
     if not conversation_id or conversation_id == "00000000-0000-0000-0000-000000000000":
         is_new_conversation = True
         try:
-            # Generate a title from the user's message (first 30 chars)
-            title = last_user_msg[:30] + "..." if len(last_user_msg) > 30 else last_user_msg
-            if not title:
-                title = "New Chat"
-
-            conv_insert = {
+            title = (last_user_msg[:30] + "...") if len(last_user_msg) > 30 else last_user_msg or "New Chat"
+            conv_res = supabase.table("conversations").insert({
                 "user_id": user_id,
                 "title": title,
                 "mode": mode,
                 "agent_type": "chat",
-            }
-            conv_res = supabase.table("conversations").insert(conv_insert).execute()
+            }).execute()
             if not conv_res.data:
                 raise HTTPException(status_code=500, detail="Failed to create conversation in database.")
             conversation_id = conv_res.data[0]["id"]
-            logger.info(f"Created new conversation {conversation_id} for user {user_id}")
+            logger.info("Created new conversation %s for user %s", conversation_id, user_id)
             nano_turn_count = 0
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.error(f"Error creating conversation: {e}")
+            logger.error("Error creating conversation: %s", e)
             raise HTTPException(status_code=500, detail=f"Database error during conversation creation: {e}")
     else:
         try:
@@ -800,8 +817,6 @@ async def stream_chat(
                 raise HTTPException(status_code=404, detail="Conversation not found.")
             if conv_res.data.get("user_id") != user_id:
                 raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
-
-            # Use the stored mode as the source of truth for routing
             db_mode = conv_res.data.get("mode")
             if db_mode:
                 mode = db_mode
@@ -809,66 +824,55 @@ async def stream_chat(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error fetching conversation {conversation_id}: {e}")
+            logger.error("Error fetching conversation %s: %s", conversation_id, e)
             raise HTTPException(status_code=500, detail="Database error while fetching conversation details.")
 
-    # 2. Route through the model router
+    # ── Route through model router ────────────────────────────────────────
     decision = await model_router.route(
         user_message=last_user_msg,
         mode=mode,
         conversation_id=conversation_id,
         nano_turn_count=nano_turn_count,
     )
-
     logger.info(
-        f"ModelRouter decision: mode={decision.routing_mode}, "
-        f"deployment={decision.deployment}, "
-        f"reason={decision.routing_reason}"
+        "ModelRouter decision: mode=%s deployment=%s reason=%s",
+        decision.routing_mode, decision.deployment, decision.routing_reason,
     )
 
-    # 3. If nano interceptor fired, increment the turn counter in the database
     if decision.was_intercepted:
         try:
-            # We call the increment_nano_turns RPC to update the count
             supabase.rpc("increment_nano_turns", {"p_conv_id": conversation_id}).execute()
         except Exception as e:
-            logger.error(f"Failed to increment nano turn count: {e}")
+            logger.error("Failed to increment nano turn count: %s", e)
 
-    # 4. Save the user's message to the database
+    # ── Save user message ─────────────────────────────────────────────────
     try:
-        user_msg_insert = {
+        supabase.table("messages").insert({
             "conversation_id": conversation_id,
             "role": "user",
             "content": last_user_msg,
-        }
-        supabase.table("messages").insert(user_msg_insert).execute()
+        }).execute()
     except Exception as e:
-        logger.error(f"Failed to save user message to database: {e}")
+        logger.error("Failed to save user message to database: %s", e)
         raise HTTPException(status_code=500, detail="Failed to save message history.")
 
-    # 5. Build context from active database messages (ignores archived/compacted ones)
     db_context_messages = await build_llm_context(conversation_id)
-
-    # Extract the estimated tokens that were pre-deducted by the middleware
     estimated_tokens = getattr(request.state, "estimated_tokens", 0) or 0
 
-    # Stream from Azure OpenAI Responses API
     return StreamingResponse(
         chat_stream_generator(
-            db_context_messages,
-            decision.deployment,
-            decision.system_prompt,
-            decision.routing_mode,
-            decision.routing_reason,
-            conversation_id,
-            user_id,
-            mode,
-            estimated_tokens,
-            previous_response_id,
-            timezone,
-            local_time,
+            messages=db_context_messages,
+            deployment=decision.deployment,
+            system_prompt=decision.system_prompt,
+            routing_mode=decision.routing_mode,
+            routing_reason=decision.routing_reason,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            mode=mode,
+            estimated_tokens=estimated_tokens,
+            previous_response_id=previous_response_id,
+            tz=tz,
+            local_time=local_time,
         ),
-        media_type="text/event-stream"
+        media_type="text/event-stream",
     )
-
-
