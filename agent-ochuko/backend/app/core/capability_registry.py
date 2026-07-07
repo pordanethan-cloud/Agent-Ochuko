@@ -65,9 +65,24 @@ CAPABILITY_REGISTRY = {
                 "Process files: CSV, Excel, PDF, JSON, images",
                 "Run ML models (scikit-learn, statsmodels)",
                 "Generate reports (reportlab, python-docx)",
+                "Create PDF documents (reportlab, fpdf2, weasyprint)",
+                "Create DOCX files (python-docx)",
+                "Create Excel spreadsheets (openpyxl, xlsxwriter)",
             ],
-            "invoke_when": "Any task requiring computation, data processing, file generation, or executable code",
-            "not_for": "Web search, conversation, opinion, planning",
+            "invoke_when": (
+                "Any task requiring computation, data processing, file generation, or executable code. "
+                "CRITICAL: When a user asks to CREATE, GENERATE, MAKE, BUILD, or EXPORT any document — "
+                "CV, resume, report, invoice, proposal, letter, spreadsheet, PDF, DOCX — "
+                "you MUST use the Code Executor to produce the actual file. "
+                "NEVER return the content as text. ALWAYS generate the downloadable file."
+            ),
+            "not_for": "Web search, conversation, opinion, planning (without file output)",
+            "file_generation_libs": {
+                "pdf": ["reportlab", "fpdf2"],
+                "docx": ["python-docx"],
+                "excel": ["openpyxl", "xlsxwriter"],
+                "csv": ["csv (stdlib)", "pandas"],
+            },
         },
         "web_researcher": {
             "model": "gemini-2.5-flash",
@@ -152,7 +167,17 @@ Capabilities:
 Do NOT route here for: {img_agent['not_for']}
 
 ### Code Executor (o4-mini + Code Interpreter)
-Route here when: {code_agent['invoke_when']}
+Route here when: Any task requiring computation, data processing, code execution, or file generation.
+
+**ABSOLUTE RULE — File Generation:**
+When a user asks to create, generate, make, build, or export ANY document — CV, resume, report, invoice, proposal, letter, spreadsheet, PDF, DOCX, CSV — you MUST use the Code Executor to produce the actual downloadable file. NEVER return the content as text. ALWAYS generate the file.
+
+Available libraries:
+- PDF: `reportlab`, `fpdf2`
+- DOCX: `python-docx`
+- Excel: `openpyxl`, `xlsxwriter`
+- Data: `pandas`, `csv`
+
 Capabilities:
 {chr(10).join(f"- {c}" for c in code_agent['capabilities'])}
 Do NOT route here for: {code_agent['not_for']}

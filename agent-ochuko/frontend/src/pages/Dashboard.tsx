@@ -94,19 +94,21 @@ function FileDownloadCard({ filename, download_url, size_bytes }: {
 
 // ─── Mermaid block renderer ───────────────────────────────────────────────────
 // Lazy-imports mermaid.js on first use. Renders diagram → inline SVG.
-// During streaming (isStreaming=true for the last message), skipped — the
-// block shows as a code fence until [DONE], then re-renders as a diagram.
+// During streaming (isStreaming=true for the last message), skipped.
 let _mermaidReady = false
 let _mermaidIdCounter = 0
 
 function MermaidBlock({ code }: { code: string }) {
-  const ref = useRef<HTMLDivElement>(null)
+  const diagramRef = useRef<HTMLDivElement>(null)
   const id = useRef(`mermaid-${++_mermaidIdCounter}`).current
+  const [showSource, setShowSource] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
+    if (showSource) return
     let cancelled = false
     async function render() {
-      if (!ref.current) return
+      if (!diagramRef.current) return
       if (!_mermaidReady) {
         const m = await import('mermaid')
         m.default.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
@@ -115,21 +117,61 @@ function MermaidBlock({ code }: { code: string }) {
       try {
         const { default: mermaid } = await import('mermaid')
         const { svg } = await mermaid.render(id, code)
-        if (!cancelled && ref.current) ref.current.innerHTML = svg
+        if (!cancelled && diagramRef.current) diagramRef.current.innerHTML = svg
       } catch (err: any) {
-        if (!cancelled && ref.current)
-          ref.current.innerHTML = `<pre class="text-red-400 text-xs p-2">Diagram error: ${err?.message || 'invalid syntax'}</pre>`
+        if (!cancelled && diagramRef.current)
+          diagramRef.current.innerHTML = `<pre class="text-red-400 text-xs p-2">Diagram error: ${err?.message || 'invalid syntax'}</pre>`
       }
     }
     render()
     return () => { cancelled = true }
-  }, [code, id])
+  }, [code, id, showSource])
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
 
   return (
-    <div
-      ref={ref}
-      className="my-3 rounded-xl border border-[#1e2025] bg-[#0d1117] p-4 overflow-x-auto"
-    />
+    <div className="my-3 rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#1e2025] bg-[#0a0d12]">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold text-[#7d8590] uppercase tracking-widest select-none">Mermaid</span>
+          <button
+            onClick={() => setShowSource(s => !s)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors border ${
+              showSource
+                ? 'bg-[#1f6feb22] text-[#58a6ff] border-[#1f6feb44]'
+                : 'text-[#484f58] hover:text-[#8b949e] border-transparent hover:border-[#30363d]'
+            }`}
+            title={showSource ? 'Show diagram' : 'Show source'}
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.72 3.22a.75.75 0 011.06 1.06L2.06 8l3.72 3.72a.75.75 0 11-1.06 1.06L.47 8.53a.75.75 0 010-1.06l4.25-4.25zm6.56 0a.75.75 0 10-1.06 1.06L13.94 8l-3.72 3.72a.75.75 0 101.06 1.06l4.25-4.25a.75.75 0 000-1.06l-4.25-4.25z"/>
+            </svg>
+            Code
+          </button>
+        </div>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-[#484f58] hover:text-[#8b949e] border border-transparent hover:border-[#30363d] transition-colors"
+          title="Copy source"
+        >
+          {copied
+            ? <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>
+            : <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg>
+          }
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      {showSource
+        ? <pre className="p-4 text-xs text-[#a5d6ff] overflow-x-auto font-mono leading-relaxed m-0">{code}</pre>
+        : <div ref={diagramRef} className="p-4 overflow-x-auto" />
+      }
+    </div>
   )
 }
 
