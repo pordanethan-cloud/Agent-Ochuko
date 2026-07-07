@@ -135,40 +135,52 @@ function MermaidBlock({ code }: { code: string }) {
   }
 
   return (
-    <div className="my-3 rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#1e2025] bg-[#0a0d12]">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-semibold text-[#7d8590] uppercase tracking-widest select-none">Mermaid</span>
-          <button
-            onClick={() => setShowSource(s => !s)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors border ${
-              showSource
-                ? 'bg-[#1f6feb22] text-[#58a6ff] border-[#1f6feb44]'
-                : 'text-[#484f58] hover:text-[#8b949e] border-transparent hover:border-[#30363d]'
-            }`}
-            title={showSource ? 'Show diagram' : 'Show source'}
-          >
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+    <div className="group my-3 relative rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
+      {/* Corner icon buttons — top right, revealed on hover */}
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        {/* Eye / Code toggle */}
+        <button
+          onClick={() => setShowSource(s => !s)}
+          title={showSource ? 'Show diagram' : 'Show source'}
+          className={`flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${
+            showSource
+              ? 'bg-[#1f1f1f] border-[#58a6ff44] text-[#58a6ff]'
+              : 'bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58]'
+          }`}
+        >
+          {showSource ? (
+            /* Eye icon — back to diagram */
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 2C4.5 2 1.7 4.3 0 8c1.7 3.7 4.5 6 8 6s6.3-2.3 8-6c-1.7-3.7-4.5-6-8-6zm0 10a4 4 0 110-8 4 4 0 010 8zm0-6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z"/>
+            </svg>
+          ) : (
+            /* Code </> icon — show source */
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
               <path d="M4.72 3.22a.75.75 0 011.06 1.06L2.06 8l3.72 3.72a.75.75 0 11-1.06 1.06L.47 8.53a.75.75 0 010-1.06l4.25-4.25zm6.56 0a.75.75 0 10-1.06 1.06L13.94 8l-3.72 3.72a.75.75 0 101.06 1.06l4.25-4.25a.75.75 0 000-1.06l-4.25-4.25z"/>
             </svg>
-            Code
-          </button>
-        </div>
+          )}
+        </button>
+        {/* Copy */}
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-[#484f58] hover:text-[#8b949e] border border-transparent hover:border-[#30363d] transition-colors"
           title="Copy source"
+          className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
         >
-          {copied
-            ? <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>
-            : <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg>
-          }
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? (
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="#3fb950">
+              <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/>
+              <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/>
+            </svg>
+          )}
         </button>
       </div>
+      {/* Content */}
       {showSource
-        ? <pre className="p-4 text-xs text-[#a5d6ff] overflow-x-auto font-mono leading-relaxed m-0">{code}</pre>
+        ? <pre className="p-4 pt-8 text-xs text-[#a5d6ff] overflow-x-auto font-mono leading-relaxed m-0">{code}</pre>
         : <div ref={diagramRef} className="p-4 overflow-x-auto" />
       }
     </div>
