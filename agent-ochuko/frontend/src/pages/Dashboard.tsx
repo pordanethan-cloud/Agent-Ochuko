@@ -2030,6 +2030,49 @@ export const Dashboard: React.FC = () => {
   const [isLocked, setIsLocked] = useState(() => !!localStorage.getItem('app_lock_pin'))
   const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
 
+  const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024)
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('sidebar_width')
+    return saved ? parseInt(saved, 10) : 256
+  })
+  const isResizingRef = useRef(false)
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsDesktop(window.innerWidth >= 1024)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isResizingRef.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingRef.current) return
+      const newWidth = Math.max(220, Math.min(480, e.clientX - 12))
+      setSidebarWidth(newWidth)
+    }
+    const handleMouseUp = () => {
+      if (!isResizingRef.current) return
+      isResizingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      localStorage.setItem('sidebar_width', sidebarWidth.toString())
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [sidebarWidth])
+
   // Auto-lock after 5 minutes of idle time
   useEffect(() => {
     if (!localStorage.getItem('app_lock_pin') || isLocked) return
@@ -4325,7 +4368,7 @@ export const Dashboard: React.FC = () => {
 
       {/* Backdrop */}
 
-      {(isSidebarOpen || isSidebarHovered) && (
+      {(isSidebarOpen || isSidebarHovered) && !isDesktop && (
 
         <div
 
@@ -4343,7 +4386,9 @@ export const Dashboard: React.FC = () => {
 
         onMouseLeave={() => setIsSidebarHovered(false)}
 
-        className={`absolute top-3 left-3 h-[calc(100vh-24px)] w-64 bg-[#0d0f11]/95 border border-[#1e2025] rounded-2xl z-30 flex flex-col justify-between px-6 py-7 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out ${
+        style={{ width: (isSidebarOpen || isSidebarHovered) ? `${sidebarWidth}px` : '256px' }}
+
+        className={`absolute top-3 left-3 h-[calc(100vh-24px)] bg-[#0d0f11]/95 border border-[#1e2025] rounded-2xl z-30 flex flex-col justify-between px-6 py-7 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out ${
 
           isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
 
@@ -4836,13 +4881,26 @@ export const Dashboard: React.FC = () => {
 
           </button>
 
+          {/* Resizing Handle */}
+          {isDesktop && (isSidebarOpen || isSidebarHovered) && (
+            <div
+              onMouseDown={startResizing}
+              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[#c5a880]/30 active:bg-[#c5a880]/50 transition z-50"
+            />
+          )}
+
         </div>
 
       </aside>
 
       {/* Chat Workspace */}
 
-      <main className="flex-1 flex flex-col relative bg-brand-bg overflow-hidden z-10 min-w-0">
+      <main
+        className="flex-1 flex flex-col relative bg-brand-bg overflow-hidden z-10 min-w-0 transition-all duration-300 ease-out"
+        style={{
+          marginLeft: (isDesktop && (isSidebarOpen || isSidebarHovered)) ? `${sidebarWidth + 12}px` : '0px'
+        }}
+      >
 
         {/* Header */}
 
