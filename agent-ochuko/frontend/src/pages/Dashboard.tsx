@@ -519,7 +519,7 @@ function renderMath(tex: string, displayMode: boolean): React.ReactNode {
   return <span className="font-mono">{displayMode ? `$$${tex}$$` : `$${tex}$`}</span>
 }
 
-function renderInline(text: string, keyBase: string): React.ReactNode {
+function renderInline(text: string, keyBase: string, generatedFiles?: any[]): React.ReactNode {
 
   const pattern = /(\$\$([\s\S]*?)\$\$|\$(?!\s)([^\$]+?)(?<!\s)\$|\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`|\[(.*?)\]\((.*?)\))/g
 
@@ -593,7 +593,18 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
 
       const label = match[7]
 
-      const url = match[8]
+      let url = match[8]
+
+      if ((url.includes('/mnt/data/') || url.startsWith('sandbox:')) && generatedFiles) {
+        const filename = url.split('/').pop() || '';
+        const matchingFile = generatedFiles.find(gf => 
+          gf.filename?.toLowerCase() === filename.toLowerCase() || 
+          gf.filename?.toLowerCase().endsWith(filename.toLowerCase())
+        );
+        if (matchingFile && matchingFile.download_url) {
+          url = matchingFile.download_url;
+        }
+      }
 
       segments.push(
 
@@ -1591,7 +1602,7 @@ function parseMarkdownToBlocks(text: string): ASTBlock[] {
 
 // ─── Block markdown renderer ──────────────────────────────────────────────────
 
-export function renderMarkdown(text: string): React.ReactNode {
+export function renderMarkdown(text: string, generatedFiles?: any[]): React.ReactNode {
 
   const blocks = parseMarkdownToBlocks(text)
 
@@ -1609,7 +1620,7 @@ export function renderMarkdown(text: string): React.ReactNode {
 
             const level = block.level || 1
 
-            const content = renderInline(block.content || '', key)
+            const content = renderInline(block.content || '', key, generatedFiles)
 
             switch (level) {
 
@@ -1731,7 +1742,7 @@ export function renderMarkdown(text: string): React.ReactNode {
 
               >
 
-                {renderInline(block.content || '', key)}
+                {renderInline(block.content || '', key, generatedFiles)}
 
               </blockquote>
 
@@ -1761,7 +1772,7 @@ export function renderMarkdown(text: string): React.ReactNode {
 
                         >
 
-                          {renderInline(header, `${key}-th-${hIdx}`)}
+                          {renderInline(header, `${key}-th-${hIdx}`, generatedFiles)}
 
                         </th>
 
@@ -1787,7 +1798,7 @@ export function renderMarkdown(text: string): React.ReactNode {
 
                           <td key={cIdx} className="px-4 py-3 text-brand-text/85">
 
-                            {renderInline(cell, `${key}-td-${rIdx}-${cIdx}`)}
+                            {renderInline(cell, `${key}-td-${rIdx}-${cIdx}`, generatedFiles)}
 
                           </td>
 
@@ -1827,7 +1838,7 @@ export function renderMarkdown(text: string): React.ReactNode {
 
                       <span className="text-[13px] text-brand-text/85">
 
-                        {renderInline(item, `${key}-oli-${j}`)}
+                        {renderInline(item, `${key}-oli-${j}`, generatedFiles)}
 
                       </span>
 
@@ -1853,7 +1864,7 @@ export function renderMarkdown(text: string): React.ReactNode {
 
                       <span className="text-[13px] text-brand-text/85">
 
-                        {renderInline(item, `${key}-uli-${j}`)}
+                        {renderInline(item, `${key}-uli-${j}`, generatedFiles)}
 
                       </span>
 
@@ -1881,7 +1892,7 @@ export function renderMarkdown(text: string): React.ReactNode {
 
               <p key={key} className="text-[13.5px] text-brand-text/88 leading-[1.78] tracking-[0.01em]">
 
-                {renderInline(block.content || '', key)}
+                {renderInline(block.content || '', key, generatedFiles)}
 
               </p>
 
@@ -5597,7 +5608,7 @@ export const Dashboard: React.FC = () => {
 
                             msg.content,
 
-                            renderMarkdown,
+                            (t) => renderMarkdown(t, msg.generatedFiles),
 
                             // Only skip rich rendering if this is the actively streaming message
 

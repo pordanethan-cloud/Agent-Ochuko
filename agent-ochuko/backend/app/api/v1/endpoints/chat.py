@@ -1167,11 +1167,19 @@ async def chat_stream_generator(
                                                                     try:
                                                                         def _download_file(cid=container_id, fname=filename):
                                                                             proj_client = get_projects_client()
-                                                                            stream = proj_client.beta.agents.download_session_file(
-                                                                                agent_name=_CODE_EXECUTOR_AGENT_NAME,
-                                                                                agent_session_id=cid,
-                                                                                path=fname
-                                                                            )
+                                                                            agents_ops = getattr(proj_client, "agents", None)
+                                                                            if agents_ops and hasattr(agents_ops, "download_session_file"):
+                                                                                stream = agents_ops.download_session_file(
+                                                                                    agent_name=_CODE_EXECUTOR_AGENT_NAME,
+                                                                                    agent_session_id=cid,
+                                                                                    path=fname
+                                                                                )
+                                                                            else:
+                                                                                stream = proj_client.beta.agents.download_session_file(
+                                                                                    agent_name=_CODE_EXECUTOR_AGENT_NAME,
+                                                                                    agent_session_id=cid,
+                                                                                    path=fname
+                                                                                )
                                                                             return b"".join(stream)
                                                                         
                                                                         file_bytes = await asyncio.to_thread(_download_file)
