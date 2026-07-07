@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock } from 'lucide-react'
 
+import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
 
 import { useJob } from '../hooks/useJob'
@@ -2025,6 +2026,32 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: str
 export const Dashboard: React.FC = () => {
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
+
+  const [isLocked, setIsLocked] = useState(() => !!localStorage.getItem('app_lock_pin'))
+  const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
+
+  // Auto-lock after 5 minutes of idle time
+  useEffect(() => {
+    if (!localStorage.getItem('app_lock_pin') || isLocked) return
+
+    let idleTimeout: any
+
+    const resetTimer = () => {
+      clearTimeout(idleTimeout)
+      idleTimeout = setTimeout(() => {
+        setIsLocked(true)
+      }, 5 * 60 * 1000)
+    }
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart']
+    events.forEach(e => window.addEventListener(e, resetTimer))
+    resetTimer()
+
+    return () => {
+      clearTimeout(idleTimeout)
+      events.forEach(e => window.removeEventListener(e, resetTimer))
+    }
+  }, [isLocked])
 
   const [messages, setMessages] = useState<Message[]>([])
 
@@ -4760,6 +4787,41 @@ export const Dashboard: React.FC = () => {
 
           </div>
 
+          {localStorage.getItem('app_lock_pin') ? (
+            <div className="flex gap-2 w-full">
+              <button
+                onClick={() => setIsLocked(true)}
+                className="flex-1 h-9 text-[#c5a880] hover:text-[#e2c7a0] hover:bg-[#c5a880]/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#c5a880]/20 hover:border-[#c5a880]/40"
+                title="Lock App"
+              >
+                <Lock className="w-3 h-3" />
+                <span>Lock App</span>
+              </button>
+              <button
+                onClick={() => setLockMode('change')}
+                className="h-9 px-2.5 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[10px] font-semibold border border-[#1e2025]"
+                title="Change PIN"
+              >
+                Change
+              </button>
+              <button
+                onClick={() => setLockMode('disable')}
+                className="h-9 px-2.5 text-red-400/50 hover:text-red-400 hover:bg-red-950/10 transition duration-150 rounded-lg text-[10px] font-semibold border border-transparent hover:border-red-950/20"
+                title="Disable PIN"
+              >
+                Disable
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setLockMode('setup')}
+              className="w-full h-9 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#1e2025] hover:border-white/10"
+            >
+              <Lock className="w-3 h-3" />
+              <span>Setup PIN Lock</span>
+            </button>
+          )}
+
           <button
 
             onClick={handleSignOut}
@@ -5942,7 +6004,30 @@ export const Dashboard: React.FC = () => {
 
         ))}
 
-      </div>
+      
+      {/* App Lock Overlays */}
+      {isLocked && (
+        <AppLock
+          mode="unlock"
+          onSuccess={() => setIsLocked(false)}
+        />
+      )}
+
+      {lockMode && (
+        <AppLock
+          mode={lockMode}
+          onSuccess={(newPin) => {
+            setLockMode(null)
+            showToast(
+              lockMode === 'setup' ? 'Security PIN enabled' :
+              lockMode === 'change' ? 'Security PIN changed successfully' :
+              'Security PIN disabled'
+            )
+          }}
+          onClose={() => setLockMode(null)}
+        />
+      )}
+</div>
 
     </div>
 
