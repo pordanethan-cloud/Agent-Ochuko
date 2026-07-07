@@ -41,35 +41,23 @@ function useKaTeX(active: boolean) {
 
 }
 
+/*
 function renderLatex(tex: string, displayMode: boolean): React.ReactNode {
-
   try {
-
     // @ts-ignore — katex loaded lazily
-
     const katex = (window as any).__katex || require('katex')
-
     const html = katex.renderToString(tex, { displayMode, throwOnError: false })
-
     return (
-
       <span
-
         className={displayMode ? 'block my-3 text-center overflow-x-auto' : 'inline'}
-
         dangerouslySetInnerHTML={{ __html: html }}
-
       />
-
     )
-
   } catch {
-
     return <code className="text-brand-accent">{tex}</code>
-
   }
-
 }
+*/
 
 interface Source {
 
@@ -2320,7 +2308,7 @@ export const Dashboard: React.FC = () => {
 
   const [activityLabel, setActivityLabel] = useState<string>('')
 
-  const [agentStep, setAgentStep] = useState<number>(0)
+  const [, setAgentStep] = useState<number>(0)
 
   const [agentMaxSteps, setAgentMaxSteps] = useState<number>(10)
 
@@ -4760,7 +4748,7 @@ export const Dashboard: React.FC = () => {
 
             ) : (() => {
 
-              const now = Date.now()
+
 
               const startOfToday = new Date(); startOfToday.setHours(0,0,0,0)
 
@@ -6300,7 +6288,7 @@ export const Dashboard: React.FC = () => {
       {lockMode && (
         <AppLock
           mode={lockMode}
-          onSuccess={(newPin) => {
+          onSuccess={() => {
             setLockMode(null)
             showToast(
               lockMode === 'setup' ? 'Security PIN enabled' :

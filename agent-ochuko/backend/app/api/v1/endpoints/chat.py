@@ -1144,25 +1144,25 @@ async def chat_stream_generator(
                                                             if not fid:
                                                                 continue
                                                             try:
-                                                                    def _fetch_file(file_id=fid, tid=thread_id):
-                                                                        oai = get_code_executor_openai_client()
-                                                                        content_iter = oai.files.content(file_id)
-                                                                        raw = content_iter.read()
-                                                                        return raw
-                                                                    file_bytes = await asyncio.to_thread(_fetch_file)
-                                                                    fname = ann_fname or f"output_{fid[:8]}.bin"
-                                                                    mime = "application/octet-stream"
-                                                                    r2_url = await _upload_generated_file(
-                                                                        file_bytes, fname, mime,
-                                                                        conversation_id, user_id,
-                                                                    )
-                                                                    generated_files_info.append({
-                                                                        "filename": fname,
-                                                                        "download_url": r2_url,
-                                                                        "size_bytes": len(file_bytes),
-                                                                    })
-                                                                except Exception as fann_err:
-                                                                    logger.warning("Could not fetch file annotation %s: %s", fid, fann_err)
+                                                                def _fetch_file(file_id=fid, tid=thread_id):
+                                                                    oai = get_code_executor_openai_client()
+                                                                    content_iter = oai.files.content(file_id)
+                                                                    raw = content_iter.read()
+                                                                    return raw
+                                                                file_bytes = await asyncio.to_thread(_fetch_file)
+                                                                fname = ann_fname or f"output_{fid[:8]}.bin"
+                                                                mime = "application/octet-stream"
+                                                                r2_url = await _upload_generated_file(
+                                                                    file_bytes, fname, mime,
+                                                                    conversation_id, user_id,
+                                                                )
+                                                                generated_files_info.append({
+                                                                    "filename": fname,
+                                                                    "download_url": r2_url,
+                                                                    "size_bytes": len(file_bytes),
+                                                                })
+                                                            except Exception as fann_err:
+                                                                logger.warning("Could not fetch file annotation %s: %s", fid, fann_err)
 
                                             # Emit download cards for each generated file
                                             for gf in generated_files_info:
