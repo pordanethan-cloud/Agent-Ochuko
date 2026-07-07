@@ -427,14 +427,11 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
   }
 
   return (
-    <div className="bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-xl overflow-hidden my-4 shadow-lg">
-      <div className="flex items-center justify-between px-4 py-2 bg-[#121417] border-b border-[#1a1d20]/50 select-none">
-        <span className="text-[10px] font-bold text-brand-muted tracking-widest uppercase font-mono">
-          {language}
-        </span>
+    <div className="group relative bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-xl overflow-hidden my-4 shadow-lg">
+      {/* Corner copy button — hover reveal */}
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 text-[10px] font-semibold text-brand-muted hover:text-brand-text transition duration-150 tracking-wider uppercase"
         >
           {copied ? (
             <>
