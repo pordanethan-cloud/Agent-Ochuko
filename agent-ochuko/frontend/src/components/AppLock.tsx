@@ -158,11 +158,11 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
         )}
 
         <div className="flex flex-col items-center text-center space-y-3 mb-8">
-          <div className="w-12 h-12 rounded-2xl bg-[#c5a880]/10 border border-[#c5a880]/20 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-2xl bg-[#ffffff]/10 border border-[#ffffff]/20 flex items-center justify-center">
             {mode === 'setup' || mode === 'change' ? (
-              <ShieldCheck className="w-5 h-5 text-[#c5a880]" />
+              <ShieldCheck className="w-5 h-5 text-[#ffffff]" />
             ) : (
-              <Lock className="w-5 h-5 text-[#c5a880]" />
+              <Lock className="w-5 h-5 text-[#ffffff]" />
             )}
           </div>
           <div>
@@ -181,7 +181,7 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
               key={idx}
               className={`w-3.5 h-3.5 rounded-full border transition-all duration-150 ${
                 idx < pin.length
-                  ? 'bg-[#c5a880] border-[#c5a880] scale-110 shadow-lg shadow-[#c5a880]/20'
+                  ? 'bg-[#ffffff] border-[#ffffff] scale-110 shadow-lg shadow-[#ffffff]/20'
                   : 'bg-transparent border-[#1e2025]'
               }`}
             />

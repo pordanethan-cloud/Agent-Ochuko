@@ -14,7 +14,7 @@ export default {
           surface: "#0f1113",    // Refined slate surface
           card: "#16181b",       // Dark charcoal base
           border: "#202328",     // Premium low-contrast border
-          accent: "#c5a880",     // Muted gold/bronze (signals competence)
+          accent: "#ffffff",     // Muted gold/bronze (signals competence)
           text: "#f3f4f6",       // Clean soft white
           muted: "#8e95a2",      // Warm muted silver
         }

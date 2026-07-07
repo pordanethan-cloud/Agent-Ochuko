@@ -15,6 +15,7 @@ Settings exposed:
   AGENT_STEP_TIMEOUT_SECS    Per-iteration timeout in seconds (default: 45)
 """
 
+from typing import Optional
 from app.core.config import get_config
 
 
@@ -38,8 +39,8 @@ async def get_max_iterations(mode: str = "think") -> int:
     mode_key_map = {
         "think":   ("MAX_AGENT_ITERS_THINK",  str(global_cap)),
         "solve":   ("MAX_AGENT_ITERS_SOLVE",  "6"),
-        "discuss": ("MAX_AGENT_ITERS_DISCUSS", "1"),
-        "nano":    ("MAX_AGENT_ITERS_DISCUSS", "1"),
+        "discuss": ("MAX_AGENT_ITERS_DISCUSS", "3"),
+        "nano":    ("MAX_AGENT_ITERS_DISCUSS", "3"),
     }
 
     key, default = mode_key_map.get(mode.lower(), ("MAX_AGENT_ITERATIONS", str(global_cap)))
@@ -51,9 +52,46 @@ async def get_max_iterations(mode: str = "think") -> int:
 
 
 async def get_step_timeout() -> int:
-    """Returns the per-iteration step timeout in seconds (default: 45)."""
-    raw = await get_config("AGENT_STEP_TIMEOUT_SECS", "45")
+    """Returns the per-iteration step timeout in seconds (default: 90)."""
+    raw = await get_config("AGENT_STEP_TIMEOUT_SECS", "90")
     try:
         return max(10, int(raw))
     except (ValueError, TypeError):
-        return 45
+        return 90
+
+
+async def get_reasoning_effort(mode: str = "think") -> Optional[str]:
+    """
+    Returns the reasoning effort level ('low', 'medium', 'high') or None if not applicable.
+    Only applicable for reasoning models (e.g. think or solve modes).
+    """
+    from typing import Optional
+    if mode.lower() == "think":
+        val = await get_config("REASONING_EFFORT_THINK", "high")
+    elif mode.lower() == "solve":
+        val = await get_config("REASONING_EFFORT_SOLVE", "medium")
+    else:
+        return None
+
+    if val and val.lower() in ("low", "medium", "high"):
+        return val.lower()
+    return None
+
+
+async def get_max_completion_tokens(mode: str = "think") -> Optional[int]:
+    """
+    Returns the maximum completion tokens limit for a given mode.
+    Only applicable for reasoning models (e.g. think or solve modes).
+    """
+    from typing import Optional
+    if mode.lower() == "think":
+        val = await get_config("MAX_COMPLETION_TOKENS_THINK", "8000")
+    elif mode.lower() == "solve":
+        val = await get_config("MAX_COMPLETION_TOKENS_SOLVE", "4000")
+    else:
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+

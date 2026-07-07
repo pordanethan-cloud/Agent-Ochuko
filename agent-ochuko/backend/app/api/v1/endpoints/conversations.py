@@ -20,6 +20,7 @@ VALID_MODES = {"think", "solve", "discuss"}
 class ConversationUpdate(BaseModel):
     mode: str | None = Field(None, description="The mode to switch to (think, solve, or discuss)")
     title: str | None = Field(None, min_length=1, max_length=120, description="New conversation title")
+    is_shared: bool | None = Field(None, description="Toggle shared status of the conversation")
 
 
 @router.get("", summary="List all active conversations for the user")
@@ -38,7 +39,7 @@ async def list_conversations(
         supabase = get_supabase_admin()
         response = (
             supabase.table("conversations")
-            .select("id, title, model, mode, message_count, last_compacted_at, created_at, updated_at")
+            .select("id, title, model, mode, message_count, last_compacted_at, created_at, updated_at, is_shared, share_token")
             .eq("user_id", user_id)
             .eq("is_archived", False)
             .order("updated_at", desc=True)
@@ -174,14 +175,14 @@ async def update_conversation(
     if body.mode is not None and body.mode not in VALID_MODES:
         raise HTTPException(status_code=422, detail=f"Invalid mode. Must be one of: {VALID_MODES}")
 
-    if body.mode is None and body.title is None:
-        raise HTTPException(status_code=422, detail="At least one of 'mode' or 'title' must be provided.")
+    if body.mode is None and body.title is None and body.is_shared is None:
+        raise HTTPException(status_code=422, detail="At least one of 'mode', 'title' or 'is_shared' must be provided.")
 
     try:
         supabase = get_supabase_admin()
         conv_res = (
             supabase.table("conversations")
-            .select("user_id")
+            .select("user_id, share_token, is_shared")
             .eq("id", id)
             .maybe_single()
             .execute()
@@ -196,10 +197,18 @@ async def update_conversation(
             update_payload["mode"] = body.mode
         if body.title is not None:
             update_payload["title"] = body.title.strip()
+        if body.is_shared is not None:
+            update_payload["is_shared"] = body.is_shared
 
-        supabase.table("conversations").update(update_payload).eq("id", id).execute()
-        logger.info("Conversation %s updated %s by user %s", id, list(update_payload.keys()), user_id)
-        return {"status": "updated", **update_payload}
+        if update_payload:
+            supabase.table("conversations").update(update_payload).eq("id", id).execute()
+            logger.info("Conversation %s updated %s by user %s", id, list(update_payload.keys()), user_id)
+            
+        return {
+            "status": "updated",
+            "is_shared": body.is_shared if body.is_shared is not None else conv_res.data.get("is_shared"),
+            "share_token": conv_res.data.get("share_token")
+        }
     except HTTPException:
         raise
     except Exception as e:

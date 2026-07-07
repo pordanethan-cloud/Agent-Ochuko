@@ -114,7 +114,7 @@ div[aria-live="polite"] > div {
   left: 0;
   right: 0;
   height: 2.2px;
-  background: linear-gradient(to right, transparent, #c5a880, transparent);
+  background: linear-gradient(to right, transparent, #ffffff, transparent);
   background-size: 200% 100%;
   animation: loading-slide 1.4s infinite linear;
   border-bottom-left-radius: 12px;

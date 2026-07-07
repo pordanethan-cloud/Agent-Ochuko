@@ -46,13 +46,12 @@ if (Test-Path $EnvPath) {
     }
 }
 
-if ($GoogleVars.Count -gt 0) {
-    Write-Host "Updating container app with Google API keys..." -ForegroundColor Yellow
-    # Pass the array directly so PowerShell passes them as individual arguments
-    az containerapp update --name agent-ochuko-api --resource-group rg-ochuko --image ochair1/agent-ochuko-api:latest --set-env-vars $GoogleVars
-} else {
-    az containerapp update --name agent-ochuko-api --resource-group rg-ochuko --image ochair1/agent-ochuko-api:latest
-}
+$epoch = [int]([datetimeoffset](Get-Date)).ToUnixTimeSeconds()
+$GoogleVars += "DEPLOY_TIMESTAMP=$epoch"
+
+Write-Host "Updating container app..." -ForegroundColor Yellow
+# Pass the array directly so PowerShell passes them as individual arguments
+az containerapp update --name agent-ochuko-api --resource-group rg-ochuko --image ochair1/agent-ochuko-api:latest --set-env-vars $GoogleVars
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Azure Container App update failed!"

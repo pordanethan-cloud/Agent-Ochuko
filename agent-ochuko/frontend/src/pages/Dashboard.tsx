@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2 } from 'lucide-react'
 
 import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
@@ -19,7 +19,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 // After first load it's browser-cached — subsequent renders are instant.
 
-function useKaTeX(active: boolean) {
+export function useKaTeX(active: boolean) {
 
   const [katexReady, setKatexReady] = useState(false)
 
@@ -33,7 +33,12 @@ function useKaTeX(active: boolean) {
 
       import('katex'),
 
-    ]).then(() => setKatexReady(true)).catch(() => {})
+    ]).then(([_, katexModule]) => {
+      const k = (katexModule as any).default || katexModule;
+      (window as any).katex = k;
+      (window as any).__katex = k;
+      setKatexReady(true)
+    }).catch(() => {})
 
   }, [active])
 
@@ -89,6 +94,8 @@ interface Message {
 
   agentMaxSteps?: number
 
+  agentLabel?: string
+
   timestamp?: number     // Unix ms — set at send/receive time for relative display
 
   generatedFiles?: { filename: string; download_url: string; size_bytes: number }[]
@@ -118,9 +125,9 @@ function FileDownloadCard({
   return (
     <div
       onClick={onView}
-      className="mt-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-[#c5a880]/20 bg-[#c5a880]/5 hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition-all duration-200 group/dl w-full cursor-pointer select-none"
+      className="mt-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-[#ffffff]/20 bg-[#ffffff]/5 hover:bg-[#ffffff]/10 hover:border-[#ffffff]/40 transition-all duration-200 group/dl w-full cursor-pointer select-none"
     >
-      <div className="w-9 h-9 rounded-lg bg-[#c5a880]/15 flex items-center justify-center shrink-0">
+      <div className="w-9 h-9 rounded-lg bg-[#ffffff]/15 flex items-center justify-center shrink-0">
         <span className="text-[9px] font-black text-brand-accent tracking-tight">{ext}</span>
       </div>
       <div className="flex-1 min-w-0">
@@ -438,7 +445,7 @@ function parseBlocks(text: string): Block[] {
 
 // After [DONE] the component re-renders and diagrams appear cleanly.
 
-function renderRichContent(
+export function renderRichContent(
 
   text: string,
 
@@ -494,9 +501,27 @@ function renderRichContent(
 
 // ─── Inline markdown: bold, italic, code, links ───────────────────────────────
 
+function renderMath(tex: string, displayMode: boolean): React.ReactNode {
+  const katex = (window as any).katex || (window as any).__katex;
+  if (katex) {
+    try {
+      const html = katex.renderToString(tex, { displayMode, throwOnError: false })
+      return (
+        <span
+          className={displayMode ? 'block my-3 text-center overflow-x-auto' : 'inline'}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      )
+    } catch {
+      return <code className="text-brand-accent">{tex}</code>
+    }
+  }
+  return <span className="font-mono">{displayMode ? `$$${tex}$$` : `$${tex}$`}</span>
+}
+
 function renderInline(text: string, keyBase: string): React.ReactNode {
 
-  const pattern = /(\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`|\[(.*?)\]\((.*?)\))/g
+  const pattern = /(\$\$([\s\S]*?)\$\$|\$(?!\s)([^\$]+?)(?<!\s)\$|\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`|\[(.*?)\]\((.*?)\))/g
 
   const segments: React.ReactNode[] = []
 
@@ -514,13 +539,21 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
 
     const fullMatch = match[0]
 
-    if (fullMatch.startsWith('**')) {
+    if (fullMatch.startsWith('$$')) {
+
+      segments.push(<React.Fragment key={`${keyBase}-display-math-${match.index}`}>{renderMath(match[2], true)}</React.Fragment>)
+
+    } else if (fullMatch.startsWith('$')) {
+
+      segments.push(<React.Fragment key={`${keyBase}-inline-math-${match.index}`}>{renderMath(match[3], false)}</React.Fragment>)
+
+    } else if (fullMatch.startsWith('**')) {
 
       segments.push(
 
         <strong key={`${keyBase}-b${match.index}`} className="font-semibold text-[#f0ece4]">
 
-          {match[2]}
+          {match[4]}
 
         </strong>
 
@@ -530,9 +563,9 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
 
       segments.push(
 
-        <em key={`${keyBase}-i${match.index}`} className="italic text-[#c5a880]/90">
+        <em key={`${keyBase}-i${match.index}`} className="italic text-[#ffffff]/90">
 
-          {match[3]}
+          {match[5]}
 
         </em>
 
@@ -546,11 +579,11 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
 
           key={`${keyBase}-c${match.index}`}
 
-          className="bg-black/40 border border-[#c5a880]/20 rounded px-1.5 py-[1px] text-[11.5px] font-mono text-[#c5a880]/90"
+          className="bg-black/40 border border-[#ffffff]/20 rounded px-1.5 py-[1px] text-[11.5px] font-mono text-[#ffffff]/90"
 
         >
 
-          {match[4]}
+          {match[6]}
 
         </code>
 
@@ -558,9 +591,9 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
 
     } else if (fullMatch.startsWith('[')) {
 
-      const label = match[5]
+      const label = match[7]
 
-      const url = match[6]
+      const url = match[8]
 
       segments.push(
 
@@ -574,7 +607,7 @@ function renderInline(text: string, keyBase: string): React.ReactNode {
 
           rel="noopener noreferrer"
 
-          className="text-[#c5a880] hover:text-[#d4b990] underline underline-offset-4 decoration-[#c5a880]/40 transition duration-150"
+          className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
 
         >
 
@@ -656,13 +689,13 @@ const ImagePending: React.FC<{ prompt?: string }> = ({ prompt }) => (
 
       {/* Animated shimmer */}
 
-      <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_infinite] bg-gradient-to-r from-transparent via-[#c5a880]/5 to-transparent" />
+      <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_infinite] bg-gradient-to-r from-transparent via-[#ffffff]/5 to-transparent" />
 
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
 
-        <div className="w-8 h-8 rounded-full border-2 border-[#c5a880]/30 border-t-[#c5a880] animate-spin" />
+        <div className="w-8 h-8 rounded-full border-2 border-[#ffffff]/30 border-t-[#ffffff] animate-spin" />
 
-        <span className="text-[10px] font-bold text-[#c5a880]/60 tracking-widest uppercase">Generating image…</span>
+        <span className="text-[10px] font-bold text-[#ffffff]/60 tracking-widest uppercase">Generating image…</span>
 
       </div>
 
@@ -712,7 +745,7 @@ const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }
 
           rel="noopener noreferrer"
 
-          className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#c5a880] text-[#08090a] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
+          className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#ffffff] text-[#08090a] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
 
           onClick={(e) => e.stopPropagation()}
 
@@ -926,7 +959,7 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
               >
 
-                <FileText className="w-3.5 h-3.5 text-[#c5a880]" />
+                <FileText className="w-3.5 h-3.5 text-[#ffffff]" />
 
                 View as Artifact
 
@@ -1082,7 +1115,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
           </span>
 
-          <span className="text-[#8e95a2]/60 group-hover/stack:text-[#c5a880] transition-colors duration-150">
+          <span className="text-[#8e95a2]/60 group-hover/stack:text-[#ffffff] transition-colors duration-150">
 
             {isOpen ? (
 
@@ -1120,7 +1153,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
               title={src.title || src.url}
 
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#1e2025] bg-[#0c0d10]/95 hover:border-[#c5a880]/30 hover:bg-[#c5a880]/5 transition-all duration-200 group/badge max-w-[240px] shadow-sm animate-fadeIn"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#1e2025] bg-[#0c0d10]/95 hover:border-[#ffffff]/30 hover:bg-[#ffffff]/5 transition-all duration-200 group/badge max-w-[240px] shadow-sm animate-fadeIn"
 
             >
 
@@ -1178,7 +1211,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
               </span>
 
-              <span className="text-[9px] text-[#8e95a2]/30 group-hover/badge:text-[#c5a880]/70 shrink-0 transition-all duration-150 translate-y-[0.5px] group-hover/badge:translate-x-0.5 group-hover/badge:-translate-y-0.5">
+              <span className="text-[9px] text-[#8e95a2]/30 group-hover/badge:text-[#ffffff]/70 shrink-0 transition-all duration-150 translate-y-[0.5px] group-hover/badge:translate-x-0.5 group-hover/badge:-translate-y-0.5">
 
                 ↗
 
@@ -1558,7 +1591,7 @@ function parseMarkdownToBlocks(text: string): ASTBlock[] {
 
 // ─── Block markdown renderer ──────────────────────────────────────────────────
 
-function renderMarkdown(text: string): React.ReactNode {
+export function renderMarkdown(text: string): React.ReactNode {
 
   const blocks = parseMarkdownToBlocks(text)
 
@@ -1694,7 +1727,7 @@ function renderMarkdown(text: string): React.ReactNode {
 
                 key={key}
 
-                className="border-l-2 border-[#c5a880] pl-4 my-4 italic text-brand-text/75 bg-[#c5a880]/4 py-2 pr-3 rounded-r-lg"
+                className="border-l-2 border-[#ffffff] pl-4 my-4 italic text-brand-text/75 bg-[#ffffff]/4 py-2 pr-3 rounded-r-lg"
 
               >
 
@@ -1724,7 +1757,7 @@ function renderMarkdown(text: string): React.ReactNode {
 
                           key={hIdx}
 
-                          className="px-4 py-3 font-semibold border-b border-[#1a1d20]/30 tracking-wider text-[11px] uppercase text-[#c5a880]/80"
+                          className="px-4 py-3 font-semibold border-b border-[#1a1d20]/30 tracking-wider text-[11px] uppercase text-[#ffffff]/80"
 
                         >
 
@@ -1786,7 +1819,7 @@ function renderMarkdown(text: string): React.ReactNode {
 
                     <li key={j} className="flex gap-2.5 leading-relaxed items-start">
 
-                      <span className="text-[#c5a880] font-semibold text-[11.5px] shrink-0 min-w-[1.25rem] mt-[1.5px]">
+                      <span className="text-[#ffffff] font-semibold text-[11.5px] shrink-0 min-w-[1.25rem] mt-[1.5px]">
 
                         {j + 1}.
 
@@ -1816,7 +1849,7 @@ function renderMarkdown(text: string): React.ReactNode {
 
                     <li key={j} className="flex gap-2.5 leading-relaxed items-start">
 
-                      <span className="text-[#c5a880] text-[8px] mt-[6.5px] shrink-0 select-none">◆</span>
+                      <span className="text-[#ffffff] text-[8px] mt-[6.5px] shrink-0 select-none">◆</span>
 
                       <span className="text-[13px] text-brand-text/85">
 
@@ -1960,7 +1993,7 @@ const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
 
           key={idx}
 
-          className="w-[3px] rounded-full bg-[#c5a880] transition-all duration-75"
+          className="w-[3px] rounded-full bg-[#ffffff] transition-all duration-75"
 
           style={{
 
@@ -1990,7 +2023,7 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: str
 
     <div className="relative flex-shrink-0">
 
-      <div className="w-5 h-5 rounded-full border border-[#c5a880]/30 border-t-[#c5a880] animate-spin" />
+      <div className="w-5 h-5 rounded-full border border-[#ffffff]/30 border-t-[#ffffff] animate-spin" />
 
     </div>
 
@@ -1998,11 +2031,11 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: str
 
     <div className="flex items-center gap-2">
 
-      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#c5a880]/10 border border-[#c5a880]/20 text-[10px] font-bold text-[#c5a880] tracking-widest uppercase">
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ffffff]/10 border border-[#ffffff]/20 text-[10px] font-bold text-[#ffffff] tracking-widest uppercase">
 
         Step {step}
 
-        <span className="text-[#c5a880]/40 font-normal">/ {maxSteps}</span>
+        <span className="text-[#ffffff]/40 font-normal">/ {maxSteps}</span>
 
       </span>
 
@@ -2140,6 +2173,50 @@ export const Dashboard: React.FC = () => {
   const [isSidebarHovered, setIsSidebarHovered] = useState(false)
 
   const [isOnline, setIsOnline] = useState(navigator.onLine)
+
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false)
+  const [sharing, setSharing] = useState(false)
+
+  const handleShareToggle = async (shouldShare: boolean) => {
+    if (!activeConversationId || activeConversationId === '00000000-0000-0000-0000-000000000000') return
+    setSharing(true)
+    try {
+      const token = localStorage.getItem('supabase_token') || (await supabase.auth.getSession()).data.session?.access_token
+      if (!token) return
+
+      const res = await fetch(`${API_BASE}/v1/conversations/${activeConversationId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ is_shared: shouldShare })
+      })
+
+      if (res.ok) {
+        const data = await res.json()
+        setConversations(prev => prev.map(c => 
+          c.id === activeConversationId 
+            ? { ...c, is_shared: shouldShare, share_token: data.share_token }
+            : c
+        ))
+        if (shouldShare && data.share_token) {
+          const shareUrl = `${window.location.origin}/shared/${data.share_token}`
+          await navigator.clipboard.writeText(shareUrl)
+          showToast('Link copied!', 'info')
+        } else {
+          showToast('Sharing disabled', 'info')
+        }
+      } else {
+        showToast('Failed to update share status', 'error')
+      }
+    } catch (err) {
+      console.error('Failed to toggle share status:', err)
+      showToast('Error updating share status', 'error')
+    } finally {
+      setSharing(false)
+    }
+  }
 
   interface Artifact {
     filename: string
@@ -3474,6 +3551,8 @@ export const Dashboard: React.FC = () => {
 
                     agentMaxSteps: data.max_steps,
 
+                    agentLabel: data.label || undefined,
+
                   }
 
                 }
@@ -4518,7 +4597,7 @@ export const Dashboard: React.FC = () => {
 
           <div className="flex items-center gap-3 mb-8 pb-6 border-b border-[#1e2025]">
 
-            <div className="w-9 h-9 rounded-xl overflow-hidden border border-[#c5a880]/15 bg-brand-bg shrink-0">
+            <div className="w-9 h-9 rounded-xl overflow-hidden border border-[#ffffff]/15 bg-brand-bg shrink-0">
 
               <img src="/favicon.png" alt="Ochuko" className="w-full h-full object-cover" />
 
@@ -4528,7 +4607,7 @@ export const Dashboard: React.FC = () => {
 
               <p className="font-semibold text-[13px] text-brand-text tracking-tight">Agent Ochuko</p>
 
-              <p className="text-[9px] text-[#c5a880] font-bold tracking-widest uppercase mt-0.5">System Active</p>
+              <p className="text-[9px] text-[#ffffff] font-bold tracking-widest uppercase mt-0.5">System Active</p>
 
             </div>
 
@@ -4538,7 +4617,7 @@ export const Dashboard: React.FC = () => {
 
             onClick={handleNewSession}
 
-            className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#c5a880]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
+            className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
 
           >
 
@@ -4568,7 +4647,7 @@ export const Dashboard: React.FC = () => {
 
               placeholder="Search chats (Ctrl+K)..."
 
-              className="w-full h-9 bg-black/20 border border-[#1e2025] rounded-lg pl-9 pr-8 text-[11px] text-brand-text placeholder-[#8e95a2]/30 focus:outline-none focus:border-[#c5a880]/20 focus:ring-0 transition"
+              className="w-full h-9 bg-black/20 border border-[#1e2025] rounded-lg pl-9 pr-8 text-[11px] text-brand-text placeholder-[#8e95a2]/30 focus:outline-none focus:border-[#ffffff]/20 focus:ring-0 transition"
 
             />
 
@@ -4632,7 +4711,7 @@ export const Dashboard: React.FC = () => {
 
                             onKeyDown={handleRenameKeyDown}
 
-                            className="flex-1 px-3 py-2 rounded-lg text-[11px] font-medium bg-[#c5a880]/10 border border-[#c5a880]/40 text-brand-text outline-none pr-8"
+                            className="flex-1 px-3 py-2 rounded-lg text-[11px] font-medium bg-[#ffffff]/10 border border-[#ffffff]/40 text-brand-text outline-none pr-8"
 
                             maxLength={80}
 
@@ -4668,7 +4747,7 @@ export const Dashboard: React.FC = () => {
 
                               active
 
-                                ? 'bg-[#c5a880]/10 text-brand-text border border-[#c5a880]/20'
+                                ? 'bg-[#ffffff]/10 text-brand-text border border-[#ffffff]/20'
 
                                 : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
 
@@ -4818,7 +4897,7 @@ export const Dashboard: React.FC = () => {
 
                               onKeyDown={handleRenameKeyDown}
 
-                              className="flex-1 px-3 py-2 rounded-lg text-[11px] font-medium bg-[#c5a880]/10 border border-[#c5a880]/40 text-brand-text outline-none pr-8"
+                              className="flex-1 px-3 py-2 rounded-lg text-[11px] font-medium bg-[#ffffff]/10 border border-[#ffffff]/40 text-brand-text outline-none pr-8"
 
                               maxLength={80}
 
@@ -4855,7 +4934,7 @@ export const Dashboard: React.FC = () => {
 
                                 active
 
-                                  ? 'bg-[#c5a880]/10 text-brand-text border border-[#c5a880]/20'
+                                  ? 'bg-[#ffffff]/10 text-brand-text border border-[#ffffff]/20'
 
                                   : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
 
@@ -4961,7 +5040,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex gap-2 w-full">
               <button
                 onClick={() => setIsLocked(true)}
-                className="flex-1 h-9 text-[#c5a880] hover:text-[#e2c7a0] hover:bg-[#c5a880]/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#c5a880]/20 hover:border-[#c5a880]/40"
+                className="flex-1 h-9 text-[#ffffff] hover:text-[#ffffff] hover:bg-[#ffffff]/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/20 hover:border-[#ffffff]/40"
                 title="Lock App"
               >
                 <Lock className="w-3 h-3" />
@@ -5010,7 +5089,7 @@ export const Dashboard: React.FC = () => {
           {isDesktop && (isSidebarOpen || isSidebarHovered) && (
             <div
               onMouseDown={startResizing}
-              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[#c5a880]/30 active:bg-[#c5a880]/50 transition z-50"
+              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[#ffffff]/30 active:bg-[#ffffff]/50 transition z-50"
             />
           )}
 
@@ -5039,7 +5118,7 @@ export const Dashboard: React.FC = () => {
 
               onMouseEnter={() => setIsSidebarHovered(true)}
 
-              className="p-[7px] rounded-lg border border-[#1e2025] bg-brand-surface/20 hover:bg-brand-surface text-brand-muted hover:text-brand-text hover:border-[#c5a880]/25 transition duration-150 active:scale-95"
+              className="p-[7px] rounded-lg border border-[#1e2025] bg-brand-surface/20 hover:bg-brand-surface text-brand-muted hover:text-brand-text hover:border-[#ffffff]/25 transition duration-150 active:scale-95"
 
               aria-label="Toggle Sidebar"
 
@@ -5053,7 +5132,7 @@ export const Dashboard: React.FC = () => {
 
             <span className="font-semibold text-[13px] text-brand-text tracking-tight">Agent Ochuko</span>
 
-            <span className="text-[9px] uppercase tracking-widest px-2 py-[3px] rounded border border-[#c5a880]/15 text-[#c5a880]/70 font-bold hidden sm:inline-block">
+            <span className="text-[9px] uppercase tracking-widest px-2 py-[3px] rounded border border-[#ffffff]/15 text-[#ffffff]/70 font-bold hidden sm:inline-block">
 
               {mode}
 
@@ -5061,18 +5140,25 @@ export const Dashboard: React.FC = () => {
 
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000' && (
+              <button
+                onClick={() => setIsShareModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1e2025] hover:border-[#ffffff]/20 bg-brand-surface/10 hover:bg-[#ffffff]/5 text-[11px] font-bold text-[#8e95a2] hover:text-brand-text transition duration-150 active:scale-95 mr-2"
+                title="Share Conversation"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Share</span>
+              </button>
+            )}
 
-            <span className="relative flex h-1.5 w-1.5">
-
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c5a880] opacity-50" />
-
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#c5a880]" />
-
-            </span>
-
-            <span className="text-[9px] font-bold tracking-widest text-brand-muted uppercase hidden sm:block">Auth Synced</span>
-
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#ffffff] opacity-50" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#ffffff]" />
+              </span>
+              <span className="text-[9px] font-bold tracking-widest text-brand-muted uppercase hidden sm:block">Auth Synced</span>
+            </div>
           </div>
 
         </header>
@@ -5109,7 +5195,7 @@ export const Dashboard: React.FC = () => {
 
               <div className="w-16 h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
 
-                <div className="absolute inset-0 bg-[#c5a880]/4 opacity-0 group-hover:opacity-100 transition duration-500" />
+                <div className="absolute inset-0 bg-[#ffffff]/4 opacity-0 group-hover:opacity-100 transition duration-500" />
 
                 <img
 
@@ -5135,7 +5221,7 @@ export const Dashboard: React.FC = () => {
 
                 </p>
 
-                <p className="text-[9px] text-[#c5a880]/70 font-bold tracking-widest uppercase">
+                <p className="text-[9px] text-[#ffffff]/70 font-bold tracking-widest uppercase">
 
                   All responses within strict legal parameters
 
@@ -5163,7 +5249,7 @@ export const Dashboard: React.FC = () => {
 
                   {msg.role !== 'user' && (
 
-                    <div className="w-8 h-8 rounded-lg border border-[#c5a880]/15 bg-brand-surface/30 flex items-center justify-center shrink-0 overflow-hidden mt-1 select-none">
+                    <div className="w-8 h-8 rounded-lg border border-[#ffffff]/15 bg-brand-surface/30 flex items-center justify-center shrink-0 overflow-hidden mt-1 select-none">
 
                       <img
 
@@ -5215,7 +5301,7 @@ export const Dashboard: React.FC = () => {
 
                               onChange={(e) => setEditingMessageText(e.target.value)}
 
-                              className="w-full bg-[#0d0f11] border border-[#1a1d20] focus:border-[#c5a880]/40 rounded-lg p-3 text-[13.5px] text-brand-text focus:outline-none resize-none font-sans"
+                              className="w-full bg-[#0d0f11] border border-[#1a1d20] focus:border-[#ffffff]/40 rounded-lg p-3 text-[13.5px] text-brand-text focus:outline-none resize-none font-sans"
 
                               rows={Math.max(2, editingMessageText.split('\n').length)}
 
@@ -5239,7 +5325,7 @@ export const Dashboard: React.FC = () => {
 
                                 onClick={() => handleEditSubmit(i)}
 
-                                className="px-3 py-1.5 bg-[#c5a880] text-[#08090a] hover:bg-[#d4b990] rounded-lg text-[11px] font-bold transition duration-150 shadow-md shadow-[#c5a880]/5"
+                                className="px-3 py-1.5 bg-[#ffffff] text-[#08090a] hover:bg-[#f3f4f6] rounded-lg text-[11px] font-bold transition duration-150 shadow-md shadow-[#ffffff]/5"
 
                               >
 
@@ -5257,13 +5343,13 @@ export const Dashboard: React.FC = () => {
 
                           <div className="space-y-2">
 
-                            <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#c5a880]/8 border border-[#c5a880]/20">
+                            <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20">
 
-                              <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
+                              <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
 
                               <div className="min-w-0">
 
-                                <p className="text-[11px] font-bold text-[#c5a880] uppercase tracking-widest">
+                                <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest">
 
                                   {msg.fileAttachment.jobType === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
 
@@ -5321,17 +5407,17 @@ export const Dashboard: React.FC = () => {
 
                                     onClick={() => setExpandedPastedMessages(prev => ({ ...prev, [i]: !prev[i] }))}
 
-                                    className="flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg bg-[#c5a880]/8 border border-[#c5a880]/20 cursor-pointer hover:bg-[#c5a880]/15 transition-all duration-150 select-none max-w-sm"
+                                    className="flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20 cursor-pointer hover:bg-[#ffffff]/15 transition-all duration-150 select-none max-w-sm"
 
                                   >
 
                                     <div className="flex items-center gap-2 min-w-0">
 
-                                      <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
+                                      <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
 
                                       <div className="min-w-0">
 
-                                        <p className="text-[11px] font-bold text-[#c5a880] uppercase tracking-widest leading-none mb-1">
+                                        <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest leading-none mb-1">
 
                                           Pasted Content
 
@@ -5347,7 +5433,7 @@ export const Dashboard: React.FC = () => {
 
                                     </div>
 
-                                    <div className="text-[#8e95a2] hover:text-[#c5a880] shrink-0">
+                                    <div className="text-[#8e95a2] hover:text-[#ffffff] shrink-0">
 
                                       {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
 
@@ -5439,7 +5525,7 @@ export const Dashboard: React.FC = () => {
 
                               maxSteps={msg.agentMaxSteps || agentMaxSteps}
 
-                              label={webSearchStatus === 'searching' ? activityLabel : undefined}
+                              label={msg.agentLabel || (webSearchStatus === 'searching' ? activityLabel : undefined)}
 
                             />
 
@@ -5447,9 +5533,9 @@ export const Dashboard: React.FC = () => {
 
                             <>
 
-                              <Globe className="w-3.5 h-3.5 text-[#c5a880] animate-pulse" />
+                              <Globe className="w-3.5 h-3.5 text-[#ffffff] animate-pulse" />
 
-                              <span className="text-[11px] text-[#c5a880]/70 font-semibold tracking-wide">
+                              <span className="text-[11px] text-[#ffffff]/70 font-semibold tracking-wide">
 
                                 {activityLabel || 'Searching the web...'}
 
@@ -5465,7 +5551,7 @@ export const Dashboard: React.FC = () => {
 
                                 key={d}
 
-                                className={`w-1.5 h-1.5 rounded-full bg-[#c5a880]/50 animate-bounce dot-bounce-${delay}`}
+                                className={`w-1.5 h-1.5 rounded-full bg-[#ffffff]/50 animate-bounce dot-bounce-${delay}`}
 
                               />
 
@@ -5501,7 +5587,7 @@ export const Dashboard: React.FC = () => {
 
                               maxSteps={msg.agentMaxSteps || agentMaxSteps}
 
-                              label={webSearchStatus === 'searching' ? activityLabel : undefined}
+                              label={msg.agentLabel || (webSearchStatus === 'searching' ? activityLabel : undefined)}
 
                             />
 
@@ -5621,9 +5707,9 @@ export const Dashboard: React.FC = () => {
 
                               <>
 
-                                <Check className="w-3.5 h-3.5 text-[#c5a880]" />
+                                <Check className="w-3.5 h-3.5 text-[#ffffff]" />
 
-                                <span className="text-[#c5a880]">Copied</span>
+                                <span className="text-[#ffffff]">Copied</span>
 
                               </>
 
@@ -5687,7 +5773,7 @@ export const Dashboard: React.FC = () => {
 
                                 <div
 
-                                  className="h-full bg-[#c5a880]/70 transition-all duration-500"
+                                  className="h-full bg-[#ffffff]/70 transition-all duration-500"
 
                                   style={{ width: `${ttsState[i]?.progress ?? 0}%` }}
 
@@ -5785,7 +5871,7 @@ export const Dashboard: React.FC = () => {
 
                     active
 
-                      ? 'bg-[#c5a880]/8 border-[#c5a880]/40 text-[#c5a880]'
+                      ? 'bg-[#ffffff]/8 border-[#ffffff]/40 text-[#ffffff]'
 
                       : 'bg-transparent border-[#1a1d20] text-brand-muted hover:border-[#252830] hover:text-brand-text/60'
 
@@ -5813,7 +5899,7 @@ export const Dashboard: React.FC = () => {
 
               <div className="flex items-center gap-2">
 
-                <FileText className="w-4 h-4 text-[#c5a880]" />
+                <FileText className="w-4 h-4 text-[#ffffff]" />
 
                 <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[180px]">
 
@@ -5821,7 +5907,7 @@ export const Dashboard: React.FC = () => {
 
                 </span>
 
-                <span className="text-[9px] text-[#c5a880] tracking-wider uppercase bg-[#c5a880]/10 px-1.5 py-0.5 rounded border border-[#c5a880]/20 font-bold font-mono">
+                <span className="text-[9px] text-[#ffffff] tracking-wider uppercase bg-[#ffffff]/10 px-1.5 py-0.5 rounded border border-[#ffffff]/20 font-bold font-mono">
 
                   {attachedFile.type.split('/')[1] || 'pdf'}
 
@@ -5855,7 +5941,7 @@ export const Dashboard: React.FC = () => {
 
               <div className="flex items-center gap-2">
 
-                <FileText className="w-4 h-4 text-[#c5a880]" />
+                <FileText className="w-4 h-4 text-[#ffffff]" />
 
                 <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[220px]">
 
@@ -5863,7 +5949,7 @@ export const Dashboard: React.FC = () => {
 
                 </span>
 
-                <span className="text-[9px] text-[#c5a880] tracking-wider uppercase bg-[#c5a880]/10 px-1.5 py-0.5 rounded border border-[#c5a880]/20 font-bold font-mono">
+                <span className="text-[9px] text-[#ffffff] tracking-wider uppercase bg-[#ffffff]/10 px-1.5 py-0.5 rounded border border-[#ffffff]/20 font-bold font-mono">
 
                   {(pastedText.sizeBytes / 1024).toFixed(1)} KB
 
@@ -5897,9 +5983,9 @@ export const Dashboard: React.FC = () => {
 
               <div className="flex items-center gap-2">
 
-                <Loader2 className="w-3.5 h-3.5 text-[#c5a880] animate-spin" />
+                <Loader2 className="w-3.5 h-3.5 text-[#ffffff] animate-spin" />
 
-                <span className="text-[11px] text-[#c5a880] font-semibold tracking-wide">
+                <span className="text-[11px] text-[#ffffff] font-semibold tracking-wide">
 
                   Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
 
@@ -5921,7 +6007,7 @@ export const Dashboard: React.FC = () => {
 
                 <VoiceWaveform volume={voice.currentVolume} />
 
-                <span className="text-[10px] font-bold text-[#c5a880]/80 tracking-widest uppercase"
+                <span className="text-[10px] font-bold text-[#ffffff]/80 tracking-widest uppercase"
 
                   style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
 
@@ -5971,9 +6057,9 @@ export const Dashboard: React.FC = () => {
 
                     voice.isRecording
 
-                      ? 'text-[#c5a880] voice-pulse-ring'
+                      ? 'text-[#ffffff] voice-pulse-ring'
 
-                      : 'text-[#8e95a2] hover:text-[#c5a880] hover:bg-white/5'
+                      : 'text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5'
 
                   }`}
 
@@ -6025,9 +6111,9 @@ export const Dashboard: React.FC = () => {
 
                   voice.isRecording
 
-                    ? 'border-[#c5a880]/40 focus:border-[#c5a880]/60 focus:ring-[#c5a880]/20 placeholder-[#c5a880]/50'
+                    ? 'border-[#ffffff]/40 focus:border-[#ffffff]/60 focus:ring-[#ffffff]/20 placeholder-[#ffffff]/50'
 
-                    : 'border-[#1a1d20] focus:border-[#c5a880]/40 focus:ring-[#c5a880]/15 placeholder-[#8e95a2]/40'
+                    : 'border-[#1a1d20] focus:border-[#ffffff]/40 focus:ring-[#ffffff]/15 placeholder-[#8e95a2]/40'
 
                 }`}
 
@@ -6043,7 +6129,7 @@ export const Dashboard: React.FC = () => {
 
                 disabled={uploading}
 
-                className="absolute right-3 top-3.5 p-0.5 text-[#8e95a2] hover:text-[#c5a880] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
+                className="absolute right-3 top-3.5 p-0.5 text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
 
                 title="Attach document or image"
 
@@ -6085,7 +6171,7 @@ export const Dashboard: React.FC = () => {
 
               aria-label="Send"
 
-              className="w-12 h-12 bg-[#c5a880] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#d4b990] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#c5a880]/10 font-bold shrink-0"
+              className="w-12 h-12 bg-[#ffffff] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#f3f4f6] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#ffffff]/10 font-bold shrink-0"
 
             >
 
@@ -6129,13 +6215,13 @@ export const Dashboard: React.FC = () => {
               {/* Resizing Handle */}
               <div
                 onMouseDown={startArtifactResizing}
-                className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-[#c5a880]/30 active:bg-[#c5a880]/50 transition z-50"
+                className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-[#ffffff]/30 active:bg-[#ffffff]/50 transition z-50"
               />
 
               {/* Header */}
               <div className="h-14 border-b border-[#1a1c1f] bg-[#0d0f11]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0 select-none">
                 <div className="flex items-center gap-2 min-w-0">
-                  <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
+                  <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
                   <span className="font-semibold text-[13px] text-brand-text truncate">
                     {activeArtifact.filename}
                   </span>
@@ -6165,7 +6251,7 @@ export const Dashboard: React.FC = () => {
               <div className="flex-1 overflow-auto p-6 bg-[#08090b]">
                 {loadingArtifact ? (
                   <div className="h-full flex items-center justify-center">
-                    <Loader2 className="w-6 h-6 text-[#c5a880] animate-spin" />
+                    <Loader2 className="w-6 h-6 text-[#ffffff] animate-spin" />
                   </div>
                 ) : isImage(activeArtifact.filename) ? (
                   <div className="h-full flex items-center justify-center p-4 bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025]">
@@ -6248,6 +6334,96 @@ export const Dashboard: React.FC = () => {
 
       )}
 
+      {isShareModalOpen && (() => {
+        const activeConvo = conversations.find(c => c.id === activeConversationId)
+        const isShared = activeConvo?.is_shared
+        const shareToken = activeConvo?.share_token
+        const shareUrl = shareToken ? `${window.location.origin}/shared/${shareToken}` : ''
+
+        return (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
+            <div className="bg-[#0d0f11] border border-[#1e2025] rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-6">
+              <div className="flex items-center justify-between border-b border-[#1c1e22] pb-3">
+                <h3 className="text-sm font-semibold text-brand-text flex items-center gap-2">
+                  <Share2 className="w-4 h-4 text-[#ffffff]" />
+                  <span>Share Conversation</span>
+                </h3>
+                <button
+                  onClick={() => setIsShareModalOpen(false)}
+                  className="text-brand-muted hover:text-brand-text transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {isShared ? (
+                <div className="space-y-4">
+                  <p className="text-[12px] text-[#8e95a2] leading-relaxed">
+                    Anyone with this link can view the conversation history and export it as JSON.
+                  </p>
+                  
+                  <div className="flex items-center gap-2 bg-[#08090a] border border-[#1e2025] rounded-lg p-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={shareUrl}
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                      className="bg-transparent border-0 outline-none text-[11px] text-brand-text font-mono flex-1 px-1 select-all"
+                    />
+                    <button
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(shareUrl)
+                        showToast('Link copied!', 'info')
+                      }}
+                      className="px-2.5 py-1 rounded bg-[#ffffff]/10 hover:bg-[#ffffff]/20 border border-[#ffffff]/20 text-[10px] font-bold text-[#ffffff] transition"
+                    >
+                      Copy
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <button
+                      onClick={() => handleShareToggle(false)}
+                      disabled={sharing}
+                      className="px-3.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-[11px] font-semibold text-red-450 transition disabled:opacity-50"
+                    >
+                      {sharing ? 'Processing...' : 'Stop Sharing'}
+                    </button>
+                    <button
+                      onClick={() => setIsShareModalOpen(false)}
+                      className="px-3.5 py-1.5 rounded-lg border border-[#1e2025] hover:bg-white/5 text-[11px] font-semibold text-brand-text transition"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-[12px] text-[#8e95a2] leading-relaxed">
+                    Create a public link to share this conversation with others.
+                  </p>
+                  <div className="flex items-center justify-end gap-3 pt-2">
+                    <button
+                      onClick={() => setIsShareModalOpen(false)}
+                      className="px-3.5 py-1.5 rounded-lg border border-[#1e2025] hover:bg-white/5 text-[11px] font-semibold text-brand-text transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleShareToggle(true)}
+                      disabled={sharing}
+                      className="px-3.5 py-1.5 rounded-lg bg-[#ffffff] hover:bg-[#e2e8f0] text-black text-[11px] font-semibold transition disabled:opacity-50"
+                    >
+                      {sharing ? 'Creating Link...' : 'Create Link'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Toast notification container — top-right, non-blocking */}
 
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none" aria-live="polite">
@@ -6264,7 +6440,7 @@ export const Dashboard: React.FC = () => {
 
                 ? 'bg-red-950/90 border-red-500/20 text-red-300'
 
-                : 'bg-[#0d0f11]/90 border-[#c5a880]/20 text-brand-text'
+                : 'bg-[#0d0f11]/90 border-[#ffffff]/20 text-brand-text'
 
             }`}
 

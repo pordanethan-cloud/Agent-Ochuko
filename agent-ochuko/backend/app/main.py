@@ -15,6 +15,7 @@ from app.api.v1.endpoints.files import router as files_router
 from app.api.v1.endpoints.agents import router as agents_router
 from app.api.v1.endpoints.search import router as search_router
 from app.api.v1.endpoints.audio import router as audio_router
+from app.api.v1.endpoints.shared import router as shared_router
 from app.middleware import (
     MaintenanceGuardMiddleware,
     BlockGuardMiddleware,
@@ -130,6 +131,7 @@ app.include_router(files_router, prefix="/v1/files", tags=["files"])
 app.include_router(agents_router, prefix="/v1/agents", tags=["agents"])
 app.include_router(search_router, prefix="/v1/search", tags=["search"])
 app.include_router(audio_router, prefix="/v1/audio", tags=["audio"])
+app.include_router(shared_router, prefix="/v1/shared", tags=["shared"])
 
 
 # ── Health & Readiness Probes ─────────────────────────────────────────────
