@@ -2032,6 +2032,40 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: str
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
+// ─── LazyMessage (Virtualized rendering for long message history) ────────────────
+
+const LazyMessage: React.FC<{
+  children: React.ReactNode
+  estimatedHeight?: number
+}> = ({ children, estimatedHeight = 100 }) => {
+  const [isVisible, setIsVisible] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsVisible(entry.isIntersecting)
+      },
+      {
+        rootMargin: '300px 0px 300px 0px'
+      }
+    )
+    observer.observe(el)
+    return () => {
+      if (el) observer.unobserve(el)
+    }
+  }, [])
+
+  return (
+    <div ref={ref} style={{ minHeight: isVisible ? undefined : `${estimatedHeight}px` }}>
+      {isVisible ? children : <div className="h-full w-full" />}
+    </div>
+  )
+}
+
+
 export const Dashboard: React.FC = () => {
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -4808,7 +4842,14 @@ export const Dashboard: React.FC = () => {
 
                             <button
 
-                              onClick={() => handleSelectConversation(convo.id, convo.mode)}
+                              onClick={() => {
+                                if (active) {
+                                  setRenamingConvoId(convo.id)
+                                  setRenameValue(convo.title || '')
+                                } else {
+                                  handleSelectConversation(convo.id, convo.mode)
+                                }
+                              }}
 
                               onDoubleClick={e => {
 
@@ -5122,13 +5163,13 @@ export const Dashboard: React.FC = () => {
 
               {messages.map((msg, i) => (
 
-                <div
+                <LazyMessage key={i} estimatedHeight={msg.content.length > 400 ? 200 : 80}>
 
-                  key={i}
+                  <div
 
-                  className={`group relative flex w-full gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    className={`group relative flex w-full gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
 
-                >
+                  >
 
                   {/* Avatar only for assistant */}
 
@@ -5709,6 +5750,8 @@ export const Dashboard: React.FC = () => {
                   </div>
 
                 </div>
+
+                </LazyMessage>
 
               ))}
 
