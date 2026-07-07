@@ -50,6 +50,67 @@ async def list_conversations(
         raise HTTPException(status_code=500, detail="Database error while fetching conversations.")
 
 
+@router.get("/search", summary="Search user's active conversations by title or message content")
+async def search_conversations(
+    q: str,
+    user: Dict[str, Any] = Depends(verify_jwt)
+) -> List[Dict[str, Any]]:
+    """
+    Search conversations using Full-Text Search on title and message content.
+    """
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in JWT.")
+
+    q = q.strip()
+    if not q:
+        return []
+
+    try:
+        supabase = get_supabase_admin()
+
+        # 1. Search conversations by title matching query
+        title_res = (
+            supabase.table("conversations")
+            .select("id, title, model, mode, message_count, last_compacted_at, created_at, updated_at")
+            .eq("user_id", user_id)
+            .eq("is_archived", False)
+            .textSearch("title", q, config="english", type="websearch")
+            .execute()
+        )
+        conversations = {c["id"]: c for c in (title_res.data or [])}
+
+        # 2. Search message content matching query
+        msg_res = (
+            supabase.table("messages")
+            .select("conversation_id")
+            .textSearch("content", q, config="english", type="websearch")
+            .limit(100)
+            .execute()
+        )
+        msg_conv_ids = list({m["conversation_id"] for m in (msg_res.data or []) if m.get("conversation_id")})
+
+        needed_ids = [cid for cid in msg_conv_ids if cid not in conversations]
+        if needed_ids:
+            content_res = (
+                supabase.table("conversations")
+                .select("id, title, model, mode, message_count, last_compacted_at, created_at, updated_at")
+                .eq("user_id", user_id)
+                .eq("is_archived", False)
+                .in_("id", needed_ids)
+                .execute()
+            )
+            for c in (content_res.data or []):
+                conversations[c["id"]] = c
+
+        results = list(conversations.values())
+        results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        return results
+    except Exception as e:
+        logger.error(f"Failed to search conversations for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Database error during search.")
+
+
 @router.get("/{id}/messages", summary="Load full message history for a conversation")
 async def load_message_history(
     id: str,
