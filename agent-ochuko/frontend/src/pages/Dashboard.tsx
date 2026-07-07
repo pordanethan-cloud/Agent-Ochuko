@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download } from 'lucide-react'
 
 import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
@@ -109,68 +109,51 @@ interface Message {
 
 // ─── Generated file download card ─────────────────────────────────────────────
 
-function FileDownloadCard({ filename, download_url, size_bytes }: {
-
+function FileDownloadCard({
+  filename,
+  download_url,
+  size_bytes,
+  onView
+}: {
   filename: string
-
   download_url: string
-
   size_bytes: number
-
+  onView?: () => void
 }) {
-
   const ext = filename.split('.').pop()?.toUpperCase() || 'FILE'
-
   const sizeLabel = size_bytes > 1024 * 1024
-
     ? `${(size_bytes / (1024 * 1024)).toFixed(1)} MB`
-
     : size_bytes > 1024
-
     ? `${(size_bytes / 1024).toFixed(1)} KB`
-
     : `${size_bytes} B`
 
   return (
-
-    <a
-
-      href={download_url}
-
-      download={filename}
-
-      target="_blank"
-
-      rel="noopener noreferrer"
-
-      className="mt-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-[#c5a880]/20 bg-[#c5a880]/5 hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition-all duration-200 group/dl w-full no-underline"
-
+    <div
+      onClick={onView}
+      className="mt-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-[#c5a880]/20 bg-[#c5a880]/5 hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition-all duration-200 group/dl w-full cursor-pointer select-none"
     >
-
       <div className="w-9 h-9 rounded-lg bg-[#c5a880]/15 flex items-center justify-center shrink-0">
-
         <span className="text-[9px] font-black text-brand-accent tracking-tight">{ext}</span>
-
       </div>
-
       <div className="flex-1 min-w-0">
-
         <p className="text-[12px] font-medium text-brand-text truncate">{filename}</p>
-
         <p className="text-[10px] text-[#8e95a2]">{sizeLabel}</p>
-
       </div>
-
-      <svg className="w-4 h-4 text-[#8e95a2] group-hover/dl:text-brand-accent transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-
-      </svg>
-
-    </a>
-
+      <a
+        href={download_url}
+        download={filename}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="w-8 h-8 rounded-lg flex items-center justify-center bg-[#161b22]/40 hover:bg-[#161b22] border border-[#30363d] text-[#8e95a2] hover:text-brand-accent transition duration-150 shrink-0"
+        title="Download file"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+      </a>
+    </div>
   )
-
 }
 
 // ─── Mermaid block renderer ───────────────────────────────────────────────────
@@ -932,6 +915,32 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
                 </svg>
 
                 Download as {extLabel}
+
+              </button>
+
+              <button
+
+                onClick={() => {
+
+                  const event = new CustomEvent('open-artifact', {
+
+                    detail: { filename: `code${ext}`, content }
+
+                  })
+
+                  window.dispatchEvent(event)
+
+                  setMenuOpen(false)
+
+                }}
+
+                className="w-full text-left px-3 py-2.5 text-[12px] text-[#c9d1d9] hover:bg-[#21262d] transition-colors flex items-center gap-2 border-t border-[#1e2025]"
+
+              >
+
+                <FileText className="w-3.5 h-3.5 text-[#c5a880]" />
+
+                View as Artifact
 
               </button>
 
@@ -2109,6 +2118,93 @@ export const Dashboard: React.FC = () => {
   const [isSidebarHovered, setIsSidebarHovered] = useState(false)
 
   const [isOnline, setIsOnline] = useState(navigator.onLine)
+
+  interface Artifact {
+    filename: string
+    downloadUrl?: string
+    content?: string
+    sizeBytes?: number
+  }
+
+  const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null)
+  const [artifactContent, setArtifactContent] = useState<string>('')
+  const [loadingArtifact, setLoadingArtifact] = useState(false)
+  const [artifactWidth, setArtifactWidth] = useState(480)
+  const isArtifactResizingRef = useRef(false)
+
+  const startArtifactResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isArtifactResizingRef.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isArtifactResizingRef.current) return
+      const newWidth = Math.max(320, Math.min(window.innerWidth - 300, window.innerWidth - e.clientX))
+      setArtifactWidth(newWidth)
+    }
+    const handleMouseUp = () => {
+      if (!isArtifactResizingRef.current) return
+      isArtifactResizingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!activeArtifact) {
+      setArtifactContent('')
+      return
+    }
+    if (activeArtifact.content !== undefined) {
+      setArtifactContent(activeArtifact.content)
+      return
+    }
+    if (activeArtifact.downloadUrl) {
+      setLoadingArtifact(true)
+      fetch(activeArtifact.downloadUrl)
+        .then(res => res.text())
+        .then(text => {
+          setArtifactContent(text)
+          setLoadingArtifact(false)
+        })
+        .catch(() => {
+          setArtifactContent('Failed to load artifact content.')
+          setLoadingArtifact(false)
+        })
+    }
+  }, [activeArtifact])
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      setActiveArtifact({
+        filename: detail.filename,
+        content: detail.content,
+        downloadUrl: ''
+      })
+    }
+    window.addEventListener('open-artifact', handler)
+    return () => window.removeEventListener('open-artifact', handler)
+  }, [])
+
+  const isImage = (filename: string) => {
+    const ext = filename.toLowerCase().split('.').pop()
+    return ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext || '')
+  }
+
+  const isMarkdown = (filename: string) => {
+    const ext = filename.toLowerCase().split('.').pop()
+    return ext === 'md'
+  }
 
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -4964,15 +5060,19 @@ export const Dashboard: React.FC = () => {
 
         )}
 
-        <div
+        <div className="flex-1 flex overflow-hidden min-w-0">
 
-          ref={scrollContainerRef}
+          <div className="flex-1 flex flex-col min-w-0 relative">
 
-          onScroll={handleScroll}
+            <div
 
-          className="flex-1 overflow-y-auto py-8 px-5 md:px-10 relative z-10"
+              ref={scrollContainerRef}
 
-        >
+              onScroll={handleScroll}
+
+              className="flex-1 overflow-y-auto py-8 px-5 md:px-10 relative z-10"
+
+            >
 
           {messages.length === 0 ? (
 
@@ -5407,6 +5507,12 @@ export const Dashboard: React.FC = () => {
                                   download_url={gf.download_url}
 
                                   size_bytes={gf.size_bytes}
+
+                                  onView={() => setActiveArtifact({
+                                    filename: gf.filename,
+                                    downloadUrl: gf.download_url,
+                                    sizeBytes: gf.size_bytes
+                                  })}
 
                                 />
 
@@ -5977,6 +6083,83 @@ export const Dashboard: React.FC = () => {
             Secure · OAuth Synced · Legal Parameters Active
 
           </p>
+
+        </div>
+
+          </div>
+
+          {/* Artifact Preview Panel */}
+
+          {activeArtifact && (
+            <div
+              style={{ width: `${artifactWidth}px` }}
+              className="border-l border-[#1a1c1f] bg-[#0b0c0e] flex flex-col relative shrink-0 z-20 transition-all duration-150"
+            >
+              {/* Resizing Handle */}
+              <div
+                onMouseDown={startArtifactResizing}
+                className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-[#c5a880]/30 active:bg-[#c5a880]/50 transition z-50"
+              />
+
+              {/* Header */}
+              <div className="h-14 border-b border-[#1a1c1f] bg-[#0d0f11]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0 select-none">
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileText className="w-4 h-4 text-[#c5a880] shrink-0" />
+                  <span className="font-semibold text-[13px] text-brand-text truncate">
+                    {activeArtifact.filename}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {activeArtifact.downloadUrl && (
+                    <a
+                      href={activeArtifact.downloadUrl}
+                      download={activeArtifact.filename}
+                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
+                      title="Download File"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setActiveArtifact(null)}
+                    className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
+                    title="Close Preview"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-auto p-6 bg-[#08090b]">
+                {loadingArtifact ? (
+                  <div className="h-full flex items-center justify-center">
+                    <Loader2 className="w-6 h-6 text-[#c5a880] animate-spin" />
+                  </div>
+                ) : isImage(activeArtifact.filename) ? (
+                  <div className="h-full flex items-center justify-center p-4 bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025]">
+                    <img
+                      src={activeArtifact.downloadUrl || `data:image/svg+xml;utf8,${encodeURIComponent(artifactContent)}`}
+                      alt={activeArtifact.filename}
+                      className="max-w-full max-h-full object-contain rounded"
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
+                    {isMarkdown(activeArtifact.filename) ? (
+                      <div className="p-6 text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
+                        {renderMarkdown(artifactContent)}
+                      </div>
+                    ) : (
+                      <pre className="p-5 overflow-x-auto text-[11.5px] font-mono text-[#d4c5a0]/85 leading-relaxed whitespace-pre select-text">
+                        <code>{artifactContent}</code>
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
         </div>
 
