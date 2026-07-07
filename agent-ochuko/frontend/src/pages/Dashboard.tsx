@@ -1,10 +1,42 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { supabase } from '../utils/supabaseClient'
 import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useVoice } from '../hooks/useVoice'
 import { useJob } from '../hooks/useJob'
+import DOMPurify from 'dompurify'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+// ─── KaTeX lazy-loader ────────────────────────────────────────────────────────
+// Only loads the KaTeX bundle when a '$' is detected in a message.
+// After first load it's browser-cached — subsequent renders are instant.
+function useKaTeX(active: boolean) {
+  const [katexReady, setKatexReady] = useState(false)
+  useEffect(() => {
+    if (!active || katexReady) return
+    Promise.all([
+      import('katex/dist/katex.min.css' as any).catch(() => {}),
+      import('katex'),
+    ]).then(() => setKatexReady(true)).catch(() => {})
+  }, [active])
+  return katexReady
+}
+
+function renderLatex(tex: string, displayMode: boolean): React.ReactNode {
+  try {
+    // @ts-ignore — katex loaded lazily
+    const katex = (window as any).__katex || require('katex')
+    const html = katex.renderToString(tex, { displayMode, throwOnError: false })
+    return (
+      <span
+        className={displayMode ? 'block my-3 text-center overflow-x-auto' : 'inline'}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    )
+  } catch {
+    return <code className="text-brand-accent">{tex}</code>
+  }
+}
 
 interface Source {
   title: string
@@ -18,8 +50,182 @@ interface Message {
   routing_reason?: string
   fileAttachment?: { name: string; jobType: 'ocr' | 'vision' }
   sources?: Source[]
-  imageUrl?: string      // set when a generated image is ready
-  imagePending?: boolean // true while the FLUX job is in-flight
+  imageUrl?: string
+  imagePending?: boolean
+  agentStep?: number
+  agentMaxSteps?: number
+  timestamp?: number     // Unix ms — set at send/receive time for relative display
+  generatedFiles?: { filename: string; download_url: string; size_bytes: number }[]
+}
+
+// ─── Generated file download card ─────────────────────────────────────────────
+function FileDownloadCard({ filename, download_url, size_bytes }: {
+  filename: string
+  download_url: string
+  size_bytes: number
+}) {
+  const ext = filename.split('.').pop()?.toUpperCase() || 'FILE'
+  const sizeLabel = size_bytes > 1024 * 1024
+    ? `${(size_bytes / (1024 * 1024)).toFixed(1)} MB`
+    : size_bytes > 1024
+    ? `${(size_bytes / 1024).toFixed(1)} KB`
+    : `${size_bytes} B`
+  return (
+    <a
+      href={download_url}
+      download={filename}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-[#c5a880]/20 bg-[#c5a880]/5 hover:bg-[#c5a880]/10 hover:border-[#c5a880]/40 transition-all duration-200 group/dl w-full no-underline"
+    >
+      <div className="w-9 h-9 rounded-lg bg-[#c5a880]/15 flex items-center justify-center shrink-0">
+        <span className="text-[9px] font-black text-brand-accent tracking-tight">{ext}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[12px] font-medium text-brand-text truncate">{filename}</p>
+        <p className="text-[10px] text-[#8e95a2]">{sizeLabel}</p>
+      </div>
+      <svg className="w-4 h-4 text-[#8e95a2] group-hover/dl:text-brand-accent transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+      </svg>
+    </a>
+  )
+}
+
+// ─── Mermaid block renderer ───────────────────────────────────────────────────
+// Lazy-imports mermaid.js on first use. Renders diagram → inline SVG.
+// During streaming (isStreaming=true for the last message), skipped — the
+// block shows as a code fence until [DONE], then re-renders as a diagram.
+let _mermaidReady = false
+let _mermaidIdCounter = 0
+
+function MermaidBlock({ code }: { code: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const id = useRef(`mermaid-${++_mermaidIdCounter}`).current
+
+  useEffect(() => {
+    let cancelled = false
+    async function render() {
+      if (!ref.current) return
+      if (!_mermaidReady) {
+        const m = await import('mermaid')
+        m.default.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+        _mermaidReady = true
+      }
+      try {
+        const { default: mermaid } = await import('mermaid')
+        const { svg } = await mermaid.render(id, code)
+        if (!cancelled && ref.current) ref.current.innerHTML = svg
+      } catch (err: any) {
+        if (!cancelled && ref.current)
+          ref.current.innerHTML = `<pre class="text-red-400 text-xs p-2">Diagram error: ${err?.message || 'invalid syntax'}</pre>`
+      }
+    }
+    render()
+    return () => { cancelled = true }
+  }, [code, id])
+
+  return (
+    <div
+      ref={ref}
+      className="my-3 rounded-xl border border-[#1e2025] bg-[#0d1117] p-4 overflow-x-auto"
+    />
+  )
+}
+
+// ─── SVG inline renderer ──────────────────────────────────────────────────────
+// Sanitizes agent-generated SVG via DOMPurify before DOM injection.
+function SvgBlock({ svg }: { svg: string }) {
+  const clean = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true } })
+  return (
+    <div
+      className="my-3 flex justify-center overflow-x-auto"
+      dangerouslySetInnerHTML={{ __html: clean }}
+    />
+  )
+}
+
+// ─── Block parser ─────────────────────────────────────────────────────────────
+// Splits response text into typed segments in priority order:
+// mermaid > svg > code > markdown prose
+type Block =
+  | { type: 'mermaid'; content: string }
+  | { type: 'svg'; content: string }
+  | { type: 'code'; content: string; lang: string }
+  | { type: 'markdown'; content: string }
+
+function parseBlocks(text: string): Block[] {
+  const MERMAID = /```mermaid\r?\n([\s\S]*?)```/g
+  const SVG     = /(<svg[\s\S]*?<\/svg>)/gi
+  const CODE    = /```(\w*)\r?\n([\s\S]*?)```/g
+
+  const matches: { start: number; end: number; block: Block }[] = []
+
+  let m: RegExpExecArray | null
+  while ((m = MERMAID.exec(text)) !== null)
+    matches.push({ start: m.index, end: m.index + m[0].length, block: { type: 'mermaid', content: m[1].trim() } })
+
+  while ((m = SVG.exec(text)) !== null) {
+    if (!matches.some(b => b.start <= m!.index && m!.index < b.end))
+      matches.push({ start: m.index, end: m.index + m[0].length, block: { type: 'svg', content: m[1] } })
+  }
+
+  while ((m = CODE.exec(text)) !== null) {
+    if (!matches.some(b => b.start <= m!.index && m!.index < b.end))
+      matches.push({ start: m.index, end: m.index + m[0].length, block: { type: 'code', content: m[2], lang: m[1] || 'text' } })
+  }
+
+  matches.sort((a, b) => a.start - b.start)
+
+  const blocks: Block[] = []
+  let cursor = 0
+  for (const { start, end, block } of matches) {
+    if (start > cursor) {
+      const prose = text.slice(cursor, start).trim()
+      if (prose) blocks.push({ type: 'markdown', content: prose })
+    }
+    blocks.push(block)
+    cursor = end
+  }
+  if (cursor < text.length) {
+    const tail = text.slice(cursor).trim()
+    if (tail) blocks.push({ type: 'markdown', content: tail })
+  }
+  return blocks.length ? blocks : [{ type: 'markdown', content: text }]
+}
+
+// ─── Rich content renderer ────────────────────────────────────────────────────
+// Top-level renderer for assistant messages.
+// During streaming (isStreaming = true on last msg) skips Mermaid/SVG
+// so partial fences don't flicker — falls back to renderMarkdown().
+// After [DONE] the component re-renders and diagrams appear cleanly.
+function renderRichContent(
+  text: string,
+  renderMarkdown: (t: string) => React.ReactNode,
+  isCurrentlyStreaming: boolean,
+): React.ReactNode {
+  // During streaming, skip block parsing — use the fast prose renderer
+  if (isCurrentlyStreaming) return renderMarkdown(text)
+
+  const blocks = parseBlocks(text)
+  return (
+    <>
+      {blocks.map((block, i) => {
+        switch (block.type) {
+          case 'mermaid':
+            return <MermaidBlock key={i} code={block.content} />
+          case 'svg':
+            return <SvgBlock key={i} svg={block.content} />
+          case 'code':
+            // Delegate to existing renderMarkdown which handles code fences with copy button
+            return <React.Fragment key={i}>{renderMarkdown('```' + block.lang + '\n' + block.content + '\n```')}</React.Fragment>
+          case 'markdown':
+          default:
+            return <React.Fragment key={i}>{renderMarkdown(block.content)}</React.Fragment>
+        }
+      })}
+    </>
+  )
 }
 
 // ─── Inline markdown: bold, italic, code, links ───────────────────────────────
@@ -734,6 +940,27 @@ const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
   )
 }
 
+// ── AgentStepIndicator — shows OODA loop progress inside the message bubble ─
+const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: string }> = ({ step, maxSteps, label }) => (
+  <div className="flex items-center gap-2.5 mb-3 select-none animate-fadeIn">
+    {/* Spinning cog */}
+    <div className="relative flex-shrink-0">
+      <div className="w-5 h-5 rounded-full border border-[#c5a880]/30 border-t-[#c5a880] animate-spin" />
+    </div>
+
+    {/* Step pill */}
+    <div className="flex items-center gap-2">
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#c5a880]/10 border border-[#c5a880]/20 text-[10px] font-bold text-[#c5a880] tracking-widest uppercase">
+        Step {step}
+        <span className="text-[#c5a880]/40 font-normal">/ {maxSteps}</span>
+      </span>
+      {label && (
+        <span className="text-[11px] text-[#8e95a2] font-medium truncate max-w-[240px]">{label}</span>
+      )}
+    </div>
+  </div>
+)
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export const Dashboard: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -746,6 +973,8 @@ export const Dashboard: React.FC = () => {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [webSearchStatus, setWebSearchStatus] = useState<'idle' | 'searching' | 'done'>('idle')
   const [activityLabel, setActivityLabel] = useState<string>('')
+  const [agentStep, setAgentStep] = useState<number>(0)
+  const [agentMaxSteps, setAgentMaxSteps] = useState<number>(10)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -770,6 +999,22 @@ export const Dashboard: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // ── Inline rename state ─────────────────────────────────────────────────────
+  const [renamingConvoId, setRenamingConvoId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const renameInputRef = useRef<HTMLInputElement>(null)
+
+  // Focus the rename input when it appears
+  useEffect(() => {
+    if (renamingConvoId) {
+      setTimeout(() => renameInputRef.current?.focus(), 30)
+    }
+  }, [renamingConvoId])
+
+  // ── KaTeX — activate when any message contains '$' ──────────────────────────
+  const hasLatex = useMemo(() => messages.some(m => m.content.includes('$')), [messages])
+  useKaTeX(hasLatex)
 
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const text = e.clipboardData.getData('text')
@@ -990,13 +1235,18 @@ export const Dashboard: React.FC = () => {
       const token = session.data.session?.access_token
       if (!token) return
 
-      const res = await fetch(`${API_BASE}/v1/conversations/${id}/messages`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-      if (res.ok) {
-        const data = await res.json()
+      // Fetch messages and generated files in parallel
+      const [msgRes, filesRes] = await Promise.all([
+        fetch(`${API_BASE}/v1/conversations/${id}/messages`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE}/v1/conversations/${id}/files`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => null),  // non-fatal if table doesn't exist yet
+      ])
+
+      if (msgRes.ok) {
+        const data = await msgRes.json()
         const mapped = data.map((m: any) => ({
           role: m.role,
           content: m.content,
@@ -1004,6 +1254,26 @@ export const Dashboard: React.FC = () => {
           routing_reason: m.routing_reason,
           sources: m.content_parts?.sources || undefined,
         }))
+
+        // Attach generated files to the last assistant message (best-effort)
+        if (filesRes?.ok) {
+          const files: any[] = await filesRes.json()
+          if (files.length > 0) {
+            // Find the last assistant message to attach files to
+            const lastAssistIdx = mapped.map((m: any) => m.role).lastIndexOf('assistant')
+            if (lastAssistIdx >= 0) {
+              mapped[lastAssistIdx] = {
+                ...mapped[lastAssistIdx],
+                generatedFiles: files.map((f: any) => ({
+                  filename: f.filename,
+                  download_url: f.r2_url,
+                  size_bytes: f.size_bytes || 0,
+                })),
+              }
+            }
+          }
+        }
+
         setMessages(mapped)
         setActiveConversationId(id)
         setMode(convoMode)
@@ -1053,6 +1323,42 @@ export const Dashboard: React.FC = () => {
     inputRef.current?.focus()
   }, [])
 
+  // ── Global keyboard shortcuts ────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey
+
+      // Ctrl/Cmd + Shift + N → new session
+      if (mod && e.shiftKey && e.key === 'N') {
+        e.preventDefault()
+        handleNewSession()
+        return
+      }
+
+      // Ctrl/Cmd + Shift + V → toggle voice
+      if (mod && e.shiftKey && e.key === 'V') {
+        e.preventDefault()
+        toggleVoice()
+        return
+      }
+
+      // Ctrl/Cmd + 1/2/3 → switch mode
+      if (mod && !e.shiftKey) {
+        if (e.key === '1') { e.preventDefault(); handleModeChange('think'); return }
+        if (e.key === '2') { e.preventDefault(); handleModeChange('solve'); return }
+        if (e.key === '3') { e.preventDefault(); handleModeChange('discuss'); return }
+      }
+
+      // Escape → close sidebar
+      if (e.key === 'Escape') {
+        setIsSidebarOpen(false)
+        setIsSidebarHovered(false)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [toggleVoice, handleModeChange])
+
   // Check scroll position to determine if we should stay locked to the bottom
   const handleScroll = () => {
     const container = scrollContainerRef.current
@@ -1072,6 +1378,42 @@ export const Dashboard: React.FC = () => {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
+  }
+
+  // ── Conversation rename ─────────────────────────────────────────────────────
+  const handleRenameCommit = useCallback(async () => {
+    if (!renamingConvoId) return
+    const trimmed = renameValue.trim()
+    setRenamingConvoId(null)
+    if (!trimmed) return
+
+    // Optimistic update in local state
+    setConversations(prev =>
+      prev.map(c => c.id === renamingConvoId ? { ...c, title: trimmed } : c)
+    )
+    // Persist to localStorage for instant next-load
+    try {
+      const cacheKey = `convo_title_${renamingConvoId}`
+      localStorage.setItem(cacheKey, trimmed)
+    } catch {}
+
+    // Persist to backend
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      await fetch(`${API_BASE}/v1/conversations/${renamingConvoId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ title: trimmed }),
+      })
+    } catch (e) {
+      console.error('Rename failed:', e)
+    }
+  }, [renamingConvoId, renameValue])
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { e.preventDefault(); handleRenameCommit() }
+    if (e.key === 'Escape') { setRenamingConvoId(null) }
   }
 
   const handleCopy = async (text: string, index: number) => {
@@ -1099,7 +1441,7 @@ export const Dashboard: React.FC = () => {
 
     // Append the new user message and an assistant placeholder
     const nextMessages: Message[] = [...history, userMessageObj]
-    setMessages([...nextMessages, { role: 'assistant', content: '' }])
+    setMessages([...nextMessages, { role: 'assistant', content: '', timestamp: Date.now() }])
 
     try {
       const session = await supabase.auth.getSession()
@@ -1262,6 +1604,44 @@ export const Dashboard: React.FC = () => {
                 imgChannel.unsubscribe()
               }, 90_000)
 
+            } else if (data.type === 'agent_step') {
+              // OODA loop iteration counter — update the streaming assistant message
+              setAgentStep(data.step || 0)
+              setAgentMaxSteps(data.max_steps || 10)
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  updated[updated.length - 1] = {
+                    ...updated[updated.length - 1],
+                    agentStep: data.step,
+                    agentMaxSteps: data.max_steps,
+                  }
+                }
+                return updated
+              })
+            } else if (data.type === 'memory_written') {
+              // Agent stored a fact — show a transient toast so the user sees it
+              showToast(`Remembered: ${data.key}`, 'info')
+            } else if (data.type === 'agent_file') {
+              // Code executor produced a file — append download card to current message
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = updated[updated.length - 1]
+                  updated[updated.length - 1] = {
+                    ...last,
+                    generatedFiles: [
+                      ...(last.generatedFiles || []),
+                      {
+                        filename: data.filename,
+                        download_url: data.download_url,
+                        size_bytes: data.size_bytes || 0,
+                      },
+                    ],
+                  }
+                }
+                return updated
+              })
             } else if (data.type === 'error') {
               throw new Error(`Agent error: ${data.error}`)
             }
@@ -1291,6 +1671,7 @@ export const Dashboard: React.FC = () => {
       if (abortControllerRef.current === abortController) {
         setIsStreaming(false)
         setWebSearchStatus('idle')
+        setAgentStep(0)
         abortControllerRef.current = null
         // Return focus to input so user can type the next message immediately
         setTimeout(() => inputRef.current?.focus(), 0)
@@ -1831,40 +2212,104 @@ export const Dashboard: React.FC = () => {
             New Session
           </button>
 
-          {/* Conversation List */}
-          <div className="flex-1 overflow-y-auto space-y-1.5 max-h-[calc(100vh-270px)] pr-1 custom-scrollbar">
-            <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/50 uppercase mb-2">Sessions</p>
+          {/* Conversation List — grouped by date */}
+          <div className="flex-1 overflow-y-auto max-h-[calc(100vh-270px)] pr-1 custom-scrollbar">
             {conversations.length === 0 ? (
               <p className="text-[10px] text-[#8e95a2]/40 italic pl-1">No past sessions</p>
-            ) : (
-              conversations.map((convo) => {
-                const active = convo.id === activeConversationId
-                return (
-                  <div key={convo.id} className="group relative flex items-center w-full">
-                    <button
-                      onClick={() => handleSelectConversation(convo.id, convo.mode)}
-                      className={`flex-1 text-left px-3 py-2 rounded-lg text-[11px] font-medium truncate transition duration-150 block pr-8 ${
-                        active
-                          ? 'bg-[#c5a880]/10 text-brand-text border border-[#c5a880]/20'
-                          : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
-                      }`}
-                    >
-                      {convo.title || 'Untitled Session'}
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setConvoToDelete(convo.id)
-                      }}
-                      className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2] hover:text-red-400 transition duration-150 rounded hover:bg-white/5"
-                      title="Delete Session"
-                    >
-                      <Trash className="w-3.5 h-3.5" />
-                    </button>
+            ) : (() => {
+              const now = Date.now()
+              const startOfToday = new Date(); startOfToday.setHours(0,0,0,0)
+              const startOfYesterday = new Date(startOfToday); startOfYesterday.setDate(startOfYesterday.getDate() - 1)
+              const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfWeek.getDate() - 7)
+
+              const groups: { label: string; items: any[] }[] = [
+                { label: 'Today', items: [] },
+                { label: 'Yesterday', items: [] },
+                { label: 'This Week', items: [] },
+                { label: 'Older', items: [] },
+              ]
+
+              for (const convo of conversations) {
+                const ts = convo.created_at ? new Date(convo.created_at).getTime() : 0
+                if (ts >= startOfToday.getTime()) groups[0].items.push(convo)
+                else if (ts >= startOfYesterday.getTime()) groups[1].items.push(convo)
+                else if (ts >= startOfWeek.getTime()) groups[2].items.push(convo)
+                else groups[3].items.push(convo)
+              }
+
+              return groups.filter(g => g.items.length > 0).map(group => (
+                <div key={group.label} className="mb-4">
+                  <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/40 uppercase mb-1.5 px-1">
+                    {group.label}
+                  </p>
+                  <div className="space-y-1">
+                    {group.items.map((convo) => {
+                      const active = convo.id === activeConversationId
+                      return (
+                        <div key={convo.id} className="group relative flex items-center w-full">
+                          {renamingConvoId === convo.id ? (
+                            // Rename mode — inline input
+                            <input
+                              ref={renameInputRef}
+                              value={renameValue}
+                              onChange={e => setRenameValue(e.target.value)}
+                              onBlur={handleRenameCommit}
+                              onKeyDown={handleRenameKeyDown}
+                              className="flex-1 px-3 py-2 rounded-lg text-[11px] font-medium bg-[#c5a880]/10 border border-[#c5a880]/40 text-brand-text outline-none pr-8"
+                              maxLength={80}
+                              placeholder="Conversation title…"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => handleSelectConversation(convo.id, convo.mode)}
+                              onDoubleClick={e => {
+                                e.stopPropagation()
+                                setRenamingConvoId(convo.id)
+                                setRenameValue(convo.title || '')
+                              }}
+                              title="Double-click to rename"
+                              className={`flex-1 text-left px-3 py-2 rounded-lg text-[11px] font-medium truncate transition duration-150 block pr-14 ${
+                                active
+                                  ? 'bg-[#c5a880]/10 text-brand-text border border-[#c5a880]/20'
+                                  : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
+                              }`}
+                            >
+                              {convo.title || 'Untitled Session'}
+                            </button>
+                          )}
+                          {renamingConvoId !== convo.id && (
+                            <>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  setRenamingConvoId(convo.id)
+                                  setRenameValue(convo.title || '')
+                                }}
+                                className="absolute right-7 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2]/50 hover:text-brand-accent transition duration-150 rounded hover:bg-white/5"
+                                title="Rename"
+                              >
+                                <Pencil className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  setConvoToDelete(convo.id)
+                                }}
+                                className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2] hover:text-red-400 transition duration-150 rounded hover:bg-white/5"
+                                title="Delete Session"
+                              >
+                                <Trash className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+
+                      )
+                    })}
                   </div>
-                )
-              })
-            )}
+                </div>
+              ))
+            })()}
           </div>
         </div>
 
@@ -2089,7 +2534,14 @@ export const Dashboard: React.FC = () => {
                       ) : msg.content === '' && isStreaming ? (
                         // Typing / searching indicator — appears immediately before first token
                         <div className="flex items-center gap-2 h-6">
-                          {webSearchStatus === 'searching' ? (
+                          {msg.agentStep && msg.agentStep > 0 ? (
+                            // OODA loop active — show step counter
+                            <AgentStepIndicator
+                              step={msg.agentStep}
+                              maxSteps={msg.agentMaxSteps || agentMaxSteps}
+                              label={webSearchStatus === 'searching' ? activityLabel : undefined}
+                            />
+                          ) : webSearchStatus === 'searching' ? (
                             <>
                               <Globe className="w-3.5 h-3.5 text-[#c5a880] animate-pulse" />
                               <span className="text-[11px] text-[#c5a880]/70 font-semibold tracking-wide">
@@ -2112,9 +2564,34 @@ export const Dashboard: React.FC = () => {
                         // Image ready — premium bubble with download
                         <ImageBubble url={msg.imageUrl} prompt={msg.content || undefined} />
                       ) : (
-                        // Rendered markdown
+                        // Rendered markdown — optionally preceded by a step pill while looping
                         <div className="space-y-0.5">
-                          {renderMarkdown(msg.content)}
+                          {isStreaming && msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content.length > 0 && (
+                            <AgentStepIndicator
+                              step={msg.agentStep!}
+                              maxSteps={msg.agentMaxSteps || agentMaxSteps}
+                              label={webSearchStatus === 'searching' ? activityLabel : undefined}
+                            />
+                          )}
+                          {renderRichContent(
+                            msg.content,
+                            renderMarkdown,
+                            // Only skip rich rendering if this is the actively streaming message
+                            isStreaming && i === messages.length - 1,
+                          )}
+                          {/* Generated file download cards from code executor */}
+                          {msg.generatedFiles && msg.generatedFiles.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              {msg.generatedFiles.map((gf, gfi) => (
+                                <FileDownloadCard
+                                  key={gfi}
+                                  filename={gf.filename}
+                                  download_url={gf.download_url}
+                                  size_bytes={gf.size_bytes}
+                                />
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2124,10 +2601,29 @@ export const Dashboard: React.FC = () => {
                       <SourcesStack sources={msg.sources} />
                     )}
 
+                    {/* Relative timestamp — visible on hover */}
+                    {msg.timestamp && !isStreaming && (
+                      <span
+                        className="text-[9px] text-[#8e95a2]/30 font-medium px-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none"
+                        title={new Date(msg.timestamp).toLocaleString()}
+                      >
+                        {(() => {
+                          const diffMs = Date.now() - msg.timestamp
+                          const diffMin = Math.floor(diffMs / 60000)
+                          const diffHr = Math.floor(diffMs / 3600000)
+                          if (diffMs < 60000) return 'just now'
+                          if (diffMin < 60) return `${diffMin}m ago`
+                          if (diffHr < 24) return `${diffHr}h ago`
+                          return new Date(msg.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                        })()}
+                      </span>
+                    )}
+
                     {/* Actions Row at the bottom (outside the bubble), visible on hover */}
                     {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (
                       <div className="flex items-center gap-3.5 px-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                         {msg.content.length > 0 && (
+
                           <button
                             onClick={() => handleCopy(msg.content, i)}
                             title={msg.role === 'user' ? "Copy prompt" : "Copy response"}
