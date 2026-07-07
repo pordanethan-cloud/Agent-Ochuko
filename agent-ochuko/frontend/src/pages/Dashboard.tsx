@@ -5350,7 +5350,7 @@ export const Dashboard: React.FC = () => {
 
                         ) : msg.fileAttachment ? (
 
-                          // Agent job — render as file chip + optional prompt text
+                          /* Agent job — render as file chip + optional prompt text */
 
                           <div className="space-y-2">
 
@@ -5522,13 +5522,13 @@ export const Dashboard: React.FC = () => {
 
                       ) : msg.content === '' && isStreaming ? (
 
-                        // Typing / searching indicator — appears immediately before first token
+                        /* Typing / searching indicator — appears immediately before first token */
 
                         <div className="flex items-center gap-2 h-6">
 
                           {msg.agentStep && msg.agentStep > 0 ? (
 
-                            // OODA loop active — show step counter
+                            /* OODA loop active — show step counter */
 
                             <AgentStepIndicator
 
@@ -5574,19 +5574,19 @@ export const Dashboard: React.FC = () => {
 
                       ) : msg.imagePending ? (
 
-                        // FLUX generation in progress — shimmer placeholder
+                        /* FLUX generation in progress — shimmer placeholder */
 
                         <ImagePending prompt={msg.content || undefined} />
 
                       ) : msg.imageUrl ? (
 
-                        // Image ready — premium bubble with download
+                        /* Image ready — premium bubble with download */
 
                         <ImageBubble url={msg.imageUrl} prompt={msg.content || undefined} />
 
                       ) : (
 
-                        // Rendered markdown — optionally preceded by a step pill while looping
+                        /* Rendered markdown — optionally preceded by a step pill while looping */
 
                         <div className="space-y-0.5">
 
@@ -5610,7 +5610,7 @@ export const Dashboard: React.FC = () => {
 
                             (t) => renderMarkdown(t, msg.generatedFiles),
 
-                            // Only skip rich rendering if this is the actively streaming message
+                            /* Only skip rich rendering if this is the actively streaming message */
 
                             isStreaming && i === messages.length - 1,
 
