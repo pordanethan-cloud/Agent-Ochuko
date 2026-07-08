@@ -527,7 +527,7 @@ async def get_job_status(
         # Workers (OCR, Vision, image_gen, speech_tts) all write their output
         # into the "result" JSON column (see function_app.py line ~830)
         result = row.get("result") or {}
-        result_blob_url = result.get("blob_url")  # set by speech_tts worker on completion
+        result_blob_url = result.get("blob_url") or result.get("image_url")  # set by speech_tts or image_gen worker on completion
 
         return {
             "job_id": row["id"],

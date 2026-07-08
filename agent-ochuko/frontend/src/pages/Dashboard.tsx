@@ -83,13 +83,15 @@ interface Message {
 
   routing_reason?: string
 
-  fileAttachment?: { name: string; jobType: 'ocr' | 'vision' }
+  fileAttachment?: { name: string; jobType: 'ocr' | 'vision'; url?: string }
 
   sources?: Source[]
 
   imageUrl?: string
 
   imagePending?: boolean
+
+  imagePrompt?: string
 
   agentStep?: number
 
@@ -3806,13 +3808,43 @@ export const Dashboard: React.FC = () => {
 
               // Append a pending image bubble after the (possibly still-streaming) text
 
-              setMessages((prev) => [
+              // Append a pending image bubble status to the active assistant message
 
-                ...prev,
+              setMessages((prev) => {
 
-                { role: 'assistant', content: imgPrompt, imagePending: true },
+                const updated = [...prev]
 
-              ])
+                if (updated.length > 0) {
+
+                  const lastMsg = updated[updated.length - 1]
+
+                  if (lastMsg.role === 'assistant') {
+
+                    return updated.map((m, idx) =>
+
+                      idx === updated.length - 1
+
+                        ? { ...m, imagePending: true, imagePrompt: imgPrompt }
+
+                        : m
+
+                    )
+
+                  }
+
+                }
+
+                // Fallback if no assistant message exists
+
+                return [
+
+                  ...prev,
+
+                  { role: 'assistant', content: '', imagePending: true, imagePrompt: imgPrompt }
+
+                ]
+
+              })
 
               // Subscribe to job completion via Supabase Realtime
 
@@ -3836,7 +3868,7 @@ export const Dashboard: React.FC = () => {
 
                         prev.map((m) =>
 
-                          m.imagePending && m.content === imgPrompt
+                          m.imagePending && m.imagePrompt === imgPrompt
 
                             ? { ...m, imagePending: false, imageUrl: j.result.image_url }
 
@@ -3846,7 +3878,7 @@ export const Dashboard: React.FC = () => {
 
                       )
 
-                      imgChannel.unsubscribe()
+                      cleanupJob()
 
                     } else if (j.status === 'failed') {
 
@@ -3856,9 +3888,9 @@ export const Dashboard: React.FC = () => {
 
                         prev.map((m) =>
 
-                          m.imagePending && m.content === imgPrompt
+                          m.imagePending && m.imagePrompt === imgPrompt
 
-                            ? { role: 'assistant', content: `Image generation failed: ${j.error || 'Please try again.'}` }
+                            ? { ...m, imagePending: false, content: m.content + `\n\nImage generation failed: ${j.error || 'Please try again.'}` }
 
                             : m
 
@@ -3866,7 +3898,7 @@ export const Dashboard: React.FC = () => {
 
                       )
 
-                      imgChannel.unsubscribe()
+                      cleanupJob()
 
                     }
 
@@ -3876,17 +3908,109 @@ export const Dashboard: React.FC = () => {
 
                 .subscribe()
 
-              // 90s stall guard
+              // Polling fallback check interval in case WebSocket connection fails
 
-              setTimeout(() => {
+              let isCleanedUp = false
+
+              const pollInterval = setInterval(async () => {
+
+                if (isCleanedUp) return
+
+                try {
+
+                  const session = await supabase.auth.getSession()
+
+                  const token = session.data.session?.access_token
+
+                  if (!token) return
+
+                  const response = await fetch(`${API_BASE}/v1/agents/job/${imgJobId}`, {
+
+                    headers: { 'Authorization': `Bearer ${token}` }
+
+                  })
+
+                  if (response.ok) {
+
+                    const jobData = await response.json()
+
+                    if (jobData.status === 'done' && jobData.result_blob_url) {
+
+                      setMessages((prev) =>
+
+                        prev.map((m) =>
+
+                          m.imagePending && m.imagePrompt === imgPrompt
+
+                            ? { ...m, imagePending: false, imageUrl: jobData.result_blob_url }
+
+                            : m
+
+                        )
+
+                      )
+
+                      cleanupJob()
+
+                    } else if (jobData.status === 'failed') {
+
+                      console.error("Image generation job polled fail:", jobData.error_message)
+
+                      setMessages((prev) =>
+
+                        prev.map((m) =>
+
+                          m.imagePending && m.imagePrompt === imgPrompt
+
+                            ? { ...m, imagePending: false, content: m.content + `\n\nImage generation failed: ${jobData.error_message || 'Please try again.'}` }
+
+                            : m
+
+                        )
+
+                      )
+
+                      cleanupJob()
+
+                    }
+
+                  }
+
+                } catch (pollErr) {
+
+                  console.warn("Error polling image generation job status:", pollErr)
+
+                }
+
+              }, 4000)
+
+              // Unified cleanup function for subscription, polling, and timers
+
+              const cleanupJob = () => {
+
+                if (isCleanedUp) return
+
+                isCleanedUp = true
+
+                clearInterval(pollInterval)
+
+                clearTimeout(stallTimeout)
+
+                imgChannel.unsubscribe()
+
+              }
+
+              // 90s stall guard timeout
+
+              const stallTimeout = setTimeout(() => {
 
                 setMessages((prev) =>
 
                   prev.map((m) =>
 
-                    m.imagePending && m.content === imgPrompt
+                    m.imagePending && m.imagePrompt === imgPrompt
 
-                      ? { role: 'assistant', content: 'Image generation timed out. Please try again.' }
+                      ? { ...m, imagePending: false, content: m.content + '\n\nImage generation timed out. Please try again.' }
 
                       : m
 
@@ -3894,7 +4018,7 @@ export const Dashboard: React.FC = () => {
 
                 )
 
-                imgChannel.unsubscribe()
+                cleanupJob()
 
               }, 90_000)
 
@@ -4131,7 +4255,7 @@ export const Dashboard: React.FC = () => {
 
     const fileName = attachedFile?.name || (jobType === 'ocr' ? 'document.pdf' : 'image.png')
 
-    const fileAttachment: Message['fileAttachment'] = { name: fileName, jobType }
+    const fileAttachment: Message['fileAttachment'] = { name: fileName, jobType, url: blobUrl }
 
     // Plain-text version stored to DB (content field must be a string)
 
@@ -5630,27 +5754,47 @@ export const Dashboard: React.FC = () => {
 
                           <div className="space-y-2">
 
-                            <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20">
+                            {msg.fileAttachment.jobType === 'vision' && msg.fileAttachment.url ? (
 
-                              <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
+                              <div className="w-full max-w-sm rounded-xl overflow-hidden border border-[#ffffff]/10 bg-[#111316]/20">
 
-                              <div className="min-w-0">
+                                <img
 
-                                <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest">
+                                  src={msg.fileAttachment.url}
 
-                                  {msg.fileAttachment.jobType === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
+                                  alt={msg.fileAttachment.name}
 
-                                </p>
+                                  className="w-full h-auto max-h-64 object-contain"
 
-                                <p className="text-[13px] text-brand-text/90 font-medium truncate">
-
-                                  {msg.fileAttachment.name}
-
-                                </p>
+                                />
 
                               </div>
 
-                            </div>
+                            ) : (
+
+                              <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20">
+
+                                <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
+
+                                <div className="min-w-0">
+
+                                  <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest">
+
+                                    {msg.fileAttachment.jobType === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
+
+                                  </p>
+
+                                  <p className="text-[13px] text-brand-text/90 font-medium truncate">
+
+                                    {msg.fileAttachment.name}
+
+                                  </p>
+
+                                </div>
+
+                              </div>
+
+                            )}
 
                             {/* Show any prompt text the user typed alongside the file */}
 
@@ -5848,23 +5992,11 @@ export const Dashboard: React.FC = () => {
 
                         </div>
 
-                      ) : msg.imagePending ? (
-
-                        /* FLUX generation in progress — shimmer placeholder */
-
-                        <ImagePending prompt={msg.content || undefined} />
-
-                      ) : msg.imageUrl ? (
-
-                        /* Image ready — premium bubble with download */
-
-                        <ImageBubble url={msg.imageUrl} prompt={msg.content || undefined} />
-
                       ) : (
 
                         /* Rendered markdown — optionally preceded by a step pill while looping */
 
-                        <div className="space-y-0.5">
+                        <div className="space-y-3">
 
                           {msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content.length > 0 && (
 
@@ -5882,7 +6014,7 @@ export const Dashboard: React.FC = () => {
 
                           )}
 
-                          {renderRichContent(
+                          {msg.content.length > 0 && renderRichContent(
 
                             msg.content,
 
@@ -5891,6 +6023,18 @@ export const Dashboard: React.FC = () => {
                             /* Only skip rich rendering if this is the actively streaming message */
 
                             isStreaming && i === messages.length - 1,
+
+                          )}
+
+                          {msg.imagePending && (
+
+                            <ImagePending prompt={msg.imagePrompt || undefined} />
+
+                          )}
+
+                          {msg.imageUrl && (
+
+                            <ImageBubble url={msg.imageUrl} prompt={msg.imagePrompt || undefined} />
 
                           )}
 

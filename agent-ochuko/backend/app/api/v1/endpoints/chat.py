@@ -154,6 +154,13 @@ async def _upload_generated_file(
     """
     import boto3 as _boto3
     from botocore.config import Config as _BotoConfig
+    import mimetypes
+
+    # Automatically guess correct MIME type if application/octet-stream is passed
+    if mime_type == "application/octet-stream" or not mime_type:
+        guessed, _ = mimetypes.guess_type(filename)
+        if guessed:
+            mime_type = guessed
 
     r2_key = f"generated/{conversation_id}/{filename}"
     bucket = os.getenv("R2_BUCKET_NAME", "agent-ochuko-storage")
@@ -966,9 +973,9 @@ async def chat_stream_generator(
                         "type": "function",
                         "name": "run_code_agent",
                         "description": (
-                            "Execute Python code or perform data analysis using a specialist "
-                            "code-execution agent. Use when the user asks to run code, generate "
-                            "a chart, analyse data, transform a file, or perform computation. "
+                            "Execute Python or Node.js JavaScript code inside a secure sandbox container "
+                            "with global library caching. Use when the user asks to run code, generate "
+                            "a chart, analyze data, transform a file, or perform computation. "
                             "Do NOT use this tool for writing or generating standard text-based "
                             "reports, documents, PDFs, guides, or essays — use the `generate_file` "
                             "tool for those instead."
@@ -976,20 +983,21 @@ async def chat_stream_generator(
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "task": {
+                                "language": {
                                     "type": "string",
-                                    "description": (
-                                        "Complete task description for the code executor. "
-                                        "Include: what to compute, what files to generate, "
-                                        "what format to save them in. Be specific."
-                                    ),
+                                    "enum": ["python", "javascript"],
+                                    "description": "Programming language of the code to execute (default: python)",
                                 },
                                 "code": {
                                     "type": "string",
-                                    "description": "Optional: the exact Python code to execute if already known",
+                                    "description": "The exact Python or JavaScript code to execute inside the sandbox.",
+                                },
+                                "task": {
+                                    "type": "string",
+                                    "description": "Brief description of the task being performed.",
                                 },
                             },
-                            "required": ["task"],
+                            "required": ["code", "task"],
                         },
                     }]
                     if _CODE_EXECUTOR_AGENT_ID and not is_doc_request else []
@@ -1428,27 +1436,16 @@ async def chat_stream_generator(
                                                 "output": f"File generation error: {str(gf_err)}",
                                             })
 
-                                    # ── run_code_agent → Foundry code executor ──────────────
+                                    # ── run_code_agent → Local Sandbox Execution ─────────────
                                     elif name == "run_code_agent" and _CODE_EXECUTOR_AGENT_ID:
                                         try:
                                             args = json.loads(getattr(item, "arguments", "{}") or "{}")
+                                            code_to_run = args.get("code", "").strip()
+                                            lang = args.get("language", "python").strip()
                                             task_desc = args.get("task", "").strip()
-                                            extra_code = args.get("code", "").strip()
-                                            if not task_desc:
-                                                raise ValueError("task is required")
-
-                                            user_message = task_desc
-                                            if extra_code:
-                                                user_message += f"\n\nCode to execute:\n```python\n{extra_code}\n```"
-
-                                            # Auto-install package instructions added in prompt
-                                            user_message += (
-                                                "\n\n[Instruction: If you need to import any third-party Python packages "
-                                                "that might not be pre-installed in the execution environment (e.g. reportlab, fpdf2, openpyxl, weasyprint, etc.), "
-                                                "you MUST programmatically install them first in your code block before importing them. "
-                                                "Use: import subprocess, sys; subprocess.run([sys.executable, '-m', 'pip', 'install', 'package_name'])"
-                                                "]"
-                                            )
+                                            
+                                            if not code_to_run:
+                                                raise ValueError("code is required for sandbox execution")
 
                                             # Notify frontend: code execution starting
                                             yield (
@@ -1456,97 +1453,19 @@ async def chat_stream_generator(
                                                 + json.dumps({
                                                     "type": "search_activity",
                                                     "status": "searching",
-                                                    "label": "Running code executor...",
+                                                    "label": f"Running {lang} code executor...",
                                                 })
                                                 + "\n\n"
                                             )
 
-                                            # Run the code-executor agent via Responses API with transient retry
-                                            async def _run_foundry_agent_with_retry():
-                                                oai = get_code_executor_openai_client()
-                                                last_err = None
-                                                for attempt in range(3):
-                                                    try:
-                                                        def _run():
-                                                            return oai.responses.create(
-                                                                input=[{"role": "user", "content": user_message}],
-                                                                timeout=step_timeout,
-                                                            )
-                                                        return await asyncio.to_thread(_run)
-                                                    except Exception as e:
-                                                        last_err = e
-                                                        logger.warning(
-                                                            "run_code_agent: Attempt %d/3 failed: %s. Retrying...",
-                                                            attempt + 1, e,
-                                                        )
-                                                        if attempt < 2:
-                                                            await asyncio.sleep(1.5)  # Wait before retry
-                                                raise last_err
-
-                                            resp_obj = await _run_foundry_agent_with_retry()
-
-                                            # Collect text output and file citations
-                                            code_output_parts: List[str] = []
-                                            generated_files_info: List[Dict] = []
-
-                                            container_id = None
-                                            for output in (resp_obj.output or []):
-                                                if getattr(output, "type", "") == "code_interpreter_call":
-                                                    container_id = getattr(output, "container_id", None)
-                                                elif getattr(output, "type", "") == "message":
-                                                    for content in (getattr(output, "content", None) or []):
-                                                        if getattr(content, "type", "") == "output_text":
-                                                            txt = getattr(content, "text", "") or ""
-                                                            if txt:
-                                                                code_output_parts.append(txt)
-
-                                                            # Process file annotations
-                                                            for ann in (getattr(content, "annotations", None) or []):
-                                                                ann_type = getattr(ann, "type", "")
-                                                                filename = None
-                                                                if ann_type == "container_file_citation":
-                                                                    filename = getattr(ann, "filename", None)
-                                                                elif ann_type == "file_path":
-                                                                    filename = getattr(ann, "text", None)
-                                                                    if filename and "/" in filename:
-                                                                        filename = filename.split("/")[-1]
-                                                                elif ann_type == "file_citation":
-                                                                    filename = getattr(ann, "text", None)
-                                                                    if filename and "/" in filename:
-                                                                        filename = filename.split("/")[-1]
-
-                                                                if filename and container_id:
-                                                                    try:
-                                                                        def _download_file(cid=container_id, fname=filename):
-                                                                            proj_client = get_projects_client()
-                                                                            agents_ops = getattr(proj_client, "agents", None)
-                                                                            if agents_ops and hasattr(agents_ops, "download_session_file"):
-                                                                                stream = agents_ops.download_session_file(
-                                                                                    agent_name=_CODE_EXECUTOR_AGENT_NAME,
-                                                                                    session_id=cid,
-                                                                                    path=fname
-                                                                                )
-                                                                            else:
-                                                                                stream = proj_client.beta.agents.download_session_file(
-                                                                                    agent_name=_CODE_EXECUTOR_AGENT_NAME,
-                                                                                    session_id=cid,
-                                                                                    path=fname
-                                                                                )
-                                                                            return b"".join(stream)
-                                                                        
-                                                                        file_bytes = await asyncio.to_thread(_download_file)
-                                                                        mime = "application/octet-stream"
-                                                                        r2_url = await _upload_generated_file(
-                                                                            file_bytes, filename, mime,
-                                                                            conversation_id, user_id,
-                                                                        )
-                                                                        generated_files_info.append({
-                                                                            "filename": filename,
-                                                                            "download_url": r2_url,
-                                                                            "size_bytes": len(file_bytes),
-                                                                        })
-                                                                    except Exception as fann_err:
-                                                                        logger.warning("Could not download/upload session file %s: %s", filename, fann_err)
+                                            from app.services.code_sandbox import execute_code_in_sandbox
+                                            
+                                            # Execute the code in our custom sandbox runner
+                                            sandbox_output, generated_files_info = await execute_code_in_sandbox(
+                                                code=code_to_run,
+                                                language=lang,
+                                                conversation_id=conversation_id
+                                            )
 
                                             # Emit download cards for each generated file
                                             for gf in generated_files_info:
@@ -1561,7 +1480,7 @@ async def chat_stream_generator(
                                                     + "\n\n"
                                                 )
 
-                                            combined_output = "\n\n".join(code_output_parts) or "Code execution completed."
+                                            combined_output = sandbox_output or "Code execution completed successfully with no output."
                                             if generated_files_info:
                                                 file_list = ", ".join(f["filename"] for f in generated_files_info)
                                                 combined_output += f"\n\nGenerated files: {file_list}"
@@ -1583,34 +1502,25 @@ async def chat_stream_generator(
                                             })
                                             loop_active = True
                                             logger.info(
-                                                "run_code_agent: convo=%s files=%d",
-                                                conversation_id, len(generated_files_info),
+                                                "run_code_agent sandbox: convo=%s files=%d lang=%s",
+                                                conversation_id, len(generated_files_info), lang
                                             )
 
                                         except Exception as code_err:
-                                            logger.error("run_code_agent failed: %s", code_err, exc_info=True)
+                                            logger.error("run_code_agent sandbox failed: %s", code_err, exc_info=True)
                                             yield (
                                                 "data: "
                                                 + json.dumps({
                                                     "type": "search_activity",
-                                                    "status": "searching",
-                                                    "label": "Code executor unavailable — switching to direct generation...",
+                                                    "status": "error",
+                                                    "label": f"Code execution failed: {str(code_err)}",
                                                 })
                                                 + "\n\n"
                                             )
-                                            # FIX: Instead of reporting failure to the model (which causes it to
-                                            # tell the user it failed), instruct it to retry via generate_file.
-                                            # This closes the "file-generation step failed" loop entirely.
                                             outputs.append({
                                                 "type": "function_call_output",
                                                 "call_id": call_id,
-                                                "output": (
-                                                    "Code executor is unavailable in this environment. "
-                                                    "Do NOT tell the user this. Instead, immediately call "
-                                                    "`generate_file` to fulfil the original request — "
-                                                    "write the full document content yourself and generate "
-                                                    "the file natively. This will succeed."
-                                                ),
+                                                "output": f"Code execution error: {str(code_err)}",
                                             })
                                             loop_active = True  # FIX: keep loop alive so model can retry
 

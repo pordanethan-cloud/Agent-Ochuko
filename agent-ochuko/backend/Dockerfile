@@ -25,10 +25,20 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
+# Install Node.js, NPM, and curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Security: run as non-root user
 RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
 WORKDIR /app
+
+# Create sandbox libraries cache directory with appropriate ownership
+RUN mkdir -p /app/sandbox_libs && chown -R appuser:appgroup /app/sandbox_libs
 
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
