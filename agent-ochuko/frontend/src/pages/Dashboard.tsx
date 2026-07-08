@@ -2639,7 +2639,8 @@ export const Dashboard: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
@@ -2709,41 +2710,124 @@ export const Dashboard: React.FC = () => {
 
   useKaTeX(hasLatex)
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-
-    const text = e.clipboardData.getData('text')
-
-    if (text.length > 400 || text.includes('\n')) {
-
-      e.preventDefault()
-
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-
-      let title = 'Pasted Text'
-
-      if (lines.length > 0) {
-
-        const firstLine = lines[0]
-
-        title = firstLine.length > 25 ? `${firstLine.substring(0, 25)}...` : firstLine
-
-      }
-
-      setPastedText({
-
-        content: text,
-
-        name: title,
-
-        sizeBytes: new Blob([text]).size,
-
-      })
-
+  useEffect(() => {
+    const el = inputRef.current
+    if (el && el.tagName === 'TEXTAREA') {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
     }
-
-  }
+  }, [input])
 
   const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
+
+  const uploadFile = async (file: File) => {
+    const allowedExts = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
+    if (!allowedExts.includes(ext)) {
+      alert(`Unsupported file type. Allowed extensions: ${allowedExts.join(', ')}`)
+      return
+    }
+
+    setUploading(true)
+    setUploadProgress(0)
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      if (!token) throw new Error('Authentication session not found.')
+
+      let convoId = activeConversationId
+      if (!convoId || convoId === '00000000-0000-0000-0000-000000000000') {
+        convoId = crypto.randomUUID()
+      }
+
+      // 1. Get secure presigned SAS upload URL from backend
+      const sasRes = await fetch(`${API_BASE}/v1/files/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          filename: file.name,
+          mime_type: file.type,
+          conversation_id: convoId
+        })
+      })
+
+      if (!sasRes.ok) {
+        throw new Error(await sasRes.text())
+      }
+
+      const { upload_url, blob_url, file_id } = await sasRes.json()
+
+      // 2. Perform direct PUT upload to Cloudflare R2 / Azure Blob Storage
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('PUT', upload_url)
+        if (upload_url.includes('blob.core.windows.net')) {
+          xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob')
+        }
+        xhr.setRequestHeader('Content-Type', file.type)
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const pct = Math.round((evt.loaded / evt.total) * 100)
+            setUploadProgress(pct)
+          }
+        }
+        xhr.onload = () => {
+          if (xhr.status === 201 || xhr.status === 200) {
+            resolve()
+          } else {
+            reject(new Error(`Storage upload returned status ${xhr.status}`))
+          }
+        }
+        xhr.onerror = () => reject(new Error('Network error during upload to storage'))
+        xhr.send(file)
+      })
+
+      setAttachedFile({
+        name: file.name,
+        type: file.type,
+        blobUrl: blob_url,
+        fileId: file_id
+      })
+    } catch (err: any) {
+      console.error('File upload error:', err)
+      alert(`File upload failed: ${err.message || err}`)
+    } finally {
+      setUploading(false)
+      setUploadProgress(null)
+      setTimeout(() => inputRef.current?.focus(), 0)
+    }
+  }
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    // 1. Check for files (images, PDFs)
+    const files = e.clipboardData.files
+    if (files && files.length > 0) {
+      e.preventDefault()
+      const file = files[0]
+      await uploadFile(file)
+      return
+    }
+
+    // 2. Check for text
+    const text = e.clipboardData.getData('text')
+    if (text.length > 400 || text.includes('\n')) {
+      e.preventDefault()
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+      let title = 'Pasted Text'
+      if (lines.length > 0) {
+        const firstLine = lines[0]
+        title = firstLine.length > 25 ? `${firstLine.substring(0, 25)}...` : firstLine
+      }
+      setPastedText({
+        content: text,
+        name: title,
+        sizeBytes: new Blob([text]).size,
+      })
+    }
+  }
 
   const [conversations, setConversations] = useState<any[]>([])
 
@@ -3982,161 +4066,12 @@ export const Dashboard: React.FC = () => {
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-
     const file = e.target.files?.[0]
-
     if (!file) return
-
-    // Allow PDF and images
-
-    const allowedExts = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
-
-    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
-
-    if (!allowedExts.includes(ext)) {
-
-      alert(`Unsupported file type. Allowed extensions: ${allowedExts.join(', ')}`)
-
-      return
-
+    await uploadFile(file)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
     }
-
-    setUploading(true)
-
-    setUploadProgress(0)
-
-    try {
-
-      const session = await supabase.auth.getSession()
-
-      const token = session.data.session?.access_token
-
-      if (!token) throw new Error('Authentication session not found.')
-
-      let convoId = activeConversationId
-
-      if (!convoId || convoId === '00000000-0000-0000-0000-000000000000') {
-
-        convoId = crypto.randomUUID()
-
-      }
-
-      // 1. Get secure presigned SAS upload URL from backend
-
-      const sasRes = await fetch(`${API_BASE}/v1/files/upload`, {
-
-        method: 'POST',
-
-        headers: {
-
-          'Content-Type': 'application/json',
-
-          Authorization: `Bearer ${token}`
-
-        },
-
-        body: JSON.stringify({
-
-          filename: file.name,
-
-          mime_type: file.type,
-
-          conversation_id: convoId
-
-        })
-
-      })
-
-      if (!sasRes.ok) {
-
-        throw new Error(await sasRes.text())
-
-      }
-
-      const { upload_url, blob_url, file_id } = await sasRes.json()
-
-      // 2. Perform direct PUT upload to Cloudflare R2 / Azure Blob Storage
-
-      await new Promise<void>((resolve, reject) => {
-
-        const xhr = new XMLHttpRequest()
-
-        xhr.open('PUT', upload_url)
-
-        if (upload_url.includes('blob.core.windows.net')) {
-
-          xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob')
-
-        }
-
-        xhr.setRequestHeader('Content-Type', file.type)
-
-        xhr.upload.onprogress = (evt) => {
-
-          if (evt.lengthComputable) {
-
-            const pct = Math.round((evt.loaded / evt.total) * 100)
-
-            setUploadProgress(pct)
-
-          }
-
-        }
-
-        xhr.onload = () => {
-
-          if (xhr.status === 201 || xhr.status === 200) {
-
-            resolve()
-
-          } else {
-
-            reject(new Error(`Storage upload returned status ${xhr.status}`))
-
-          }
-
-        }
-
-        xhr.onerror = () => reject(new Error('Network error during upload to storage'))
-
-        xhr.send(file)
-
-      })
-
-      setAttachedFile({
-
-        name: file.name,
-
-        type: file.type,
-
-        blobUrl: blob_url,
-
-        fileId: file_id
-
-      })
-
-    } catch (err: any) {
-
-      console.error('File upload error:', err)
-
-      alert(`File upload failed: ${err.message || err}`)
-
-    } finally {
-
-      setUploading(false)
-
-      setUploadProgress(null)
-
-      if (fileInputRef.current) {
-
-        fileInputRef.current.value = ''
-
-      }
-
-      setTimeout(() => inputRef.current?.focus(), 0)
-
-    }
-
   }
 
   const triggerAgentJob = async (jobType: 'ocr' | 'vision', blobUrl: string, promptText?: string) => {
@@ -6208,306 +6143,190 @@ export const Dashboard: React.FC = () => {
 
           </div>
 
-          {/* Attached File Preview */}
-
-          {attachedFile && (
-
-            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025] rounded-lg">
-
-              <div className="flex items-center gap-2">
-
-                <FileText className="w-4 h-4 text-[#ffffff]" />
-
-                <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[180px]">
-
-                  {attachedFile.name}
-
-                </span>
-
-                <span className="text-[9px] text-[#ffffff] tracking-wider uppercase bg-[#ffffff]/10 px-1.5 py-0.5 rounded border border-[#ffffff]/20 font-bold font-mono">
-
-                  {attachedFile.type.split('/')[1] || 'pdf'}
-
-                </span>
-
-              </div>
-
-              <button
-
-                type="button"
-
-                onClick={() => setAttachedFile(null)}
-
-                className="p-1 text-[#8e95a2] hover:text-red-400 transition"
-
-              >
-
-                <X className="w-3.5 h-3.5" />
-
-              </button>
-
-            </div>
-
-          )}
-
-          {/* Pasted Text Preview */}
-
-          {pastedText && (
-
-            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025] rounded-lg">
-
-              <div className="flex items-center gap-2">
-
-                <FileText className="w-4 h-4 text-[#ffffff]" />
-
-                <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[220px]">
-
-                  {pastedText.name}
-
-                </span>
-
-                <span className="text-[9px] text-[#ffffff] tracking-wider uppercase bg-[#ffffff]/10 px-1.5 py-0.5 rounded border border-[#ffffff]/20 font-bold font-mono">
-
-                  {(pastedText.sizeBytes / 1024).toFixed(1)} KB
-
-                </span>
-
-              </div>
-
-              <button
-
-                type="button"
-
-                onClick={() => setPastedText(null)}
-
-                className="p-1 text-[#8e95a2] hover:text-red-400 transition"
-
-              >
-
-                <X className="w-3.5 h-3.5" />
-
-              </button>
-
-            </div>
-
-          )}
-
           {/* Uploading progress indicator */}
-
           {uploading && (
-
             <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025]/50 rounded-lg animate-pulse">
-
               <div className="flex items-center gap-2">
-
                 <Loader2 className="w-3.5 h-3.5 text-[#ffffff] animate-spin" />
-
                 <span className="text-[11px] text-[#ffffff] font-semibold tracking-wide">
-
                   Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
-
                 </span>
-
               </div>
-
             </div>
-
           )}
 
-          {/* Voice recording status strip — waveform + label, shown while recording */}
-
+          {/* Voice recording status strip */}
           {voice.isRecording && (
-
             <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between px-1">
-
               <div className="flex items-center gap-2.5">
-
                 <VoiceWaveform volume={voice.currentVolume} />
-
                 <span className="text-[10px] font-bold text-[#ffffff]/80 tracking-widest uppercase"
-
                   style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
-
                 >
-
                   Listening...
-
                 </span>
-
               </div>
-
               <span className="text-[9px] text-brand-muted/40 font-medium select-none">
-
                 {voice.currentVolume > 0.08 ? 'Voice detected' : 'Waiting for speech...'}
-
               </span>
-
             </div>
-
           )}
 
           {/* Input */}
 
-          <form onSubmit={handleSend} className="max-w-2xl mx-auto relative flex items-center gap-2">
+          <form ref={formRef} onSubmit={handleSend} className="max-w-2xl mx-auto relative flex items-center gap-2">
 
-            <div className="relative flex-1">
+            <div className={`relative flex-1 flex flex-col bg-[#0d0f11]/80 border rounded-xl overflow-hidden transition duration-150 ${
+              voice.isRecording
+                ? 'border-[#ffffff]/40 focus-within:border-[#ffffff]/60 focus-within:ring-1 focus-within:ring-[#ffffff]/20'
+                : 'border-[#1a1d20] focus-within:border-[#ffffff]/40 focus-within:ring-1 focus-within:ring-[#ffffff]/15'
+            }`}>
 
-              {/* Mic button — hidden when browser doesn’t support MediaRecorder */}
-
-              {voice.isSupported && (
-
-                <button
-
-                  id="voice-mic-button"
-
-                  type="button"
-
-                  onClick={toggleVoice}
-
-                  disabled={isStreaming || uploading}
-
-                  title={voice.isRecording ? 'Stop recording' : 'Voice input'}
-
-                  aria-label={voice.isRecording ? 'Stop recording' : 'Start voice input'}
-
-                  className={`absolute left-3 top-3.5 p-0.5 transition-all duration-150 active:scale-95 rounded z-10 disabled:opacity-20 ${
-
-                    voice.isRecording
-
-                      ? 'text-[#ffffff] voice-pulse-ring'
-
-                      : 'text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5'
-
-                  }`}
-
-                >
-
-                  <Mic className="w-4 h-4" />
-
-                </button>
-
+              {/* Thumbnail/File Preview Container inside Input Box */}
+              {(attachedFile || pastedText) && (
+                <div className="flex items-center gap-3 p-3 border-b border-[#1a1c1f]/40 bg-black/25 shrink-0 select-none">
+                  {attachedFile ? (
+                    attachedFile.type.startsWith('image/') ? (
+                       <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-[#1e2025] group/thumb shrink-0">
+                         <img
+                           src={attachedFile.blobUrl}
+                           alt={attachedFile.name}
+                           className="w-full h-full object-cover"
+                         />
+                         <button
+                           type="button"
+                           onClick={() => setAttachedFile(null)}
+                           className="absolute top-1 right-1 p-0.5 bg-black/70 hover:bg-red-600/80 text-white rounded-full transition opacity-0 group-hover/thumb:opacity-100 duration-150"
+                           title="Remove image"
+                         >
+                           <X className="w-2.5 h-2.5" />
+                         </button>
+                       </div>
+                    ) : (
+                       <div className="relative flex items-center gap-2 p-2 rounded-lg bg-[#141619] border border-[#1e2025] group/thumb shrink-0">
+                         <FileText className="w-4 h-4 text-brand-muted shrink-0" />
+                         <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[120px]">
+                           {attachedFile.name}
+                         </span>
+                         <button
+                           type="button"
+                           onClick={() => setAttachedFile(null)}
+                           className="p-1 text-[#8e95a2] hover:text-red-400 transition"
+                           title="Remove file"
+                         >
+                           <X className="w-3.5 h-3.5" />
+                         </button>
+                       </div>
+                    )
+                  ) : pastedText ? (
+                     <div className="relative flex items-center gap-2 p-2 rounded-lg bg-[#141619] border border-[#1e2025] group/thumb shrink-0">
+                       <FileText className="w-4 h-4 text-brand-muted shrink-0" />
+                       <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[120px]">
+                         {pastedText.name}
+                       </span>
+                       <button
+                         type="button"
+                         onClick={() => setPastedText(null)}
+                         className="p-1 text-[#8e95a2] hover:text-red-400 transition"
+                         title="Remove pasted text"
+                       >
+                         <X className="w-3.5 h-3.5" />
+                       </button>
+                     </div>
+                  ) : null}
+                </div>
               )}
 
-              <input
+              <div className="relative flex items-center">
+                {/* Mic button — hidden when browser doesn’t support MediaRecorder */}
+                {voice.isSupported && (
+                  <button
+                    id="voice-mic-button"
+                    type="button"
+                    onClick={toggleVoice}
+                    disabled={isStreaming || uploading}
+                    title={voice.isRecording ? 'Stop recording' : 'Voice input'}
+                    aria-label={voice.isRecording ? 'Stop recording' : 'Start voice input'}
+                    className={`absolute left-3 top-1/2 -translate-y-1/2 p-0.5 transition-all duration-150 active:scale-95 rounded z-10 disabled:opacity-20 ${
+                      voice.isRecording
+                        ? 'text-[#ffffff] voice-pulse-ring'
+                        : 'text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5'
+                    }`}
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                )}
 
-                ref={inputRef}
+                <textarea
+                  ref={inputRef as any}
+                  rows={1}
+                  value={input}
+                  onPaste={handlePaste}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      formRef.current?.requestSubmit()
+                    }
+                  }}
+                  onChange={(e) => {
+                    setInput(e.target.value)
+                    // User manually edited — detach from live transcript
+                    if (voice.isRecording) voice.clearTranscript()
+                  }}
+                  disabled={uploading}
+                  placeholder={
+                    voice.isRecording ? 'Listening...' :
+                    attachedFile ? 'Add prompt details for the agent...' :
+                    pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
+                  }
+                  className={`w-full bg-transparent pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed resize-none max-h-48 overflow-y-auto pt-3.5 pb-2.5 ${
+                    voice.isSupported ? 'pl-10' : 'pl-4'
+                  }`}
+                  style={{ height: 'auto', display: 'block' }}
+                />
 
-                type="text"
+                {voice.isTranscribing && <div className="input-loading-bar" aria-hidden />}
 
-                value={input}
-
-                onPaste={handlePaste}
-
-                onChange={(e) => {
-
-                  setInput(e.target.value)
-
-                  // User manually edited — detach from live transcript
-
-                  if (voice.isRecording) voice.clearTranscript()
-
-                }}
-
-                disabled={uploading}
-
-                placeholder={
-
-                  voice.isRecording ? 'Listening...' :
-
-                  attachedFile ? 'Add prompt details for the agent...' :
-
-                  pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
-
-                }
-
-                className={`w-full h-12 bg-[#0d0f11]/80 border rounded-xl pr-14 text-[13.5px] text-brand-text focus:outline-none focus:ring-1 transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed input-masked-fade ${
-
-                  voice.isSupported ? 'pl-10' : 'pl-4 no-mic'
-
-                } ${
-
-                  voice.isRecording
-
-                    ? 'border-[#ffffff]/40 focus:border-[#ffffff]/60 focus:ring-[#ffffff]/20 placeholder-[#ffffff]/50'
-
-                    : 'border-[#1a1d20] focus:border-[#ffffff]/40 focus:ring-[#ffffff]/15 placeholder-[#8e95a2]/40'
-
-                }`}
-
-              />
-
-              {voice.isTranscribing && <div className="input-loading-bar" aria-hidden />}
-
-              <button
-
-                type="button"
-
-                onClick={handleTriggerUpload}
-
-                disabled={uploading}
-
-                className="absolute right-3 top-3.5 p-0.5 text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
-
-                title="Attach document or image"
-
-              >
-
-                <Paperclip className="w-4 h-4" />
-
-              </button>
+                <button
+                  type="button"
+                  onClick={handleTriggerUpload}
+                  disabled={uploading}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
+                  title="Attach document or image"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
+              </div>
 
             </div>
 
             {isStreaming && (
-
               <button
-
                 type="button"
-
                 onClick={handleStop}
-
                 aria-label="Stop generation"
-
                 title="Stop generation"
-
                 className="w-12 h-12 bg-[#1a1c20] border border-[#2b2e35] text-red-400 rounded-xl flex items-center justify-center hover:bg-red-950/15 hover:border-red-900/30 transition duration-150 active:scale-95 shadow-md shrink-0 group"
-
               >
-
                 <Square className="w-[14px] h-[14px] fill-red-400 group-hover:fill-red-300 transition duration-150" />
-
               </button>
-
             )}
 
             <button
-
               type="submit"
-
               disabled={uploading || (!input.trim() && !attachedFile && !pastedText)}
-
               aria-label="Send"
-
               className="w-12 h-12 bg-[#ffffff] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#f3f4f6] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#ffffff]/10 font-bold shrink-0"
-
             >
-
               <Send className="w-4 h-4" />
-
             </button>
 
             <input
-
               ref={fileInputRef}
-
               type="file"
-
               onChange={handleFileChange}
-
               accept=".pdf,.png,.jpg,.jpeg,.webp,.gif"
-
               className="hidden"
-
             />
 
           </form>
