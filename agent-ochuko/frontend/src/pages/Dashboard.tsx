@@ -2504,6 +2504,7 @@ export const Dashboard: React.FC = () => {
   }
 
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null)
+  const [artifactTab, setArtifactTab] = useState<'preview' | 'code'>('preview')
   const [artifactContent, setArtifactContent] = useState<string>('')
   const [loadingArtifact, setLoadingArtifact] = useState(false)
   const [artifactWidth, setArtifactWidth] = useState(480)
@@ -2570,6 +2571,10 @@ export const Dashboard: React.FC = () => {
       setArtifactContent('')
       return
     }
+    const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
+    const isPreviewable = ['html', 'htm', 'svg', 'md', 'markdown', 'pdf', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)
+    setArtifactTab(isPreviewable ? 'preview' : 'code')
+
     if (activeArtifact.content !== undefined) {
       setArtifactContent(activeArtifact.content)
       return
@@ -2607,15 +2612,7 @@ export const Dashboard: React.FC = () => {
     return () => window.removeEventListener('open-artifact', handler)
   }, [])
 
-  const isImage = (filename: string) => {
-    const ext = filename.toLowerCase().split('.').pop()
-    return ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext || '')
-  }
 
-  const isMarkdown = (filename: string) => {
-    const ext = filename.toLowerCase().split('.').pop()
-    return ext === 'md'
-  }
 
   const isBinaryFile = (filename: string) => {
     const ext = filename.toLowerCase().split('.').pop() || ''
@@ -6668,9 +6665,30 @@ export const Dashboard: React.FC = () => {
                 <div className="h-14 border-b border-[#1a1c1f] bg-[#0d0f11]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0 select-none">
                   <div className="flex items-center gap-2 min-w-0">
                     <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
-                    <span className="font-semibold text-[13px] text-brand-text truncate">
+                    <span className="font-semibold text-[13px] text-brand-text truncate mr-2">
                       {titleDisplay}
                     </span>
+                    {(() => {
+                      const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
+                      const showTabs = ['html', 'htm', 'svg', 'md', 'markdown'].includes(ext)
+                      if (!showTabs) return null
+                      return (
+                        <div className="flex items-center bg-[#07080a] border border-[#1e2025] rounded-lg p-0.5 ml-2">
+                          <button
+                            onClick={() => setArtifactTab('preview')}
+                            className={`px-3 py-1 text-[11px] font-medium rounded-md transition duration-150 ${artifactTab === 'preview' ? 'bg-[#1e2025] text-white shadow-sm' : 'text-[#8e95a2] hover:text-white'}`}
+                          >
+                            Preview
+                          </button>
+                          <button
+                            onClick={() => setArtifactTab('code')}
+                            className={`px-3 py-1 text-[11px] font-medium rounded-md transition duration-150 ${artifactTab === 'code' ? 'bg-[#1e2025] text-white shadow-sm' : 'text-[#8e95a2] hover:text-white'}`}
+                          >
+                            Code
+                          </button>
+                        </div>
+                      )
+                    })()}
                   </div>
                   <div className="flex items-center gap-2">
                     {/* Copy Split Dropdown */}
@@ -6756,61 +6774,118 @@ export const Dashboard: React.FC = () => {
                     <div className="h-full flex items-center justify-center">
                       <Loader2 className="w-6 h-6 text-[#ffffff] animate-spin" />
                     </div>
-                  ) : isImage(activeArtifact.filename) ? (
-                    <div className="h-full flex items-center justify-center p-4 bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025]">
-                      <img
-                        src={activeArtifact.downloadUrl || `data:image/svg+xml;utf8,${encodeURIComponent(artifactContent)}`}
-                        alt={activeArtifact.filename}
-                        className="max-w-full max-h-full object-contain rounded"
-                      />
-                    </div>
-                  ) : activeArtifact.filename.toLowerCase().endsWith('.pdf') ? (
-                    <div className="w-full h-[calc(100vh-8.5rem)] bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025] overflow-hidden">
-                      <iframe
-                        src={activeArtifact.downloadUrl}
-                        className="w-full h-full border-0"
-                        title={activeArtifact.filename}
-                      />
-                    </div>
-                  ) : isBinaryFile(activeArtifact.filename) ? (
-                    <div className="h-full flex items-center justify-center p-8 bg-[#0a0b0d]/30 rounded-xl border border-[#1e2025]">
-                      <div className="max-w-md w-full p-6 rounded-2xl bg-[#0a0b0d] border border-[#1e2025] flex flex-col items-center text-center space-y-4 shadow-xl">
-                        <div className="p-4 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                          <FileText className="w-10 h-10" />
+                  ) : (() => {
+                    const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
+                    const isHtml = ['html', 'htm'].includes(ext)
+                    const isMd = ['md', 'markdown'].includes(ext)
+                    const isOffice = ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)
+                    const isPdf = ext === 'pdf'
+                    const isImg = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)
+
+                    if (artifactTab === 'preview') {
+                      if (isImg) {
+                        return (
+                          <div className="h-full flex items-center justify-center p-4 bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025]">
+                            <img
+                              src={activeArtifact.downloadUrl || `data:image/svg+xml;utf8,${encodeURIComponent(artifactContent)}`}
+                              alt={activeArtifact.filename}
+                              className="max-w-full max-h-full object-contain rounded"
+                            />
+                          </div>
+                        )
+                      }
+                      if (isPdf) {
+                        return (
+                          <div className="w-full h-[calc(100vh-8.5rem)] bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025] overflow-hidden">
+                            <iframe
+                              src={activeArtifact.downloadUrl}
+                              className="w-full h-full border-0"
+                              title={activeArtifact.filename}
+                            />
+                          </div>
+                        )
+                      }
+                      if (isOffice) {
+                        return (
+                          <div className="w-full h-[calc(100vh-8.5rem)] bg-white rounded-xl border border-[#1e2025] overflow-hidden">
+                            <iframe
+                              src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(activeArtifact.downloadUrl || '')}`}
+                              className="w-full h-full border-0"
+                              title={activeArtifact.filename}
+                            />
+                          </div>
+                        )
+                      }
+                      if (isHtml) {
+                        return (
+                          <div className="w-full h-[calc(100vh-8.5rem)] bg-white rounded-xl border border-[#1e2025] overflow-hidden">
+                            <iframe
+                              srcDoc={artifactContent}
+                              sandbox="allow-scripts allow-popups"
+                              className="w-full h-full border-0"
+                              title="HTML Preview"
+                            />
+                          </div>
+                        )
+                      }
+                      if (isMd) {
+                        return (
+                          <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
+                            <div className="p-6 text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
+                              {renderMarkdown(artifactContent)}
+                            </div>
+                          </div>
+                        )
+                      }
+                      if (isBinaryFile(activeArtifact.filename)) {
+                        return (
+                          <div className="h-full flex items-center justify-center p-8 bg-[#0a0b0d]/30 rounded-xl border border-[#1e2025]">
+                            <div className="max-w-md w-full p-6 rounded-2xl bg-[#0a0b0d] border border-[#1e2025] flex flex-col items-center text-center space-y-4 shadow-xl">
+                              <div className="p-4 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                <FileText className="w-10 h-10" />
+                              </div>
+                              <div>
+                                <h3 className="text-white font-semibold text-lg truncate max-w-xs">{activeArtifact.filename}</h3>
+                                <p className="text-[#8e95a2] text-xs mt-1">Binary Document File ({(activeArtifact.filename.split('.').pop() || '').toUpperCase()})</p>
+                              </div>
+                              <div className="w-full pt-4 border-t border-[#1e2025] flex flex-col items-center gap-2">
+                                <button
+                                  onClick={async () => {
+                                    if (activeArtifact.downloadUrl) {
+                                      await triggerDirectDownload(activeArtifact.downloadUrl, activeArtifact.filename)
+                                    }
+                                  }}
+                                  className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm transition shadow-lg shadow-blue-600/15"
+                                >
+                                  <Download className="w-4 h-4" /> Download File
+                                </button>
+                                <p className="text-[#626875] text-[11px] mt-1">Binary files cannot be rendered directly in the editor</p>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      }
+                      // Fallback for code/text files with no preview
+                      return (
+                        <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
+                          <CodeView
+                            language={activeArtifact.filename.split('.').pop() || 'text'}
+                            content={artifactContent}
+                          />
                         </div>
-                        <div>
-                          <h3 className="text-white font-semibold text-lg truncate max-w-xs">{activeArtifact.filename}</h3>
-                          <p className="text-[#8e95a2] text-xs mt-1">Binary Document File ({(activeArtifact.filename.split('.').pop() || '').toUpperCase()})</p>
+                      )
+                    } else {
+                      // activeTab === 'code'
+                      return (
+                        <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
+                          <CodeView
+                            language={ext === 'md' ? 'markdown' : ext}
+                            content={artifactContent}
+                          />
                         </div>
-                        <div className="w-full pt-4 border-t border-[#1e2025] flex flex-col items-center gap-2">
-                          <button
-                            onClick={async () => {
-                              if (activeArtifact.downloadUrl) {
-                                await triggerDirectDownload(activeArtifact.downloadUrl, activeArtifact.filename)
-                              }
-                            }}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm transition shadow-lg shadow-blue-600/15"
-                          >
-                            <Download className="w-4 h-4" /> Download File
-                          </button>
-                          <p className="text-[#626875] text-[11px] mt-1">Binary files cannot be rendered directly in the editor</p>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
-                      {isMarkdown(activeArtifact.filename) ? (
-                        <div className="p-6 text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
-                          {renderMarkdown(artifactContent)}
-                        </div>
-                      ) : (
-                        <CodeView
-                          language={activeArtifact.filename.split('.').pop() || 'text'}
-                          content={artifactContent}
-                        />
-                      )}
-                    </div>
-                  )}
+                      )
+                    }
+                  })()}
                 </div>
               </div>
             )
