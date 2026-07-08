@@ -2056,17 +2056,27 @@ const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
 
 }
 
-// ── AgentStepIndicator — shows OODA loop progress inside the message bubble ─
-
-const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: string }> = ({ step, maxSteps, label }) => (
+const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: string; isComplete?: boolean }> = ({ step, maxSteps, label, isComplete }) => (
 
   <div className="flex items-center gap-2.5 mb-3 select-none animate-fadeIn">
 
-    {/* Spinning cog */}
+    {/* Spinning cog / Checkmark */}
 
     <div className="relative flex-shrink-0">
 
-      <div className="w-5 h-5 rounded-full border border-[#ffffff]/30 border-t-[#ffffff] animate-spin" />
+      {isComplete ? (
+
+        <div className="w-5 h-5 rounded-full bg-green-500/10 border border-green-500/30 flex items-center justify-center animate-fadeIn">
+
+          <Check className="w-3 h-3 text-green-400" />
+
+        </div>
+
+      ) : (
+
+        <div className="w-5 h-5 rounded-full border border-[#ffffff]/30 border-t-[#ffffff] animate-spin" />
+
+      )}
 
     </div>
 
@@ -5622,7 +5632,7 @@ export const Dashboard: React.FC = () => {
 
                         <div className="space-y-0.5">
 
-                          {isStreaming && msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content.length > 0 && (
+                          {msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content.length > 0 && (
 
                             <AgentStepIndicator
 
@@ -5630,7 +5640,9 @@ export const Dashboard: React.FC = () => {
 
                               maxSteps={msg.agentMaxSteps || agentMaxSteps}
 
-                              label={msg.agentLabel || (webSearchStatus === 'searching' ? activityLabel : undefined)}
+                              label={msg.agentLabel || (webSearchStatus === 'searching' && i === messages.length - 1 ? activityLabel : undefined)}
+
+                              isComplete={!isStreaming || i !== messages.length - 1}
 
                             />
 
