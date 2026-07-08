@@ -2088,7 +2088,11 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: str
 
         Step {step}
 
-        <span className="text-[#ffffff]/40 font-normal">/ {maxSteps}</span>
+        {!isComplete && (
+
+          <span className="text-[#ffffff]/40 font-normal">/ {maxSteps}</span>
+
+        )}
 
       </span>
 
