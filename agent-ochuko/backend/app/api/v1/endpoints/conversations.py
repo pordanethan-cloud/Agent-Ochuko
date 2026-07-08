@@ -76,7 +76,7 @@ async def search_conversations(
             .select("id, title, model, mode, message_count, last_compacted_at, created_at, updated_at")
             .eq("user_id", user_id)
             .eq("is_archived", False)
-            .textSearch("title", q, config="english", type="websearch")
+            .text_search("title", q, options={"config": "english", "type": "web_search"})
             .execute()
         )
         conversations = {c["id"]: c for c in (title_res.data or [])}
@@ -85,7 +85,7 @@ async def search_conversations(
         msg_res = (
             supabase.table("messages")
             .select("conversation_id")
-            .textSearch("content", q, config="english", type="websearch")
+            .text_search("content", q, options={"config": "english", "type": "web_search"})
             .limit(100)
             .execute()
         )

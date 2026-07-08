@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2 } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw } from 'lucide-react'
 
 import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
@@ -897,6 +897,74 @@ const LANG_EXT: Record<string, string> = {
 
   text: '.txt', txt: '.txt', plaintext: '.txt',
 
+}
+
+function highlightCode(code: string, language: string): string {
+  if (!code) return ''
+  const lang = language.toLowerCase()
+  let escaped = code
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  if (lang === 'python' || lang === 'py') {
+    return escaped
+      .replace(/\b(def|class|import|from|as|return|if|elif|else|try|except|finally|for|while|in|is|and|or|not|with|assert|pass|break|continue|lambda|global|nonlocal|async|await|None|True|False)\b/g, '<span class="text-[#c678dd] font-semibold">$1</span>')
+      .replace(/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, '<span class="text-[#98c379]">$1</span>')
+      .replace(/(#.*)/g, '<span class="text-[#5c6370] italic">$1</span>')
+      .replace(/\b([a-zA-Z_]\w*)(?=\()/g, '<span class="text-[#61afef]">$1</span>')
+      .replace(/\b(\d+)\b/g, '<span class="text-[#d19a66]">$1</span>')
+  } else if (['javascript', 'js', 'typescript', 'ts', 'tsx', 'jsx'].includes(lang)) {
+    return escaped
+      .replace(/\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|default|import|export|from|as|class|extends|new|this|typeof|instanceof|void|async|await|try|catch|finally|throw|true|false|null|undefined|interface|type|public|private|protected|readonly|any|string|number|boolean)\b/g, '<span class="text-[#c678dd] font-semibold">$1</span>')
+      .replace(/(`[\s\S]*?`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, '<span class="text-[#98c379]">$1</span>')
+      .replace(/(\/\/.*|\/\*[\s\S]*?\*\/)/g, '<span class="text-[#5c6370] italic">$1</span>')
+      .replace(/\b([a-zA-Z_]\w*)(?=\()/g, '<span class="text-[#61afef]">$1</span>')
+      .replace(/\b(\d+)\b/g, '<span class="text-[#d19a66]">$1</span>')
+  } else if (lang === 'json') {
+    return escaped
+      .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*")(\s*:)/g, '<span class="text-[#e06c75]">$1</span>$3')
+      .replace(/: \s*("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*")/g, ': <span class="text-[#98c379]">$1</span>')
+      .replace(/\b(true|false|null)\b/g, '<span class="text-[#56b6c2]">$1</span>')
+      .replace(/\b(-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)\b/g, '<span class="text-[#d19a66]">$1</span>')
+  } else if (lang === 'css') {
+    return escaped
+      .replace(/([^{]+)(?=\s*\{)/g, '<span class="text-[#61afef]">$1</span>')
+      .replace(/([a-zA-Z-]+)(?=\s*:)/g, '<span class="text-[#abb2bf]">$1</span>')
+      .replace(/(:\s*[^;]+)/g, '<span class="text-[#d19a66]">$1</span>')
+      .replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="text-[#5c6370] italic">$1</span>')
+  } else if (lang === 'html' || lang === 'xml') {
+    return escaped
+      .replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="text-[#5c6370] italic">$1</span>')
+      .replace(/(&lt;\/?[a-zA-Z0-9:-]+)/g, '<span class="text-[#e06c75]">$1</span>')
+      .replace(/(\/?&gt;)/g, '<span class="text-[#e06c75]">$1</span>')
+      .replace(/(\s[a-zA-Z0-9:-]+=)/g, '<span class="text-[#d19a66]">$1</span>')
+      .replace(/("[^"]*"|'[^']*')/g, '<span class="text-[#98c379]">$1</span>')
+  }
+  return escaped
+}
+
+const CodeView: React.FC<{ language: string; content: string }> = ({ language, content }) => {
+  const lines = useMemo(() => content.split('\n'), [content])
+  const highlightedHtml = useMemo(() => highlightCode(content, language), [content, language])
+  const highlightedLines = useMemo(() => highlightedHtml.split('\n'), [highlightedHtml])
+
+  return (
+    <div className="flex font-mono text-[11px] sm:text-[11.5px] leading-relaxed select-text overflow-x-auto text-[#abb2bf] bg-[#07080a] p-4.5 rounded-xl border border-[#1e2025]">
+      {/* Line numbers column */}
+      <div className="select-none pr-3.5 border-r border-[#1e2025] text-right text-[#4b5263] min-w-[2.25rem] font-bold">
+        {lines.map((_, i) => (
+          <div key={i} className="h-5">{i + 1}</div>
+        ))}
+      </div>
+      {/* Code column */}
+      <div className="pl-4 flex-1 whitespace-pre">
+        {highlightedLines.map((line, i) => (
+          <div key={i} className="h-5" dangerouslySetInnerHTML={{ __html: line || ' ' }} />
+        ))}
+      </div>
+    </div>
+  )
 }
 
 // ─── Code Block Component with Copy + Download ────────────────────────────────
@@ -2364,6 +2432,35 @@ export const Dashboard: React.FC = () => {
   const [loadingArtifact, setLoadingArtifact] = useState(false)
   const [artifactWidth, setArtifactWidth] = useState(480)
   const isArtifactResizingRef = useRef(false)
+
+  const [isArtifactExpanded, setIsArtifactExpanded] = useState(false)
+  const [copiedArtifact, setCopiedArtifact] = useState(false)
+  const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
+  const [isArtifactCopyOpen, setIsArtifactCopyOpen] = useState(false)
+  const headerSettingsRef = useRef<HTMLDivElement>(null)
+  const artifactCopyRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isHeaderSettingsOpen) return
+    const handler = (e: MouseEvent) => {
+      if (headerSettingsRef.current && !headerSettingsRef.current.contains(e.target as Node)) {
+        setIsHeaderSettingsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [isHeaderSettingsOpen])
+
+  useEffect(() => {
+    if (!isArtifactCopyOpen) return
+    const handler = (e: MouseEvent) => {
+      if (artifactCopyRef.current && !artifactCopyRef.current.contains(e.target as Node)) {
+        setIsArtifactCopyOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [isArtifactCopyOpen])
 
   const startArtifactResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -5278,7 +5375,7 @@ export const Dashboard: React.FC = () => {
             {activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000' && (
               <button
                 onClick={() => setIsShareModalOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1e2025] hover:border-[#ffffff]/20 bg-brand-surface/10 hover:bg-[#ffffff]/5 text-[11px] font-bold text-[#8e95a2] hover:text-brand-text transition duration-150 active:scale-95 mr-2"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1e2025] hover:border-[#ffffff]/20 bg-brand-surface/10 hover:bg-[#ffffff]/5 text-[11px] font-bold text-[#8e95a2] hover:text-brand-text transition duration-150 active:scale-95 mr-1"
                 title="Share Conversation"
               >
                 <Share2 className="w-3.5 h-3.5" />
@@ -5286,7 +5383,74 @@ export const Dashboard: React.FC = () => {
               </button>
             )}
 
-            <div className="flex items-center gap-2">
+            <div ref={headerSettingsRef} className="relative">
+              <button
+                onClick={() => setIsHeaderSettingsOpen(o => !o)}
+                className="p-1.5 rounded-lg border border-[#1e2025] bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center mr-1"
+                title="Settings & security"
+              >
+                <Settings className="w-3.5 h-3.5" />
+              </button>
+              {isHeaderSettingsOpen && (
+                <div className="absolute right-0 mt-1.5 w-48 rounded-xl border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
+                  {localStorage.getItem('app_lock_pin') ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setIsLocked(true)
+                          setIsHeaderSettingsOpen(false)
+                        }}
+                        className="w-full text-left px-4 py-2.5 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold"
+                      >
+                        <Lock className="w-3.5 h-3.5 text-brand-muted" />
+                        <span>Lock App</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setLockMode('change')
+                          setIsHeaderSettingsOpen(false)
+                        }}
+                        className="w-full text-left px-4 py-2.5 text-[11px] text-brand-muted hover:text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
+                      >
+                        <span>Change PIN</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setLockMode('disable')
+                          setIsHeaderSettingsOpen(false)
+                        }}
+                        className="w-full text-left px-4 py-2.5 text-[11px] text-red-400/70 hover:text-red-400 hover:bg-red-950/10 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
+                      >
+                        <span>Disable PIN</span>
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setLockMode('setup')
+                        setIsHeaderSettingsOpen(false)
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-brand-muted" />
+                      <span>Setup PIN Lock</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      handleSignOut()
+                      setIsHeaderSettingsOpen(false)
+                    }}
+                    className="w-full text-left px-4 py-2.5 text-[11px] text-red-400/75 hover:text-red-450 hover:bg-red-950/15 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Terminate Session</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 ml-1">
               <span className="relative flex h-1.5 w-1.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#ffffff] opacity-50" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#ffffff]" />
@@ -6343,76 +6507,193 @@ export const Dashboard: React.FC = () => {
 
           {/* Artifact Preview Panel */}
 
-          {activeArtifact && (
-            <div
-              style={{ width: `${artifactWidth}px` }}
-              className="border-l border-[#1a1c1f] bg-[#0b0c0e] flex flex-col relative shrink-0 z-20 transition-all duration-150"
-            >
-              {/* Resizing Handle */}
+          {activeArtifact && (() => {
+            const parts = activeArtifact.filename.split('.')
+            const ext = parts.length > 1 ? parts.pop()?.toUpperCase() || '' : ''
+            const name = parts.join('.')
+            const titleDisplay = ext ? `${name} · ${ext}` : activeArtifact.filename.toUpperCase()
+
+            const handleCopyArtifactContent = async () => {
+              try {
+                await navigator.clipboard.writeText(artifactContent)
+                setCopiedArtifact(true)
+                setTimeout(() => setCopiedArtifact(false), 2000)
+              } catch (_) {}
+            }
+
+            const handleDownloadArtifact = () => {
+              if (!activeArtifact.downloadUrl) return
+              const a = document.createElement('a')
+              a.href = activeArtifact.downloadUrl
+              a.download = activeArtifact.filename
+              a.click()
+              setIsArtifactCopyOpen(false)
+            }
+
+            const handlePublishArtifact = () => {
+              showToast('Artifact published successfully!', 'info')
+              setIsArtifactCopyOpen(false)
+            }
+
+            const handleReloadArtifact = () => {
+              if (activeArtifact.downloadUrl) {
+                setLoadingArtifact(true)
+                fetch(activeArtifact.downloadUrl)
+                  .then(res => res.text())
+                  .then(text => {
+                    setArtifactContent(text)
+                    setLoadingArtifact(false)
+                    showToast('Refreshed content', 'info')
+                  })
+                  .catch(() => {
+                    setArtifactContent('Failed to load artifact content.')
+                    setLoadingArtifact(false)
+                    showToast('Failed to refresh', 'error')
+                  })
+              } else {
+                showToast('Refreshed content', 'info')
+              }
+            }
+
+            return (
               <div
-                onMouseDown={startArtifactResizing}
-                className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-[#ffffff]/30 active:bg-[#ffffff]/50 transition z-50"
-              />
-
-              {/* Header */}
-              <div className="h-14 border-b border-[#1a1c1f] bg-[#0d0f11]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0 select-none">
-                <div className="flex items-center gap-2 min-w-0">
-                  <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
-                  <span className="font-semibold text-[13px] text-brand-text truncate">
-                    {activeArtifact.filename}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {activeArtifact.downloadUrl && (
-                    <a
-                      href={activeArtifact.downloadUrl}
-                      download={activeArtifact.filename}
-                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
-                      title="Download File"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                    </a>
-                  )}
-                  <button
-                    onClick={() => setActiveArtifact(null)}
-                    className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
-                    title="Close Preview"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Body */}
-              <div className="flex-1 overflow-auto p-6 bg-[#08090b]">
-                {loadingArtifact ? (
-                  <div className="h-full flex items-center justify-center">
-                    <Loader2 className="w-6 h-6 text-[#ffffff] animate-spin" />
-                  </div>
-                ) : isImage(activeArtifact.filename) ? (
-                  <div className="h-full flex items-center justify-center p-4 bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025]">
-                    <img
-                      src={activeArtifact.downloadUrl || `data:image/svg+xml;utf8,${encodeURIComponent(artifactContent)}`}
-                      alt={activeArtifact.filename}
-                      className="max-w-full max-h-full object-contain rounded"
-                    />
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
-                    {isMarkdown(activeArtifact.filename) ? (
-                      <div className="p-6 text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
-                        {renderMarkdown(artifactContent)}
-                      </div>
-                    ) : (
-                      <pre className="p-5 overflow-x-auto text-[11.5px] font-mono text-[#d4c5a0]/85 leading-relaxed whitespace-pre select-text">
-                        <code>{artifactContent}</code>
-                      </pre>
-                    )}
-                  </div>
+                style={{ width: isArtifactExpanded ? '100%' : `${artifactWidth}px` }}
+                className="border-l border-[#1a1c1f] bg-[#0b0c0e] flex flex-col relative shrink-0 z-20 transition-all duration-150"
+              >
+                {/* Resizing Handle */}
+                {!isArtifactExpanded && (
+                  <div
+                    onMouseDown={startArtifactResizing}
+                    className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-[#ffffff]/30 active:bg-[#ffffff]/50 transition z-50"
+                  />
                 )}
+
+                {/* Header */}
+                <div className="h-14 border-b border-[#1a1c1f] bg-[#0d0f11]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0 select-none">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
+                    <span className="font-semibold text-[13px] text-brand-text truncate">
+                      {titleDisplay}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* Copy Split Dropdown */}
+                    <div ref={artifactCopyRef} className="relative flex items-center">
+                      <button
+                        onClick={handleCopyArtifactContent}
+                        className="flex items-center gap-1.5 px-2.5 h-7 text-[10.5px] font-semibold rounded-l-lg border border-r-0 border-[#1e2025] bg-[#0d0f11]/60 hover:bg-[#ffffff]/5 text-[#8e95a2] hover:text-brand-text transition duration-150 select-none"
+                      >
+                        {copiedArtifact ? (
+                          <>
+                            <Check className="w-3 h-3 text-[#3fb950]" />
+                            <span className="text-[#3fb950]">Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Copy</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setIsArtifactCopyOpen(o => !o)}
+                        className="flex items-center justify-center px-1.5 h-7 rounded-r-lg border border-[#1e2025] bg-[#0d0f11]/60 hover:bg-[#ffffff]/5 text-[#8e95a2] hover:text-brand-text transition duration-150"
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+
+                      {isArtifactCopyOpen && (
+                        <div className="absolute top-8 right-0 mt-1 w-44 rounded-lg border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1">
+                          <button
+                            onClick={handleDownloadArtifact}
+                            className="w-full text-left px-3 py-2 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2"
+                          >
+                            <Download className="w-3.5 h-3.5 text-brand-muted" />
+                            <span>Download as {ext || 'FILE'}</span>
+                          </button>
+                          <button
+                            onClick={handlePublishArtifact}
+                            className="w-full text-left px-3 py-2 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 border-t border-[#1e2025]/50"
+                          >
+                            <Globe className="w-3.5 h-3.5 text-brand-muted" />
+                            <span>Publish artifact</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Reload Button */}
+                    <button
+                      onClick={handleReloadArtifact}
+                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
+                      title="Reload"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Expand/Minimize Toggle */}
+                    <button
+                      onClick={() => setIsArtifactExpanded(!isArtifactExpanded)}
+                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
+                      title={isArtifactExpanded ? "Minimize panel" : "Maximize panel"}
+                    >
+                      {isArtifactExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                    </button>
+
+                    {/* Close Button */}
+                    <button
+                      onClick={() => {
+                        setActiveArtifact(null)
+                        setIsArtifactExpanded(false)
+                      }}
+                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
+                      title="Close Preview"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Body */}
+                <div className="flex-1 overflow-auto p-6 bg-[#08090b]">
+                  {loadingArtifact ? (
+                    <div className="h-full flex items-center justify-center">
+                      <Loader2 className="w-6 h-6 text-[#ffffff] animate-spin" />
+                    </div>
+                  ) : isImage(activeArtifact.filename) ? (
+                    <div className="h-full flex items-center justify-center p-4 bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025]">
+                      <img
+                        src={activeArtifact.downloadUrl || `data:image/svg+xml;utf8,${encodeURIComponent(artifactContent)}`}
+                        alt={activeArtifact.filename}
+                        className="max-w-full max-h-full object-contain rounded"
+                      />
+                    </div>
+                  ) : activeArtifact.filename.toLowerCase().endsWith('.pdf') ? (
+                    <div className="w-full h-[calc(100vh-8.5rem)] bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025] overflow-hidden">
+                      <iframe
+                        src={activeArtifact.downloadUrl}
+                        className="w-full h-full border-0"
+                        title={activeArtifact.filename}
+                      />
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
+                      {isMarkdown(activeArtifact.filename) ? (
+                        <div className="p-6 text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
+                          {renderMarkdown(artifactContent)}
+                        </div>
+                      ) : (
+                        <CodeView
+                          language={activeArtifact.filename.split('.').pop() || 'text'}
+                          content={artifactContent}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
 
         </div>
 
