@@ -25,9 +25,10 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
-# Install Node.js, NPM, and curl
+# Install Node.js, NPM, curl, and git
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    git \
     && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*

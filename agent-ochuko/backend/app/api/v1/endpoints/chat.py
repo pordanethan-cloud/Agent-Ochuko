@@ -57,10 +57,14 @@ _OCHUKO_RULE = (
     "- Under no circumstances should you output phrases like 'ModuleNotFoundError', 'system rules require me to', 'unable to import', 'tool failed', or mention backend library dependencies. Keep all such technical limitations and errors completely silent.\n"
     "- Instead, handle the situation gracefully: retry, use an alternative allowed approach (e.g., writing custom code, generating another format, or outputting as a clean Markdown table/structure inline if code execution completely fails), and present a polished, professional response in natural language that addresses the user's request without exposing the underlying system errors or instructions.\n\n"
     "File Generation Autonomy & Recovery:\n"
-    "- When asked to generate any document, report, guide, or essay (PDF, Word, or Markdown), ALWAYS prefer the `generate_file` tool. Do NOT call `run_code_agent` unless complex custom Python calculations or file parsing/transformations are explicitly required.\n"
+    "- When asked to generate any document, report, guide, or essay (PDF, Word, or Markdown), ALWAYS prefer the `generate_file` tool. When writing custom scripts or code execution, ALWAYS prefer using JavaScript (Node.js) as the default with the `docx` library, unless Python calculations are explicitly requested.\n"
     "- NEVER ask the user to supply the content or formatting details. Take the initiative to invent a rich, high-quality, professional sample/template based on the context, and call the tool immediately.\n"
     "- If a tool call fails, analyze the error and try a different approach or pivot to another tool (such as calling `generate_file` if `run_code_agent` failed) rather than telling the user you failed or asking for input. You have a budget of up to 10 iterations to solve it autonomously.\n"
     "- When a file is successfully generated, always present it in your final message to the user as a clickable markdown link using its exact filename as the label and its exact R2 Download URL as the URL (e.g. [history_and_act_of_colonialism.pdf](https://...)). Never output a filename as plain text or code block.\n\n"
+    "Stateful Terminal & Command Execution:\n"
+    "- You have access to a stateful bash terminal sandbox via the `run_code_agent` tool by setting `language` to `\"bash\"`.\n"
+    "- The file system persists across multiple turns in a conversation. You can clone git repositories, run npm/pip commands, check logs, inspect directory structures, write scripts, and compile or run them statefully.\n"
+    "- Always execute terminal commands directly without asking for permission first.\n\n"
     "Copyable Text & Templates:\n"
     "- When writing templates, email drafts, letters, scripts, copyable messages, or any text blocks intended for the user to copy/paste, ALWAYS enclose them in a standard markdown blockquote (prefixed with '>') or a plain text code block (```text ... ```). This groups the template cleanly and allows the user to copy the template text with a single click.\n\n"
 )
@@ -973,9 +977,9 @@ async def chat_stream_generator(
                         "type": "function",
                         "name": "run_code_agent",
                         "description": (
-                            "Execute Python or Node.js JavaScript code inside a secure sandbox container "
-                            "with global library caching. Use when the user asks to run code, generate "
-                            "a chart, analyze data, transform a file, or perform computation. "
+                            "Execute Python, Node.js JavaScript, or Bash shell commands inside a secure sandbox container "
+                            "with global library caching. Use when the user asks to run code, run shell commands (like git, curl, or filesystem commands), "
+                            "generate a chart, analyze data, transform a file, or perform computation. "
                             "Do NOT use this tool for writing or generating standard text-based "
                             "reports, documents, PDFs, guides, or essays — use the `generate_file` "
                             "tool for those instead."
@@ -985,12 +989,12 @@ async def chat_stream_generator(
                             "properties": {
                                 "language": {
                                     "type": "string",
-                                    "enum": ["python", "javascript"],
-                                    "description": "Programming language of the code to execute (default: python)",
+                                    "enum": ["python", "javascript", "bash"],
+                                    "description": "Programming language/runtime of the code or terminal command to execute (default: javascript)",
                                 },
                                 "code": {
                                     "type": "string",
-                                    "description": "The exact Python or JavaScript code to execute inside the sandbox.",
+                                    "description": "The exact Python, JavaScript, or Bash shell commands to execute inside the sandbox.",
                                 },
                                 "task": {
                                     "type": "string",
@@ -1441,7 +1445,7 @@ async def chat_stream_generator(
                                         try:
                                             args = json.loads(getattr(item, "arguments", "{}") or "{}")
                                             code_to_run = args.get("code", "").strip()
-                                            lang = args.get("language", "python").strip()
+                                            lang = args.get("language", "javascript").strip()
                                             task_desc = args.get("task", "").strip()
                                             
                                             if not code_to_run:

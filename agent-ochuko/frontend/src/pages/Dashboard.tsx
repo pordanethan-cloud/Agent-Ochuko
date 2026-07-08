@@ -2555,6 +2555,11 @@ export const Dashboard: React.FC = () => {
       return
     }
     if (activeArtifact.downloadUrl) {
+      if (isBinaryFile(activeArtifact.filename) || activeArtifact.filename.toLowerCase().endsWith('.pdf')) {
+        setArtifactContent('')
+        setLoadingArtifact(false)
+        return
+      }
       setLoadingArtifact(true)
       fetch(activeArtifact.downloadUrl)
         .then(res => res.text())
@@ -2590,6 +2595,11 @@ export const Dashboard: React.FC = () => {
   const isMarkdown = (filename: string) => {
     const ext = filename.toLowerCase().split('.').pop()
     return ext === 'md'
+  }
+
+  const isBinaryFile = (filename: string) => {
+    const ext = filename.toLowerCase().split('.').pop() || ''
+    return ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'zip', 'tar', 'gz', '7z', 'rar', 'exe', 'bin'].includes(ext)
   }
 
   const [searchQuery, setSearchQuery] = useState('')
@@ -3240,19 +3250,71 @@ export const Dashboard: React.FC = () => {
 
         const data = await msgRes.json()
 
-        const mapped = data.map((m: any) => ({
+        const mapped: Message[] = []
 
-          role: m.role,
+        for (let idx = 0; idx < data.length; idx++) {
 
-          content: m.content,
+          const m = data[idx]
 
-          routing_mode: m.routing_mode,
+          if (m.role === 'system') {
 
-          routing_reason: m.routing_reason,
+            const match = m.content.match(/File URL:\s*(https?:\/\/[^\s\)]+)/i)
 
-          sources: m.content_parts?.sources || undefined,
+            if (match && mapped.length > 0) {
 
-        }))
+              const url = match[1].replace(/^[).,]+|[).,]+$/g, '')
+
+              const lastMsg = mapped[mapped.length - 1]
+
+              if (lastMsg.role === 'user' && lastMsg.fileAttachment) {
+
+                lastMsg.fileAttachment.url = url
+
+              }
+
+            }
+
+            continue
+
+          }
+
+          const msgObj: Message = {
+
+            role: m.role,
+
+            content: m.content,
+
+            routing_mode: m.routing_mode,
+
+            routing_reason: m.routing_reason,
+
+            sources: m.content_parts?.sources || undefined,
+
+          }
+
+          if (m.role === 'user') {
+
+            const isOcr = m.content.startsWith('[Document Analysis:')
+
+            const isVision = m.content.startsWith('[Image Analysis:')
+
+            if (isOcr || isVision) {
+
+              const jobType = isOcr ? 'ocr' : 'vision'
+
+              const nameMatch = m.content.match(/^\[(?:Document|Image) Analysis:\s*([^\]]+)\]/)
+
+              const name = nameMatch ? nameMatch[1] : (isOcr ? 'document.pdf' : 'image.png')
+
+              msgObj.fileAttachment = { name, jobType }
+
+            }
+
+          }
+
+          mapped.push(msgObj)
+
+        }
 
         // Attach generated files to the last assistant message (best-effort)
 
@@ -6689,6 +6751,31 @@ export const Dashboard: React.FC = () => {
                         className="w-full h-full border-0"
                         title={activeArtifact.filename}
                       />
+                    </div>
+                  ) : isBinaryFile(activeArtifact.filename) ? (
+                    <div className="h-full flex items-center justify-center p-8 bg-[#0a0b0d]/30 rounded-xl border border-[#1e2025]">
+                      <div className="max-w-md w-full p-6 rounded-2xl bg-[#0a0b0d] border border-[#1e2025] flex flex-col items-center text-center space-y-4 shadow-xl">
+                        <div className="p-4 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                          <FileText className="w-10 h-10" />
+                        </div>
+                        <div>
+                          <h3 className="text-white font-semibold text-lg truncate max-w-xs">{activeArtifact.filename}</h3>
+                          <p className="text-[#8e95a2] text-xs mt-1">Binary Document File ({(activeArtifact.filename.split('.').pop() || '').toUpperCase()})</p>
+                        </div>
+                        <div className="w-full pt-4 border-t border-[#1e2025] flex flex-col items-center gap-2">
+                          <button
+                            onClick={async () => {
+                              if (activeArtifact.downloadUrl) {
+                                await triggerDirectDownload(activeArtifact.downloadUrl, activeArtifact.filename)
+                              }
+                            }}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm transition shadow-lg shadow-blue-600/15"
+                          >
+                            <Download className="w-4 h-4" /> Download File
+                          </button>
+                          <p className="text-[#626875] text-[11px] mt-1">Binary files cannot be rendered directly in the editor</p>
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">

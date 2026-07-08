@@ -11,7 +11,44 @@ import re
 import logging
 import asyncio
 import subprocess
+import shutil
 from typing import Tuple, List, Dict
+
+def _find_bash_executable() -> str:
+    # 1. Check Git directory first if on Windows (to prefer Git Bash over WSL)
+    if os.name == 'nt':
+        git_path = shutil.which("git")
+        if git_path:
+            git_dir = os.path.dirname(os.path.dirname(git_path))
+            for candidate in (
+                os.path.join(git_dir, "bin", "bash.exe"),
+                os.path.join(git_dir, "usr", "bin", "bash.exe"),
+                os.path.join(git_dir, "bin", "sh.exe")
+            ):
+                if os.path.exists(candidate):
+                    return candidate
+        
+        # Look in standard program files location if git path check failed
+        for prog_files in ("C:\\Program Files", "C:\\Program Files (x86)"):
+            git_dir = os.path.join(prog_files, "Git")
+            for candidate in (
+                os.path.join(git_dir, "bin", "bash.exe"),
+                os.path.join(git_dir, "usr", "bin", "bash.exe"),
+                os.path.join(git_dir, "bin", "sh.exe")
+            ):
+                if os.path.exists(candidate):
+                    return candidate
+
+    # 2. Check PATH
+    bash_path = shutil.which("bash")
+    if bash_path:
+        if os.name == 'nt' and "system32" in bash_path.lower():
+            pass
+        else:
+            return bash_path
+            
+    # 3. Default fallback
+    return "/bin/bash"
 
 logger = logging.getLogger("app.services.code_sandbox")
 
@@ -38,8 +75,21 @@ async def execute_code_in_sandbox(
     language = language.lower().strip()
     
     # 1. Create a dedicated working directory for this execution
-    work_dir = os.path.join("/tmp", f"sandbox_{conversation_id}_{uuid.uuid4().hex}")
+    # Use conversation_id directly to persist file state across multiple turns
+    work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
     os.makedirs(work_dir, exist_ok=True)
+
+    # Record modification times of existing files before execution
+    before_files = {}
+    for root, dirs, files_in_dir in os.walk(work_dir):
+        if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
+            continue
+        for file in files_in_dir:
+            path = os.path.join(root, file)
+            try:
+                before_files[path] = os.path.getmtime(path)
+            except OSError:
+                pass
     
     # Prepare clean environment variables (excluding sensitive keys)
     env = os.environ.copy()
@@ -58,7 +108,30 @@ async def execute_code_in_sandbox(
     generated_files: List[Dict[str, str]] = []
 
     try:
-        if language == "javascript" or language == "js" or language == "node":
+        if language in ("bash", "shell", "sh"):
+            # Bash/Shell execution path
+            script_path = os.path.join(work_dir, "command.sh")
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(code)
+                
+            bash_executable = _find_bash_executable()
+            proc = await asyncio.create_subprocess_exec(
+                bash_executable, "command.sh",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=work_dir
+            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return "Execution Timeout (exceeded 45s limit)", []
+                
+            stdout_str = stdout_bytes.decode("utf-8", errors="replace")
+            stderr_str = stderr_bytes.decode("utf-8", errors="replace")
+
+        elif language == "javascript" or language == "js" or language == "node":
             # JS execution path
             script_path = os.path.join(work_dir, "script.js")
             with open(script_path, "w", encoding="utf-8") as f:
@@ -152,33 +225,39 @@ async def execute_code_in_sandbox(
         # Get active user_id context from thread if possible (fallback to system/default)
         user_id = "00000000-0000-0000-0000-000000000000"
         
-        for root, dirs, files in os.walk(work_dir):
-            for file in files:
-                if file in ("script.py", "script.js"):
+        for root, dirs, files_in_dir in os.walk(work_dir):
+            # Skip scanning dependency and version control directories
+            if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
+                continue
+            for file in files_in_dir:
+                if file in ("script.py", "script.js", "command.sh"):
                     continue
                 file_path = os.path.join(root, file)
                 try:
-                    with open(file_path, "rb") as f:
-                        file_bytes = f.read()
-                        
-                    # Auto-resolve MIME type via guess_type
-                    import mimetypes
-                    mime, _ = mimetypes.guess_type(file)
-                    if not mime:
-                        mime = "application/octet-stream"
-                        
-                    r2_url = await _upload_generated_file(
-                        file_bytes=file_bytes,
-                        filename=file,
-                        mime_type=mime,
-                        conversation_id=conversation_id,
-                        user_id=user_id
-                    )
-                    generated_files.append({
-                        "filename": file,
-                        "download_url": r2_url,
-                        "size_bytes": len(file_bytes)
-                    })
+                    mtime = os.path.getmtime(file_path)
+                    # Only upload if the file is new or modified during this run
+                    if file_path not in before_files or mtime > before_files[file_path]:
+                        with open(file_path, "rb") as f:
+                            file_bytes = f.read()
+                            
+                        # Auto-resolve MIME type via guess_type
+                        import mimetypes
+                        mime, _ = mimetypes.guess_type(file)
+                        if not mime:
+                            mime = "application/octet-stream"
+                            
+                        r2_url = await _upload_generated_file(
+                            file_bytes=file_bytes,
+                            filename=file,
+                            mime_type=mime,
+                            conversation_id=conversation_id,
+                            user_id=user_id
+                        )
+                        generated_files.append({
+                            "filename": file,
+                            "download_url": r2_url,
+                            "size_bytes": len(file_bytes)
+                        })
                 except Exception as upload_err:
                     logger.warning(f"Failed to upload sandbox file {file}: {upload_err}")
 
@@ -187,12 +266,13 @@ async def execute_code_in_sandbox(
         stderr_str += f"\nSandbox internal runner error: {str(run_err)}"
         
     finally:
-        # Clean up working directory
-        import shutil
-        try:
-            shutil.rmtree(work_dir)
-        except Exception as clean_err:
-            logger.warning(f"Failed to clean up sandbox work dir {work_dir}: {clean_err}")
+        # We do not delete the persistent conversation directory so that files and command state
+        # carry over to subsequent turns. We only clean up the temporary script files.
+        for temp_script in ("script.py", "script.js", "command.sh"):
+            try:
+                os.remove(os.path.join(work_dir, temp_script))
+            except OSError:
+                pass
 
     full_output = stdout_str
     if stderr_str:
