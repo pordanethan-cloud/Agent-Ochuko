@@ -162,10 +162,15 @@ def set_user_budget(user_id: str, budget_limit: int) -> None:
     Upsert the token budget for a user.
     Uses the ensure_budget_row RPC if available, otherwise direct upsert.
     """
+    from datetime import date
     db = get_supabase_admin()
     db.table("token_budgets").upsert(
-        {"user_id": user_id, "budget_limit": budget_limit},
-        on_conflict="user_id",
+        {
+            "user_id": user_id,
+            "period": str(date.today()),
+            "budget_limit": budget_limit
+        },
+        on_conflict="user_id,period",
     ).execute()
 
 
