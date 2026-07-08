@@ -1,3 +1,4 @@
+// @refresh reset
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
@@ -115,38 +116,80 @@ function FileDownloadCard({
   size_bytes: number
   onView?: () => void
 }) {
-  const ext = filename.split('.').pop()?.toUpperCase() || 'FILE'
+  const ext = filename.split('.').pop()?.toLowerCase() || ''
+  const extLabel = ext.toUpperCase() || 'FILE'
   const sizeLabel = size_bytes > 1024 * 1024
     ? `${(size_bytes / (1024 * 1024)).toFixed(1)} MB`
     : size_bytes > 1024
     ? `${(size_bytes / 1024).toFixed(1)} KB`
-    : `${size_bytes} B`
+    : size_bytes > 0 ? `${size_bytes} B` : ''
+
+  // Determine ext-based accent color
+  const extColor: Record<string, string> = {
+    py: '#3b82f6', js: '#f59e0b', ts: '#3b82f6', tsx: '#06b6d4', jsx: '#06b6d4',
+    pdf: '#ef4444', docx: '#3b82f6', xlsx: '#22c55e', csv: '#22c55e',
+    json: '#a78bfa', txt: '#8e95a2', html: '#f97316', css: '#06b6d4',
+    png: '#ec4899', jpg: '#ec4899', jpeg: '#ec4899', svg: '#f59e0b', zip: '#8b5cf6',
+  }
+  const accentColor = extColor[ext] || '#c5a880'
+
+  const hasUrl = download_url && !download_url.startsWith('sandbox:') && !download_url.includes('/mnt/data/')
 
   return (
-    <div
-      onClick={onView}
-      className="mt-3 flex items-center gap-3 px-4 py-3 rounded-xl border border-[#ffffff]/20 bg-[#ffffff]/5 hover:bg-[#ffffff]/10 hover:border-[#ffffff]/40 transition-all duration-200 group/dl w-full cursor-pointer select-none"
-    >
-      <div className="w-9 h-9 rounded-lg bg-[#ffffff]/15 flex items-center justify-center shrink-0">
-        <span className="text-[9px] font-black text-brand-accent tracking-tight">{ext}</span>
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-[12px] font-medium text-brand-text truncate">{filename}</p>
-        <p className="text-[10px] text-[#8e95a2]">{sizeLabel}</p>
-      </div>
-      <a
-        href={download_url}
-        download={filename}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => e.stopPropagation()}
-        className="w-8 h-8 rounded-lg flex items-center justify-center bg-[#161b22]/40 hover:bg-[#161b22] border border-[#30363d] text-[#8e95a2] hover:text-brand-accent transition duration-150 shrink-0"
-        title="Download file"
+    <div className="mt-2 flex items-center gap-3 px-3.5 py-2.5 rounded-xl border border-[#ffffff]/15 bg-[#0d0f11]/60 hover:bg-[#0d0f11]/90 hover:border-[#ffffff]/30 transition-all duration-200 group/dl w-full select-none">
+      {/* File type icon */}
+      <div
+        className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border"
+        style={{ background: `${accentColor}18`, borderColor: `${accentColor}30` }}
       >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-        </svg>
-      </a>
+        <span className="text-[9px] font-black tracking-tight" style={{ color: accentColor }}>{extLabel}</span>
+      </div>
+
+      {/* File info */}
+      <div className="flex-1 min-w-0">
+        <p className="text-[12.5px] font-semibold text-brand-text truncate leading-tight">{filename}</p>
+        {sizeLabel && <p className="text-[10px] text-[#8e95a2] mt-0.5">{sizeLabel}</p>}
+        {!hasUrl && (
+          <p className="text-[10px] text-amber-400/70 mt-0.5">File sync failed — try regenerating</p>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {onView && hasUrl && (
+          <button
+            onClick={onView}
+            className="px-2.5 py-1 rounded-lg text-[10px] font-semibold text-[#8e95a2] hover:text-brand-text border border-[#ffffff]/10 hover:border-[#ffffff]/25 hover:bg-white/5 transition duration-150"
+            title="View file"
+          >
+            View
+          </button>
+        )}
+        {hasUrl ? (
+          <a
+            href={download_url}
+            download={filename}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="w-8 h-8 rounded-lg flex items-center justify-center border border-[#ffffff]/15 hover:border-[#ffffff]/40 bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[#8e95a2] hover:text-brand-text transition duration-150"
+            title={`Download ${filename}`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </a>
+        ) : (
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center border border-amber-500/20 bg-amber-500/5 text-amber-500/40 cursor-not-allowed"
+            title="File sync failed"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -521,7 +564,7 @@ function renderMath(tex: string, displayMode: boolean): React.ReactNode {
 
 function renderInline(text: string, keyBase: string, generatedFiles?: any[]): React.ReactNode {
 
-  const pattern = /(\$\$([\s\S]*?)\$\$|\$(?!\s)([^\$]+?)(?<!\s)\$|\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`|\[(.*?)\]\((.*?)\))/g
+  const pattern = /(\$\$([\s\S]*?)\$\$|\$(?!\s)([^\$]+?)(?<!\s)\$|\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`|\[(.*?)\]\((.*?)\)|(https?:\/\/[^\s\)<>"]+))/g
 
   const segments: React.ReactNode[] = []
 
@@ -586,6 +629,30 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
           {match[6]}
 
         </code>
+
+      )
+
+    } else if (fullMatch.startsWith('http://') || fullMatch.startsWith('https://')) {
+
+      segments.push(
+
+        <a
+
+          key={`${keyBase}-url${match.index}`}
+
+          href={fullMatch}
+
+          target="_blank"
+
+          rel="noopener noreferrer"
+
+          className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
+
+        >
+
+          {fullMatch}
+
+        </a>
 
       )
 
@@ -1992,7 +2059,17 @@ function getFriendlyErrorMessage(message: string): string {
 
   }
 
-  if (lower.includes("supabase") || lower.includes("database") || lower.includes("postgres") || lower.includes("db") || lower.includes("relation") || lower.includes("connection")) {
+  if (
+    lower.includes("streaming connection issue") ||
+    lower.includes("unexpected keyword argument") ||
+    lower.includes("asyncresponses") ||
+    lower.includes("stream()") ||
+    (lower.includes("connection issue") && !lower.includes("database"))
+  ) {
+    return "Something went wrong with the AI response stream. Please try sending your message again."
+  }
+
+  if (lower.includes("supabase") || lower.includes("database") || lower.includes("postgres") || lower.includes("db") || lower.includes("relation")) {
 
     return "We are experiencing a temporary database connection issue. Our team is working to restore full connectivity; please try again in a few moments."
 

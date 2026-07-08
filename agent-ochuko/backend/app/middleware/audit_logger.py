@@ -75,19 +75,23 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         ip_address = request.client.host if request.client else "unknown"
 
         # Build audit entry
+        metadata = {
+            "status_code": response.status_code,
+        }
+        routing_mode = getattr(request.state, "routing_mode", None)
+        if routing_mode:
+            metadata["routing_mode"] = routing_mode
+
         entry = {
             "user_id": user_id,
             "action": request.method,
-            "resource": request.url.path,
+            "resource_type": request.url.path,
             "ip_address": ip_address,
-            "status_code": response.status_code,
+            "user_agent": request.headers.get("user-agent"),
+            "policy_decision": "DENY" if response.status_code in (401, 403) else "ALLOW",
             "latency_ms": latency_ms,
+            "metadata": metadata,
         }
-
-        # Add routing_mode if available (set by chat endpoint)
-        routing_mode = getattr(request.state, "routing_mode", None)
-        if routing_mode:
-            entry["routing_mode"] = routing_mode
 
         # Fire-and-forget: write audit log in background
         # Using a simple fire-and-forget pattern since we can't use

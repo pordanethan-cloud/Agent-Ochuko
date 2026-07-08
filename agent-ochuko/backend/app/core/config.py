@@ -1,9 +1,12 @@
 # app/core/config.py
 import os
 import logging
+import json
 from typing import Dict, Optional
 from dotenv import load_dotenv
 from azure.appconfiguration import AzureAppConfigurationClient
+from azure.keyvault.secrets import SecretClient
+from azure.identity import DefaultAzureCredential
 
 # Load local environment variables from .env first
 load_dotenv()
@@ -13,6 +16,31 @@ logging.basicConfig(level=logging.INFO)
 
 # Global in-memory configuration cache
 _CONFIG_CACHE: Dict[str, str] = {}
+
+_kv_clients: Dict[str, SecretClient] = {}
+
+def _resolve_keyvault_ref(uri: str) -> Optional[str]:
+    """
+    Resolves an Azure Key Vault secret URI (e.g. https://<vault-name>.vault.azure.net/secrets/<secret-name>)
+    using DefaultAzureCredential.
+    """
+    try:
+        if not uri.startswith("https://"):
+            return None
+        parts = uri.split("/")
+        if len(parts) < 5 or parts[3] != "secrets":
+            return None
+        vault_url = f"https://{parts[2]}"
+        secret_name = parts[4]
+        if vault_url not in _kv_clients:
+            credential = DefaultAzureCredential()
+            _kv_clients[vault_url] = SecretClient(vault_url=vault_url, credential=credential)
+        client = _kv_clients[vault_url]
+        secret = client.get_secret(secret_name)
+        return secret.value
+    except Exception as e:
+        logger.error(f"Failed to resolve Key Vault reference URI {uri}: {e}")
+        return None
 
 
 def load_config() -> None:
@@ -43,19 +71,40 @@ def load_config() -> None:
         fetched_items = client.list_configuration_settings(label_filter="production")
         count = 0
         for item in fetched_items:
-            # Do NOT overwrite environment variables with unresolved Key Vault reference JSON strings.
-            # The Container App runtime already injects resolved Key Vault secrets into the environment.
+            # Check if it is a Key Vault reference
+            is_kv_ref = False
+            uri = None
             if item.content_type and "keyvaultref" in item.content_type:
-                logger.info(f"Skipping App Config overwrite for Key Vault reference: {item.key}")
-                continue
-            if item.value and item.value.strip().startswith('{"uri":'):
-                logger.info(f"Skipping App Config overwrite for Key Vault URI reference: {item.key}")
-                continue
+                is_kv_ref = True
+            elif item.value and item.value.strip().startswith('{"uri":'):
+                is_kv_ref = True
 
-            # Overwrite environment baseline with App Config values
-            _CONFIG_CACHE[item.key] = item.value
-            os.environ[item.key] = item.value
-            count += 1
+            if is_kv_ref:
+                try:
+                    ref_data = json.loads(item.value)
+                    uri = ref_data.get("uri")
+                except Exception:
+                    pass
+                
+                # Check if it's already set in environment (in container apps, ACA injects them)
+                env_val = os.environ.get(item.key)
+                if env_val:
+                    _CONFIG_CACHE[item.key] = env_val
+                    logger.info(f"Using pre-set env value for Key Vault key: {item.key}")
+                elif uri:
+                    resolved_val = _resolve_keyvault_ref(uri)
+                    if resolved_val:
+                        _CONFIG_CACHE[item.key] = resolved_val
+                        os.environ[item.key] = resolved_val
+                        logger.info(f"Successfully resolved Key Vault reference for key: {item.key}")
+                        count += 1
+                    else:
+                        logger.warning(f"Could not resolve Key Vault reference for key: {item.key}")
+            else:
+                # Overwrite environment baseline with App Config values
+                _CONFIG_CACHE[item.key] = item.value
+                os.environ[item.key] = item.value
+                count += 1
             
         logger.info(f"Loaded {count} configurations from Azure App Configuration.")
     except Exception as e:

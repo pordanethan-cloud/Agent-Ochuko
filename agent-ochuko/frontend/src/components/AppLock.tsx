@@ -50,7 +50,28 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
   }
 
   useEffect(() => {
+    // Blur any focused element on mount to prevent focus bleed
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+  }, [])
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Keep developer / browser shortcuts working
+      if (
+        e.key === 'F5' ||
+        e.key === 'F12' ||
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'i')
+      ) {
+        return
+      }
+
+      // Block all other key events from bubbling or performing default actions
+      e.preventDefault()
+      e.stopPropagation()
+
       if (e.key >= '0' && e.key <= '9') {
         handleKeyPress(e.key)
       } else if (e.key === 'Backspace') {
@@ -168,8 +189,8 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
           <div>
             <h3 className="text-sm font-semibold text-brand-text">
               {mode === 'unlock' ? 'App Locked' :
-               mode === 'setup' ? 'Set PIN Lock' :
-               mode === 'change' ? 'Change PIN Lock' : 'Disable PIN Lock'}
+                mode === 'setup' ? 'Set PIN Lock' :
+                  mode === 'change' ? 'Change PIN Lock' : 'Disable PIN Lock'}
             </h3>
             <p className="text-[12px] text-brand-muted/70 mt-1 h-5">{instruction}</p>
           </div>
@@ -179,11 +200,10 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
           {[0, 1, 2, 3].map(idx => (
             <div
               key={idx}
-              className={`w-3.5 h-3.5 rounded-full border transition-all duration-150 ${
-                idx < pin.length
+              className={`w-3.5 h-3.5 rounded-full border transition-all duration-150 ${idx < pin.length
                   ? 'bg-[#ffffff] border-[#ffffff] scale-110 shadow-lg shadow-[#ffffff]/20'
                   : 'bg-transparent border-[#1e2025]'
-              }`}
+                }`}
             />
           ))}
         </div>

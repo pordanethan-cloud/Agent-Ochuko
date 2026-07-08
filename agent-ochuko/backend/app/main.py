@@ -105,6 +105,15 @@ for po in prod_origins:
     if po not in origins:
         origins.append(po)
 
+# ── Middleware Stack ──────────────────────────────────────────────────────
+# Registration order: last registered = first to execute.
+# Execution order: CORS → Maintenance → Block → TokenBudget → Quota → Audit → Handler
+app.add_middleware(AuditLogMiddleware)
+app.add_middleware(QuotaGuardMiddleware)
+app.add_middleware(TokenBudgetMiddleware)
+app.add_middleware(BlockGuardMiddleware)
+app.add_middleware(MaintenanceGuardMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -112,15 +121,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── Middleware Stack ──────────────────────────────────────────────────────
-# Registration order: last registered = first to execute.
-# Execution order: Maintenance → Block → TokenBudget → Quota → Audit → Handler
-app.add_middleware(AuditLogMiddleware)
-app.add_middleware(QuotaGuardMiddleware)
-app.add_middleware(TokenBudgetMiddleware)
-app.add_middleware(BlockGuardMiddleware)
-app.add_middleware(MaintenanceGuardMiddleware)
 
 # Include API routers
 app.include_router(chat_router, prefix="/v1", tags=["chat"])

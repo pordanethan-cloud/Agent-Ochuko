@@ -81,10 +81,12 @@ div[aria-live="polite"] > div {
 
 /* ── Claude-like horizontal text underlapping fade mask ──────────────────── */
 .input-masked-fade {
-  --mask-left-start: 8px;
-  --mask-left-end: 44px;
-  --mask-right-start: 56px;
-  --mask-right-end: 12px;
+  /* Left fade: covers the mic icon area (left-3 = 12px + icon 16px + gap = ~36px) */
+  --mask-left-start: 4px;
+  --mask-left-end: 40px;
+  /* Right fade: covers the paperclip icon area (right-3 = 12px + icon 16px + gap = ~36px) */
+  --mask-right-start: 36px;
+  --mask-right-end: 4px;
 
   -webkit-mask-image: linear-gradient(
     to right,
@@ -103,8 +105,8 @@ div[aria-live="polite"] > div {
 }
 
 .input-masked-fade.no-mic {
-  --mask-left-start: 4px;
-  --mask-left-end: 16px;
+  --mask-left-start: 0px;
+  --mask-left-end: 8px;
 }
 
 /* ── Dictation/Transcription sliding loading bar ─────────────────────────── */
