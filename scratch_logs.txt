@@ -1,1 +1,0 @@
-Exception: Command 'az containerapp logs show --name agent-ochuko-api --resource-group rg-ochuko --tail 100' timed out after 15 seconds
