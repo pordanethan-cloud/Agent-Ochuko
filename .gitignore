@@ -1,0 +1,14 @@
+# Root-level ignored files
+/files.zip
+/git_diff_chat.txt
+/scratch_logs.txt
+/AGENT ochuko(icon,favcon,img).png
+
+# Subdirectory zip and scratch files
+agent-ochuko/fix.zip
+agent-ochuko/backend/scratch/test_generated_image.png
+
+# Pytest cache and OS files
+.pytest_cache/
+.DS_Store
+Thumbs.db
