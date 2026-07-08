@@ -1260,7 +1260,13 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
       try {
 
-        const host = new URL(src.url).hostname
+        let host = new URL(src.url).hostname
+
+        if (host === 'vertexaisearch.cloud.google.com' && src.title && src.title.includes('.')) {
+
+          host = src.title.trim().toLowerCase()
+
+        }
 
         if (host && !seen.has(host)) {
 
@@ -1406,7 +1412,15 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
                   try {
 
-                    return new URL(src.url).hostname
+                    let host = new URL(src.url).hostname
+
+                    if (host === 'vertexaisearch.cloud.google.com' && src.title && src.title.includes('.')) {
+
+                      host = src.title.trim().toLowerCase()
+
+                    }
+
+                    return host
 
                   } catch (_) {
 
@@ -1428,7 +1442,13 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
                     try {
 
-                      const domain = new URL(src.url).hostname;
+                      let domain = new URL(src.url).hostname;
+
+                      if (domain === 'vertexaisearch.cloud.google.com' && src.title && src.title.includes('.')) {
+
+                        domain = src.title.trim().toLowerCase();
+
+                      }
 
                       target.src = `https://icons.duckduckgo.com/ip3/${domain}.ico`;
 
