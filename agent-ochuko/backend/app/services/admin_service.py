@@ -7,7 +7,7 @@ Routes stay thin; this module owns the data logic.
 """
 import logging
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.services.supabase_admin import get_supabase_admin
 
@@ -27,7 +27,7 @@ def list_users(page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
     db = get_supabase_admin()
     offset = (page - 1) * page_size
     current_period = datetime.now(timezone.utc).strftime("%Y-%m")
-    current_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    current_date_str = datetime.now(timezone(timedelta(hours=1))).strftime("%Y-%m-%d")
 
     # Query profiles using existing columns (display_name instead of full_name, omit email)
     response = (
@@ -162,12 +162,12 @@ def set_user_budget(user_id: str, budget_limit: int) -> None:
     Upsert the token budget for a user.
     Uses the ensure_budget_row RPC if available, otherwise direct upsert.
     """
-    from datetime import date
+    WAT = timezone(timedelta(hours=1))
     db = get_supabase_admin()
     db.table("token_budgets").upsert(
         {
             "user_id": user_id,
-            "period": str(date.today()),
+            "period": str(datetime.now(WAT).date()),
             "budget_limit": budget_limit
         },
         on_conflict="user_id,period",

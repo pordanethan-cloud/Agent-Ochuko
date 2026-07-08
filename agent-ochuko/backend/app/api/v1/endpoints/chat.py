@@ -6,7 +6,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.core.jwt_validator import verify_jwt
 
 from app.core.config import get_config
@@ -57,15 +57,17 @@ _OCHUKO_LITE_RULE = (
     "- Engage with what the user actually said first. Don't pivot to a menu.\n"
     "- Reply in 2–4 sentences, then ask ONE sharp specific question to advance the conversation.\n"
     "- Never offer category lists or 'pick a direction' prompts — pick one direction yourself and go.\n"
-    "- Prose only. No bullet lists in discussion. Match the user's energy and vocabulary.\n"
+    "- Prose only for dialogue. Match the user's energy and vocabulary.\n"
     "- End every turn with a question, never an open offer.\n\n"
-    "EXECUTION rules (for task/build/generate turns):\n"
+    "EXECUTION & FORMATTING rules:\n"
     "- Call tools immediately. Never ask permission or confirm before acting.\n"
-    "- For files/documents: use generate_file, write full content autonomously, never ask user for content.\n"
-    "- For search/live data: use search_web immediately.\n"
-    "- On tool failure: silently retry or pivot — never expose errors to the user.\n"
-    "- Present generated files as clickable markdown links: [filename.pdf](url)\n"
+    "- Visual output hierarchy: diagram > table > list > prose. Always prefer a Mermaid diagram over describing a flow in prose, and a table over a prose list when comparing items.\n"
+    "- Wrap all copyable templates, email drafts, or letters in a standard markdown blockquote (prefixed with '>') or code block.\n"
+    "- For search/live data: use search_web proactively for recent events (e.g., 2026 sports/news) without asking clarifying questions.\n"
+    "- For files/documents: use generate_file, write full content autonomously, and present as [filename.pdf](url).\n"
+    "- On tool failure: silently retry or pivot — never expose errors, exceptions, or missing packages to the user.\n"
 ) + _SKILL_MANIFEST
+
 
 # Hard rule prepended to every system prompt at the API level.
 # Ochuko identity and no-emoji enforcement — applied regardless of what
@@ -233,27 +235,35 @@ def _select_tools(
     """
     Three-layer tool selection:
 
-    1. think/solve  → all compact schemas unconditionally.
-    2. discuss/nano, pure chitchat → [] (manifest in system prompt is enough).
-    3. discuss/nano, anything else →
+    1. Pure greeting → zero schemas in ALL modes (manifest in system prompt is enough),
+       unless we already have registered tools from previous turns.
+    2. think/solve, non-chitchat → all compact schemas unconditionally
+       (excluding run_code_agent if has_code_executor is False or is_doc_request is True).
+    3. discuss/nano, non-chitchat →
          a. Pre-load schemas for tools already registered in this conversation.
          b. Add search_web by default (non-chitchat always may need web data).
          c. Add any tools whose intent signals match the current message.
     """
-    if routing_mode in ("think", "solve"):
-        tools = [v for k, v in _COMPACT_TOOLS.items() if k != "run_code_agent"]
-        if has_code_executor:
-            tools.append(_COMPACT_TOOLS["run_code_agent"])
-        return tools
-
     msg = user_message.lower()
+    is_doc_request = any(
+        kw in msg
+        for kw in ("pdf", "docx", "word document", "report", "essay", "document", "generate a file", "create a file")
+    )
 
     # Start from what this conversation has already activated
     registered = _get_registered_tools(agent_memory)
 
-    # Pure greeting → zero schemas, manifest is sufficient (unless we already have registered tools)
+    # Pure greeting → zero schemas in ALL modes, saving ~700 tokens on simple turns
     if _is_pure_chitchat(msg) and not registered:
         return []
+
+    # In think/solve, if not chitchat, load all tools to maintain full capability
+    if routing_mode in ("think", "solve"):
+        tools = [v for k, v in _COMPACT_TOOLS.items() if k != "run_code_agent"]
+        if has_code_executor and not is_doc_request:
+            tools.append(_COMPACT_TOOLS["run_code_agent"])
+        return tools
+
     selected: dict[str, dict] = {
         name: _COMPACT_TOOLS[name]
         for name in registered
@@ -268,8 +278,9 @@ def _select_tools(
     # Intent-detect any other tools for this specific message
     for tool_name, signals in _INTENT_SIGNALS.items():
         if any(s in msg for s in signals):
-            if tool_name == "run_code_agent" and not has_code_executor:
-                continue
+            if tool_name == "run_code_agent":
+                if not has_code_executor or is_doc_request:
+                    continue
             selected[tool_name] = _COMPACT_TOOLS[tool_name]
 
     return list(selected.values())
@@ -446,6 +457,29 @@ def _markdown_to_reportlab_html(text: str) -> str:
     return escaped
 
 
+def _apply_inline_docx(paragraph, text: str) -> None:
+    """
+    Parse inline markdown in *text* and add styled runs to *paragraph*.
+    Handles **bold**, *italic*, and plain text segments. Cleans up
+    list markers (- ) from the start of lines before writing.
+    """
+    import re as _re
+    # Token pattern: captures **bold**, *italic*, or plain spans
+    token_pattern = _re.compile(r"(\*\*.*?\*\*|\*.*?\*|[^*]+)", _re.DOTALL)
+    for match in token_pattern.finditer(text):
+        token = match.group(0)
+        if token.startswith("**") and token.endswith("**") and len(token) > 4:
+            run = paragraph.add_run(token[2:-2])
+            run.bold = True
+        elif token.startswith("*") and token.endswith("*") and len(token) > 2:
+            run = paragraph.add_run(token[1:-1])
+            run.italic = True
+        else:
+            paragraph.add_run(token)
+
+
+
+
 async def _generate_file_native(
     content: str,
     filename: str,
@@ -555,15 +589,29 @@ async def _generate_file_native(
                 if not stripped:
                     document.add_paragraph("")
                     continue
-                if stripped.startswith("# "):
-                    document.add_heading(stripped[2:], level=1)
-                elif stripped.startswith("## "):
-                    document.add_heading(stripped[3:], level=2)
+                if stripped.startswith("#### "):
+                    document.add_heading(stripped[5:], level=4)
                 elif stripped.startswith("### "):
                     document.add_heading(stripped[4:], level=3)
+                elif stripped.startswith("## "):
+                    document.add_heading(stripped[3:], level=2)
+                elif stripped.startswith("# "):
+                    document.add_heading(stripped[2:], level=1)
+                elif stripped.startswith("- ") or stripped.startswith("* "):
+                    # Bullet list item — strip the marker, render inline formatting
+                    p = document.add_paragraph(style="List Bullet")
+                    _apply_inline_docx(p, stripped[2:])
+                elif stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
+                    # Entire line is bold (common for sub-section labels)
+                    p = document.add_paragraph()
+                    run = p.add_run(stripped[2:-2])
+                    run.bold = True
+                    run.font.size = Pt(11)
                 else:
-                    p = document.add_paragraph(stripped)
-                    p.runs[0].font.size = Pt(11) if p.runs else None
+                    p = document.add_paragraph()
+                    _apply_inline_docx(p, stripped)
+                    for run in p.runs:
+                        run.font.size = Pt(11)
 
             buf = io.BytesIO()
             document.save(buf)
@@ -1740,7 +1788,8 @@ async def chat_stream_generator(
                 except Exception as rpc_err:
                     logger.warning("reconcile_token_budget RPC failed, falling back: %s", rpc_err)
                     try:
-                        current_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        WAT = timezone(timedelta(hours=1))
+                        current_date_str = datetime.now(WAT).strftime("%Y-%m-%d")
                         budget_res = (
                             supabase.table("token_budgets")
                             .select("tokens_used")

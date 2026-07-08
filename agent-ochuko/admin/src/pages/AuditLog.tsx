@@ -92,7 +92,7 @@ export function AuditLog() {
     URL.revokeObjectURL(url);
   };
 
-  const fmt = (d: string) => new Date(d).toLocaleString();
+  const fmt = (d: string) => new Date(d).toLocaleString(undefined, { timeZone: "Africa/Lagos" });
 
   return (
     <div className="p-6">

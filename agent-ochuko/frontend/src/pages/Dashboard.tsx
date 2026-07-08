@@ -93,6 +93,8 @@ interface Message {
 
   imagePrompt?: string
 
+  imageJobId?: string
+
   agentStep?: number
 
   agentMaxSteps?: number
@@ -131,6 +133,86 @@ const triggerDirectDownload = async (url: string, fallbackFilename: string) => {
     console.error("Direct download failed, falling back to window.open:", err)
     window.open(url, '_blank')
   }
+}
+
+// ─── Docx Preview Component ───────────────────────────────────────────────────
+
+interface DocxPreviewProps {
+  url: string
+}
+
+function DocxPreview({ url }: DocxPreviewProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    if (!url) return
+
+    setLoading(true)
+    setError(null)
+
+    fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
+        return res.arrayBuffer()
+      })
+      .then(async (arrayBuffer) => {
+        if (!active) return
+        if (containerRef.current) {
+          containerRef.current.innerHTML = ''
+          try {
+            // Lazy load docx-preview
+            const docxModule = await import('docx-preview')
+            const renderFn = docxModule.renderAsync || (docxModule as any).default?.renderAsync
+            if (!renderFn) {
+              throw new Error("renderAsync not found in docx-preview module")
+            }
+            await renderFn(arrayBuffer, containerRef.current, undefined, {
+              className: "docx-rendered",
+              inWrapper: false,
+              ignoreWidth: true,
+              ignoreHeight: true,
+              debug: false
+            })
+          } catch (renderErr) {
+            console.error("docx-preview render failed:", renderErr)
+            throw renderErr
+          }
+        }
+      })
+      .then(() => {
+        if (active) setLoading(false)
+      })
+      .catch(err => {
+        console.error("Failed to render DOCX:", err)
+        if (active) {
+          setError("Failed to load or parse DOCX document.")
+          setLoading(false)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [url])
+
+  return (
+    <div className="w-full h-full min-h-[500px] flex flex-col bg-white text-black p-4 rounded-xl overflow-auto select-text relative">
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
+          <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+        </div>
+      )}
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center p-6 text-red-500 font-semibold bg-white/95 text-center z-10">
+          {error}
+        </div>
+      )}
+      <div ref={containerRef} className="w-full prose max-w-none text-left docx-container" />
+    </div>
+  )
 }
 
 // ─── Generated file download card ─────────────────────────────────────────────
@@ -876,7 +958,7 @@ const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }
 
         className="block w-full max-w-sm object-cover transition-transform duration-500 group-hover/img:scale-[1.02]"
 
-        loading="lazy"
+        loading="eager"
 
       />
 
@@ -2967,6 +3049,7 @@ export const Dashboard: React.FC = () => {
 
     const idx = activeTtsIndexRef.current
 
+    // Guard: if user stopped playback while job was loading, idx is already null — do nothing
     if (idx === null) return
 
     if (activeTtsJob.status === 'done' && activeTtsJob.resultBlobUrl) {
@@ -2978,6 +3061,9 @@ export const Dashboard: React.FC = () => {
         activeTtsAudioRef.current = null
 
       }
+
+      // Re-check: user may have stopped between job resolution and this point
+      if (activeTtsIndexRef.current === null) return
 
       const audio = new Audio(activeTtsJob.resultBlobUrl)
 
@@ -3069,13 +3155,18 @@ export const Dashboard: React.FC = () => {
 
     setActiveTtsJobId(null)
 
-    // Toggle off: if this message is already playing, stop it
+    // Toggle off: if this message is already playing or loading, stop it
 
-    if (ttsState[idx]?.status === 'playing') {
+    if (ttsState[idx]?.status === 'playing' || ttsState[idx]?.status === 'loading') {
+
+      // Null the index FIRST so the useEffect guard bails out immediately
+      activeTtsIndexRef.current = null
+
+      setActiveTtsJobId(null)
+
+      window.speechSynthesis.cancel()
 
       setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
-
-      activeTtsIndexRef.current = null
 
       return
 
@@ -3490,6 +3581,17 @@ export const Dashboard: React.FC = () => {
     const handler = (e: KeyboardEvent) => {
 
       const mod = e.ctrlKey || e.metaKey
+
+      // Block Ctrl+R / Ctrl+Shift+R (browser reload / force-reload) — prevents
+      // Mermaid chart renderer from hijacking these shortcuts mid-session.
+
+      if (mod && (e.key === 'r' || e.key === 'R')) {
+
+        e.preventDefault()
+
+        return
+
+      }
 
       // Ctrl/Cmd + Shift + N → new session
 
@@ -3931,7 +4033,7 @@ export const Dashboard: React.FC = () => {
 
                       idx === updated.length - 1
 
-                        ? { ...m, imagePending: true, imagePrompt: imgPrompt }
+                        ? { ...m, imagePending: true, imagePrompt: imgPrompt, imageJobId: imgJobId }
 
                         : m
 
@@ -3947,7 +4049,7 @@ export const Dashboard: React.FC = () => {
 
                   ...prev,
 
-                  { role: 'assistant', content: '', imagePending: true, imagePrompt: imgPrompt }
+                  { role: 'assistant', content: '', imagePending: true, imagePrompt: imgPrompt, imageJobId: imgJobId }
 
                 ]
 
@@ -3975,9 +4077,9 @@ export const Dashboard: React.FC = () => {
 
                         prev.map((m) =>
 
-                          m.imagePending && m.imagePrompt === imgPrompt
+                          m.imagePending && (m.imageJobId === imgJobId || m.imagePrompt === imgPrompt)
 
-                            ? { ...m, imagePending: false, imageUrl: j.result.image_url }
+                            ? { ...m, imagePending: false, imageUrl: j.result.image_url, imageJobId: undefined }
 
                             : m
 
@@ -3995,9 +4097,9 @@ export const Dashboard: React.FC = () => {
 
                         prev.map((m) =>
 
-                          m.imagePending && m.imagePrompt === imgPrompt
+                          m.imagePending && (m.imageJobId === imgJobId || m.imagePrompt === imgPrompt)
 
-                            ? { ...m, imagePending: false, content: m.content + `\n\nImage generation failed: ${j.error || 'Please try again.'}` }
+                            ? { ...m, imagePending: false, imageJobId: undefined, content: m.content + `\n\nImage generation failed: ${j.error || 'Please try again.'}` }
 
                             : m
 
@@ -4047,9 +4149,9 @@ export const Dashboard: React.FC = () => {
 
                         prev.map((m) =>
 
-                          m.imagePending && m.imagePrompt === imgPrompt
+                          m.imagePending && (m.imageJobId === imgJobId || m.imagePrompt === imgPrompt)
 
-                            ? { ...m, imagePending: false, imageUrl: jobData.result_blob_url }
+                            ? { ...m, imagePending: false, imageUrl: jobData.result_blob_url, imageJobId: undefined }
 
                             : m
 
@@ -4067,9 +4169,9 @@ export const Dashboard: React.FC = () => {
 
                         prev.map((m) =>
 
-                          m.imagePending && m.imagePrompt === imgPrompt
+                          m.imagePending && (m.imageJobId === imgJobId || m.imagePrompt === imgPrompt)
 
-                            ? { ...m, imagePending: false, content: m.content + `\n\nImage generation failed: ${jobData.error_message || 'Please try again.'}` }
+                            ? { ...m, imagePending: false, imageJobId: undefined, content: m.content + `\n\nImage generation failed: ${jobData.error_message || 'Please try again.'}` }
 
                             : m
 
@@ -4115,9 +4217,9 @@ export const Dashboard: React.FC = () => {
 
                   prev.map((m) =>
 
-                    m.imagePending && m.imagePrompt === imgPrompt
+                    m.imagePending && (m.imageJobId === imgJobId || m.imagePrompt === imgPrompt)
 
-                      ? { ...m, imagePending: false, content: m.content + '\n\nImage generation timed out. Please try again.' }
+                      ? { ...m, imagePending: false, imageJobId: undefined, content: m.content + '\n\nImage generation timed out. Please try again.' }
 
                       : m
 
@@ -6137,19 +6239,7 @@ export const Dashboard: React.FC = () => {
 
                           )}
 
-                          {msg.imagePending && (
-
-                            <ImagePending prompt={msg.imagePrompt || undefined} />
-
-                          )}
-
-                          {msg.imageUrl && (
-
-                            <ImageBubble url={msg.imageUrl} prompt={msg.imagePrompt || undefined} />
-
-                          )}
-
-                          {/* Generated file download cards from code executor */}
+                          {/* Generated file download cards — shown BEFORE image so files are always reachable */}
 
                           {msg.generatedFiles && msg.generatedFiles.length > 0 && (
 
@@ -6178,6 +6268,20 @@ export const Dashboard: React.FC = () => {
                               ))}
 
                             </div>
+
+                          )}
+
+                          {/* Image pending spinner or resolved image — always below file cards */}
+
+                          {msg.imagePending && (
+
+                            <ImagePending prompt={msg.imagePrompt || undefined} />
+
+                          )}
+
+                          {msg.imageUrl && (
+
+                            <ImageBubble url={msg.imageUrl} prompt={msg.imagePrompt || undefined} />
 
                           )}
 
@@ -6810,7 +6914,8 @@ export const Dashboard: React.FC = () => {
                     const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
                     const isHtml = ['html', 'htm'].includes(ext)
                     const isMd = ['md', 'markdown'].includes(ext)
-                    const isOffice = ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)
+                    const isDocx = ext === 'docx'
+                    const isOffice = ['doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)
                     const isPdf = ext === 'pdf'
                     const isImg = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)
 
@@ -6834,6 +6939,13 @@ export const Dashboard: React.FC = () => {
                               className="w-full h-full border-0"
                               title={activeArtifact.filename}
                             />
+                          </div>
+                        )
+                      }
+                      if (isDocx) {
+                        return (
+                          <div className="w-full h-[calc(100vh-8.5rem)] bg-[#0a0b0d]/30 rounded-xl border border-[#1e2025] overflow-hidden">
+                            <DocxPreview url={activeArtifact.downloadUrl || ''} />
                           </div>
                         )
                       }

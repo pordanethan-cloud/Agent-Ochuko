@@ -11,7 +11,7 @@ Optimised with in-memory caching to skip daily ensure_budget_row checks on warm 
 import logging
 import os
 import threading
-from datetime import date
+from datetime import datetime, timezone, timedelta
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -67,7 +67,8 @@ class TokenBudgetMiddleware(BaseHTTPMiddleware):
 
         try:
             # 1. Ensure budget row exists for today (cached per user per day)
-            today = date.today()
+            WAT = timezone(timedelta(hours=1))
+            today = datetime.now(WAT).date()
             with _lock:
                 last_ensured_date = _ENSURED_BUDGET_ROWS.get(user_id)
 

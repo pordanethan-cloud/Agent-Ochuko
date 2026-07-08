@@ -127,7 +127,7 @@ export function Users() {
     doAction(() => adminPatch(`/v1/admin/users/${u.id}/role`, { role }));
 
   const fmt = (date: string | null) =>
-    date ? new Date(date).toLocaleDateString() : "—";
+    date ? new Date(date).toLocaleDateString(undefined, { timeZone: "Africa/Lagos" }) : "—";
 
   const renderLastSeen = (lastSeenStr: string | null) => {
     if (!lastSeenStr) return <span className="text-slate-500">—</span>;
@@ -136,8 +136,11 @@ export function Users() {
     const diffMs = now.getTime() - lastSeen.getTime();
     const diffMins = Math.floor(diffMs / 60000);
 
+    const fullWATString = lastSeen.toLocaleString(undefined, { timeZone: "Africa/Lagos" });
+
+    let content: React.ReactNode;
     if (diffMins < 5) {
-      return (
+      content = (
         <div className="flex items-center gap-1.5 text-green-400 font-medium select-none">
           <span className="relative flex h-1.5 w-1.5">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
@@ -146,23 +149,27 @@ export function Users() {
           Active Now
         </div>
       );
+    } else if (diffMins < 60) {
+      content = <span className="text-slate-300">{diffMins}m ago</span>;
+    } else {
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) {
+        content = <span className="text-slate-300">{diffHours}h ago</span>;
+      } else {
+        const diffDays = Math.floor(diffHours / 24);
+        if (diffDays < 7) {
+          content = <span className="text-slate-400">{diffDays}d ago</span>;
+        } else {
+          content = (
+            <span className="text-slate-400">
+              {lastSeen.toLocaleDateString(undefined, { timeZone: "Africa/Lagos" })}
+            </span>
+          );
+        }
+      }
     }
 
-    if (diffMins < 60) {
-      return <span className="text-slate-300">{diffMins}m ago</span>;
-    }
-
-    const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) {
-      return <span className="text-slate-300">{diffHours}h ago</span>;
-    }
-
-    const diffDays = Math.floor(diffHours / 24);
-    if (diffDays < 7) {
-      return <span className="text-slate-400">{diffDays}d ago</span>;
-    }
-
-    return <span className="text-slate-400">{lastSeen.toLocaleDateString()}</span>;
+    return <span title={fullWATString}>{content}</span>;
   };
 
   return (

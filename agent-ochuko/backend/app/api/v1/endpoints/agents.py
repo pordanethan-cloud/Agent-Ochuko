@@ -8,7 +8,7 @@ for frontend polling (used by useJob.ts).
 import logging
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.core.jwt_validator import verify_jwt
@@ -387,7 +387,7 @@ async def _select_voice(request_ip: str, requested_voice: str) -> str:
 )
 async def queue_tts_job(
     payload: TTSRequest,
-    request: "Request",
+    request: Request,
     user: Dict[str, Any] = Depends(verify_jwt),
 ) -> JobResponse:
     """
@@ -397,8 +397,6 @@ async def queue_tts_job(
     The voice is auto-selected by caller IP (African IPs → en-ZA-LeahNeural;
     all others → en-GB-SoniaNeural) unless explicitly overridden in the payload.
     """
-    from fastapi import Request  # noqa: F401 — imported here to avoid circular at module level
-
     user_id = user.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="User identifier not found in JWT.")
@@ -514,7 +512,7 @@ async def get_job_status(
     try:
         res = _safe_execute(
             supabase.table("jobs")
-            .select("id, status, result, error_message, type")
+            .select("id, status, result, error, type")
             .eq("id", job_id)
             .eq("user_id", user_id)   # security: owner-only
             .maybe_single()
@@ -534,7 +532,7 @@ async def get_job_status(
             "type": row.get("type"),
             "status": row["status"],
             "result_blob_url": result_blob_url,
-            "error_message": row.get("error_message"),
+            "error_message": row.get("error"),
         }
 
     except HTTPException:

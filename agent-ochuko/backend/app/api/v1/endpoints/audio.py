@@ -13,6 +13,7 @@ model can stitch + grammar-correct the running transcript.
 """
 import os
 import io
+import asyncio
 import logging
 from typing import Any, Dict
 
@@ -181,12 +182,15 @@ async def transcribe_audio(
 
         logger.debug("Transcribing via Groq Whisper: filename=%s type=%s size=%d", filename, clean_content_type, len(audio_bytes))
 
-        transcription = groq_client.audio.transcriptions.create(
-            file=(filename, io.BytesIO(audio_bytes), clean_content_type),
-            model="whisper-large-v3-turbo",
-            response_format="text",
-            language="en",
-        )
+        def _call_groq():
+            return groq_client.audio.transcriptions.create(
+                file=(filename, io.BytesIO(audio_bytes), clean_content_type),
+                model="whisper-large-v3-turbo",
+                response_format="text",
+                language="en",
+            )
+
+        transcription = await asyncio.to_thread(_call_groq)
 
         # Groq returns a string when response_format="text"
         raw_transcript: str = transcription if isinstance(transcription, str) else transcription.text

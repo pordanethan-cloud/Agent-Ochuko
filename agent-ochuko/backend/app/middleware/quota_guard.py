@@ -40,7 +40,7 @@ def _get_supabase():
 _AGENT_QUOTA_MAP = {
     "ocr": ("ocr_pages_used", "max_ocr_pages_per_user", "50"),
     "vision": ("vision_calls_used", "max_vision_calls_per_user", "5000"),
-    "speech": ("speech_minutes_used", "max_speech_minutes_per_user", "300"),
+    "speech": ("speech_seconds_used", "max_speech_seconds", "3600"),
     "image_gen": ("image_gen_used", "max_image_gen_per_user", "100"),
     "file_gen": ("file_gen_used", "max_file_gen_per_user", "200"),
 }

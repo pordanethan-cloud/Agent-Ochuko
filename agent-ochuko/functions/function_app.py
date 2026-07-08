@@ -200,7 +200,7 @@ def _expand_prompt(prompt: str) -> dict:
 # CRON 1: Daily Token Budget Reset (0 0 * * * UTC)
 # ---------------------------------------------------------------------------
 
-@app.timer_trigger(schedule="0 0 * * *", arg_name="myTimer", run_on_startup=False, use_monitor=False)
+@app.timer_trigger(schedule="0 23 * * *", arg_name="myTimer", run_on_startup=False, use_monitor=False)
 def token_quota_reset(myTimer: func.TimerRequest) -> None:
     utc_timestamp = datetime.now(timezone.utc).isoformat()
     logger.info(f"token_quota_reset cron trigger started at {utc_timestamp}")
@@ -229,10 +229,16 @@ def token_quota_reset(myTimer: func.TimerRequest) -> None:
 # CRON 2: Monthly Agent Quota Reset (0 0 1 * * UTC)
 # ---------------------------------------------------------------------------
 
-@app.timer_trigger(schedule="0 0 1 * *", arg_name="myTimer", run_on_startup=False, use_monitor=False)
+@app.timer_trigger(schedule="0 23 * * *", arg_name="myTimer", run_on_startup=False, use_monitor=False)
 def agent_quota_reset(myTimer: func.TimerRequest) -> None:
+    wat = timezone(timedelta(hours=1))
+    now_wat = datetime.now(wat)
+    if now_wat.day != 1:
+        # Only run on the 1st day of the month in WAT (Nigerian Time)
+        return
+
     utc_timestamp = datetime.now(timezone.utc).isoformat()
-    period = datetime.now(timezone.utc).strftime("%Y-%m")
+    period = now_wat.strftime("%Y-%m")
     logger.info(f"agent_quota_reset cron trigger started at {utc_timestamp} for period {period}")
 
     try:

@@ -130,3 +130,72 @@ div[aria-live="polite"] > div {
   100% { background-position: 200% 0; }
 }
 
+/* ── Docx Preview Styles ──────────────────────────────────────────────────── */
+.docx-container {
+  padding: 10px;
+  width: 100%;
+}
+
+.docx-rendered {
+  background: #ffffff !important;
+  color: #1a1a1a !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3) !important;
+  border-radius: 12px !important;
+  padding: 40px 50px !important;
+  margin: 16px auto !important;
+  max-width: 800px !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  font-family: 'Outfit', sans-serif !important;
+  line-height: 1.6 !important;
+}
+
+/* Ensure clean page division inside the docx preview container */
+.docx-rendered section {
+  margin-bottom: 24px !important;
+}
+
+.docx-rendered p {
+  margin-bottom: 12px !important;
+  font-size: 14px !important;
+  color: #2d3748 !important;
+}
+
+.docx-rendered h1, .docx-rendered h2, .docx-rendered h3 {
+  font-weight: 700 !important;
+  color: #1a202c !important;
+  margin-top: 24px !important;
+  margin-bottom: 12px !important;
+}
+
+.docx-rendered h1 {
+  font-size: 24px !important;
+  border-bottom: 2px solid #e2e8f0 !important;
+  padding-bottom: 8px !important;
+}
+
+.docx-rendered h2 {
+  font-size: 20px !important;
+}
+
+.docx-rendered h3 {
+  font-size: 16px !important;
+}
+
+.docx-rendered table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin: 16px 0 !important;
+}
+
+.docx-rendered th, .docx-rendered td {
+  border: 1px solid #cbd5e0 !important;
+  padding: 8px 12px !important;
+  text-align: left !important;
+}
+
+.docx-rendered th {
+  background-color: #f7fafc !important;
+  font-weight: 600 !important;
+}
+
+
