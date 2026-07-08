@@ -61,6 +61,8 @@ _OCHUKO_RULE = (
     "- NEVER ask the user to supply the content or formatting details. Take the initiative to invent a rich, high-quality, professional sample/template based on the context, and call the tool immediately.\n"
     "- If a tool call fails, analyze the error and try a different approach or pivot to another tool (such as calling `generate_file` if `run_code_agent` failed) rather than telling the user you failed or asking for input. You have a budget of up to 10 iterations to solve it autonomously.\n"
     "- When a file is successfully generated, always present it in your final message to the user as a clickable markdown link using its exact filename as the label and its exact R2 Download URL as the URL (e.g. [history_and_act_of_colonialism.pdf](https://...)). Never output a filename as plain text or code block.\n\n"
+    "Copyable Text & Templates:\n"
+    "- When writing templates, email drafts, letters, scripts, copyable messages, or any text blocks intended for the user to copy/paste, ALWAYS enclose them in a standard markdown blockquote (prefixed with '>') or a plain text code block (```text ... ```). This groups the template cleanly and allows the user to copy the template text with a single click.\n\n"
 )
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)

@@ -967,6 +967,32 @@ const CodeView: React.FC<{ language: string; content: string }> = ({ language, c
   )
 }
 
+const BlockquoteWithCopy: React.FC<{ content: string; children: React.ReactNode }> = ({ content, children }) => {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (_) {}
+  }
+
+  return (
+    <div className="group relative border-l-2 border-[#ffffff]/80 bg-[#ffffff]/4 pl-4 pr-10 py-3.5 my-4 italic text-brand-text/85 rounded-r-lg select-text">
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 p-1.5 rounded-lg border border-[#1e2025] bg-[#0d0f11]/60 hover:bg-[#ffffff]/5 text-[#8e95a2] hover:text-brand-text opacity-0 group-hover:opacity-100 transition duration-150 active:scale-95"
+        title="Copy template"
+      >
+        {copied ? <Check className="w-3.5 h-3.5 text-[#3fb950]" /> : <Copy className="w-3.5 h-3.5" />}
+      </button>
+      <div className="text-[13px] leading-relaxed">
+        {children}
+      </div>
+    </div>
+  )
+}
+
 // ─── Code Block Component with Copy + Download ────────────────────────────────
 
 const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, content }) => {
@@ -1898,23 +1924,14 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
           }
 
           case 'blockquote': {
-
             return (
-
-              <blockquote
-
+              <BlockquoteWithCopy
                 key={key}
-
-                className="border-l-2 border-[#ffffff] pl-4 my-4 italic text-brand-text/75 bg-[#ffffff]/4 py-2 pr-3 rounded-r-lg"
-
+                content={block.content || ''}
               >
-
                 {renderInline(block.content || '', key, generatedFiles)}
-
-              </blockquote>
-
+              </BlockquoteWithCopy>
             )
-
           }
 
           case 'table': {
