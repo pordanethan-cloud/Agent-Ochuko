@@ -168,7 +168,14 @@ async def _upload_generated_file(
             aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
             config=_BotoConfig(signature_version="s3v4"),
         )
-        s3.put_object(Bucket=bucket, Key=r2_key, Body=file_bytes, ContentType=mime_type)
+        disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
+        s3.put_object(
+            Bucket=bucket,
+            Key=r2_key,
+            Body=file_bytes,
+            ContentType=mime_type,
+            ContentDisposition=f"{disposition}; filename=\"{filename}\"",
+        )
 
     await asyncio.to_thread(_do_upload)
 

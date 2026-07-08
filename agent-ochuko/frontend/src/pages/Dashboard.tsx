@@ -103,6 +103,34 @@ interface Message {
 
 }
 
+const triggerDirectDownload = async (url: string, fallbackFilename: string) => {
+  let filename = fallbackFilename
+  try {
+    const urlParts = url.split('/')
+    const lastPart = urlParts[urlParts.length - 1].split('?')[0]
+    if (lastPart && lastPart.includes('.')) {
+      filename = decodeURIComponent(lastPart)
+    }
+  } catch (_) {}
+
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
+    const blob = await res.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(blobUrl)
+  } catch (err) {
+    console.error("Direct download failed, falling back to window.open:", err)
+    window.open(url, '_blank')
+  }
+}
+
 // ─── Generated file download card ─────────────────────────────────────────────
 
 function FileDownloadCard({
@@ -166,19 +194,19 @@ function FileDownloadCard({
           </button>
         )}
         {hasUrl ? (
-          <a
-            href={download_url}
-            download={filename}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              triggerDirectDownload(download_url, filename)
+            }}
             className="w-8 h-8 rounded-lg flex items-center justify-center border border-[#ffffff]/15 hover:border-[#ffffff]/40 bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[#8e95a2] hover:text-brand-text transition duration-150"
             title={`Download ${filename}`}
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-          </a>
+          </button>
         ) : (
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center border border-amber-500/20 bg-amber-500/5 text-amber-500/40 cursor-not-allowed"
@@ -714,6 +742,15 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
             target="_blank"
 
             rel="noopener noreferrer"
+
+            onClick={(e) => {
+              const lowerUrl = url.toLowerCase()
+              const isDownloadable = lowerUrl.endsWith('.docx') || lowerUrl.endsWith('.dotx') || lowerUrl.endsWith('.xlsx') || lowerUrl.endsWith('.zip') || lowerUrl.includes('/generated/') || lowerUrl.includes('r2.dev') || lowerUrl.includes('blob.core.windows.net')
+              if (isDownloadable) {
+                e.preventDefault()
+                triggerDirectDownload(url, label || 'download')
+              }
+            }}
 
             className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
 
@@ -6357,12 +6394,9 @@ export const Dashboard: React.FC = () => {
               } catch (_) {}
             }
 
-            const handleDownloadArtifact = () => {
+            const handleDownloadArtifact = async () => {
               if (!activeArtifact.downloadUrl) return
-              const a = document.createElement('a')
-              a.href = activeArtifact.downloadUrl
-              a.download = activeArtifact.filename
-              a.click()
+              await triggerDirectDownload(activeArtifact.downloadUrl, activeArtifact.filename)
               setIsArtifactCopyOpen(false)
             }
 
