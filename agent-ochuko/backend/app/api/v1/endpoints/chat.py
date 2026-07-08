@@ -1172,13 +1172,13 @@ async def chat_stream_generator(
                                                                             if agents_ops and hasattr(agents_ops, "download_session_file"):
                                                                                 stream = agents_ops.download_session_file(
                                                                                     agent_name=_CODE_EXECUTOR_AGENT_NAME,
-                                                                                    agent_session_id=cid,
+                                                                                    session_id=cid,
                                                                                     path=fname
                                                                                 )
                                                                             else:
                                                                                 stream = proj_client.beta.agents.download_session_file(
                                                                                     agent_name=_CODE_EXECUTOR_AGENT_NAME,
-                                                                                    agent_session_id=cid,
+                                                                                    session_id=cid,
                                                                                     path=fname
                                                                                 )
                                                                             return b"".join(stream)

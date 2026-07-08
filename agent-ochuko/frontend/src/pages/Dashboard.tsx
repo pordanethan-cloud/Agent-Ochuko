@@ -606,25 +606,57 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
         }
       }
 
+      const isSandboxLink = url.startsWith('sandbox:') || url.includes('/mnt/data/');
+
       segments.push(
 
-        <a
+        isSandboxLink ? (
 
-          key={`${keyBase}-l${match.index}`}
+          <a
 
-          href={url}
+            key={`${keyBase}-l${match.index}`}
 
-          target="_blank"
+            href="#"
 
-          rel="noopener noreferrer"
+            onClick={(e) => {
 
-          className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
+              e.preventDefault();
 
-        >
+              alert("This file remains in the secure code execution sandbox and could not be synced to public storage. Please try regenerating the file.");
 
-          {label}
+            }}
 
-        </a>
+            className="text-[#ffffff]/50 hover:text-[#ffffff]/40 line-through cursor-not-allowed transition duration-150"
+
+            title="File sync failed"
+
+          >
+
+            {label}
+
+          </a>
+
+        ) : (
+
+          <a
+
+            key={`${keyBase}-l${match.index}`}
+
+            href={url}
+
+            target="_blank"
+
+            rel="noopener noreferrer"
+
+            className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
+
+          >
+
+            {label}
+
+          </a>
+
+        )
 
       )
 
@@ -4056,7 +4088,7 @@ export const Dashboard: React.FC = () => {
 
                     role: 'system',
 
-                    content: `[System Context: The user has attached a file. Analysis result: ${textResult}]`,
+                    content: `[System Context: The user has attached a file. File URL: ${blobUrl}. Analysis result: ${textResult}]`,
 
                     routing_mode: 'discuss'
 
