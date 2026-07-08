@@ -2758,6 +2758,8 @@ export const Dashboard: React.FC = () => {
 
   const renameInputRef = useRef<HTMLInputElement>(null)
 
+  const hasRestoredRef = useRef(false)
+
   // Focus the rename input when it appears
 
   useEffect(() => {
@@ -2784,7 +2786,9 @@ export const Dashboard: React.FC = () => {
     }
   }, [input])
 
-  const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
+  const [activeConversationId, setActiveConversationId] = useState<string>(() => {
+    return localStorage.getItem('active_conversation_id') || '00000000-0000-0000-0000-000000000000'
+  })
 
   const uploadFile = async (file: File) => {
     const allowedExts = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
@@ -3161,6 +3165,8 @@ export const Dashboard: React.FC = () => {
 
     setActiveConversationId('00000000-0000-0000-0000-000000000000')
 
+    localStorage.setItem('active_conversation_id', '00000000-0000-0000-0000-000000000000')
+
     setMode('discuss')
 
     setIsSidebarOpen(false)
@@ -3307,6 +3313,12 @@ export const Dashboard: React.FC = () => {
 
             sources: m.content_parts?.sources || undefined,
 
+            imageUrl: m.content_parts?.image_jobs?.[0]?.image_url || undefined,
+
+            imagePrompt: m.content_parts?.image_jobs?.[0]?.prompt || undefined,
+
+            imagePending: m.content_parts?.image_jobs?.[0]?.status === 'pending' || undefined,
+
           }
 
           if (m.role === 'user') {
@@ -3372,6 +3384,8 @@ export const Dashboard: React.FC = () => {
         setMessages(mapped)
 
         setActiveConversationId(id)
+
+        localStorage.setItem('active_conversation_id', id)
 
         setMode(convoMode)
 
@@ -3448,6 +3462,18 @@ export const Dashboard: React.FC = () => {
     })
 
   }, [])
+
+  useEffect(() => {
+    if (hasRestoredRef.current || conversations.length === 0) return
+    const cachedId = localStorage.getItem('active_conversation_id')
+    if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
+      const cachedConvo = conversations.find(c => c.id === cachedId)
+      if (cachedConvo) {
+        hasRestoredRef.current = true
+        handleSelectConversation(cachedConvo.id, cachedConvo.mode || 'discuss')
+      }
+    }
+  }, [conversations])
 
   // Auto-focus input on mount
 
@@ -3820,6 +3846,8 @@ export const Dashboard: React.FC = () => {
             } else if (data.type === 'conversation_id') {
 
               setActiveConversationId(data.conversation_id)
+
+              localStorage.setItem('active_conversation_id', data.conversation_id)
 
               fetchConversations()
 
@@ -4328,6 +4356,8 @@ export const Dashboard: React.FC = () => {
 
       setActiveConversationId(convoId)
 
+      localStorage.setItem('active_conversation_id', convoId)
+
     }
 
     // Capture file metadata now — before any setState calls clear it
@@ -4649,6 +4679,8 @@ export const Dashboard: React.FC = () => {
       convoId = crypto.randomUUID()
 
       setActiveConversationId(convoId)
+
+      localStorage.setItem('active_conversation_id', convoId)
 
     }
 

@@ -542,3 +542,43 @@ async def get_job_status(
     except Exception as e:
         logger.error("Failed to fetch job %s for user %s: %s", job_id, user_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail="Unable to retrieve job status. Please try again.")
+
+
+import httpx
+from fastapi.responses import StreamingResponse
+
+@router.get("/download-proxy", summary="Proxy file downloads to bypass CORS restrictions")
+async def download_proxy(
+    url: str,
+    filename: str = "download",
+    user: Dict[str, Any] = Depends(verify_jwt)
+):
+    """
+    Downloads a file from R2 and streams it back to the client as an attachment.
+    Bypasses browser cross-origin (CORS) download blocks.
+    """
+    # Restrict to our public R2 domains
+    allowed_domains = [
+        "https://pub-e278636d72f14ae3940a3be367b1ff15.r2.dev/",
+        "pub-e278636d72f14ae3940a3be367b1ff15.r2.dev"
+    ]
+    if not any(url.startswith(domain) for domain in allowed_domains):
+        raise HTTPException(status_code=400, detail="Invalid download URL domain.")
+
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.get(url, timeout=30.0)
+            res.raise_for_status()
+        except Exception as e:
+            logger.error(f"Download proxy failed for URL {url}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to retrieve file from storage.")
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Access-Control-Expose-Headers": "Content-Disposition"
+    }
+    return StreamingResponse(
+        iter([res.content]),
+        media_type=res.headers.get("content-type", "application/octet-stream"),
+        headers=headers
+    )

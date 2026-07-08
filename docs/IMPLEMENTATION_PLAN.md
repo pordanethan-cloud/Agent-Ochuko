@@ -27,6 +27,7 @@
 15. [Phased Build Plan](#15-phased-build-plan)
 16. [Risk Register](#16-risk-register)
 17. [Verification & Testing Strategy](#17-verification--testing-strategy)
+18. [Incremental Updates — Stateful Sandbox, Capability Registry, and UI/UX Polish](#18-incremental-updates--stateful-sandbox-capability-registry-and-uiux-polish)
 
 ---
 
@@ -308,6 +309,33 @@ async def generate_image_with_key_rotation(prompt: str) -> bytes:
 - The FastAPI chat SSE stream intercepts the call, emits an `image_gen_queued` status block, enqueues the task to Azure Queue Storage, and immediately returns. The frontend displays a premium shimmer loading state and listens to Supabase Realtime for completion.
 
 **Consequence**: Smooth user experience with non-blocking stream iteration.
+
+---
+
+### ADR-010: Custom Sandboxed Code Execution Engine (Stateful Sandbox)
+
+**Decision**: Migrate code execution from Azure Container App session-based interpreter to a custom, container-native Python/Node.js/Bash sandbox environment and maintain workspace folder state across conversational turns.
+
+**Reasoning**:
+- Azure Foundry session pools are resource-constrained and opaque, and they delete workspace state immediately between calls, preventing multi-turn coding iteration (e.g., cloning a repo in turn 1, editing a file in turn 2, running tests in turn 3).
+- Storing state in `/tmp/sandbox_{conversation_id}` allows the agent to build on top of generated files, run shell scripts, and manage directory configurations.
+- Bandwidth and storage overhead are mitigated by doing differential (delta) folder snapshotting, uploading only new/modified files to Cloudflare R2, and omitting heavy dependency folders (`.git`, `node_modules`, etc.).
+- Robustness is enhanced by a self-healing package resolver that detects missing pip/npm packages and auto-installs them on the fly.
+
+**Consequence**: The agent can perform complex, multi-turn software development and command-line execution. Disk management requires an automated garbage collection system for stale `/tmp` conversation folders.
+
+---
+
+### ADR-011: Unified Capability Self-Awareness Registry & Rendering Engine
+
+**Decision**: Establish a structured Python capability registry as the single source of truth for the agent's capabilities (Mermaid, SVG, HTML artifacts, sub-agent tools) to build prompts dynamically, and wire a matching frontend renderer (`ResponseRenderer.tsx`) for native visualization.
+
+**Reasoning**:
+- Static system prompts fail to align model output format with frontend rendering support, leading to issues like models outputting diagrams in formats the UI cannot draw.
+- Having a registry (`capability_registry.py`) decouples prompt details from FastAPI code. Adding a capability once immediately updates the system prompt and instructions.
+- Using a React renderer (`marked` + `DOMPurify` + `mermaid.js`) ensures rich visuals (SVGs, charts, flowcharts, LaTeX equations) are drawn safely and beautifully without requiring third-party hosting or heavy processing.
+
+**Consequence**: Ochuko is self-aware of what it can render and outputs structured code, diagrams, or files natively.
 
 ---
 
@@ -2376,3 +2404,36 @@ tests/e2e/
 - [ ] Model rotation: change `ACTIVE_MODEL_DEPLOYMENT` in App Configuration → next request uses new model (no restart)
 - [ ] Budget exhaustion: exhaust daily budget → next request returns 429 with clear message
 - [ ] Maintenance mode: toggle ON in admin → non-admin users get 503 → toggle OFF → service resumes
+
+---
+
+## 18. Incremental Updates — Stateful Sandbox, Capability Registry, and UI/UX Polish
+
+Since the original approval of the system plan, several core components have been upgraded to support advanced developer features, self-awareness capabilities, and dashboard UI/UX polishes.
+
+### 18.1. Custom Sandboxed Execution Engine (Stateful Sandbox)
+- **Architecture Shift**: Migrated from Azure Container App session-based interpreter to a custom, local/container-based sandboxed execution runner ([code_sandbox.py](file:///C:/Users/T14%20GEN%205/Documents/WORK%20AND%20PLAN/AZURE%20SYSTEM-AUTH%20AT%20SCALE/agent-ochuko/backend/app/services/code_sandbox.py)).
+- **Stateful Workspaces**: Subprocess execution is run in a persistent conversation directory (`/tmp/sandbox_{conversation_id}`) to maintain command context and generated file state across multiple chat turns.
+- **Multi-Language Support & Normalization**: Default language execution is set to JavaScript/Node.js, with fallbacks for Python and arbitrary Shell/Bash scripts. Normalized bash paths and Unix-style environment configurations.
+- **Differential Snapshotting**: Prior to execution, file metadata is indexed. Post-execution, only newly created or modified files are uploaded to R2, ignoring bulky version-control and dependency folders (`.git`, `node_modules`, `.venv`, `__pycache__`).
+- **Dynamic Dependency Injection**: Added a 3-attempt package installation auto-retry. If execution fails due to a missing package, the system automatically runs `pip install --target` or `npm install --prefix` and retries.
+- **File Link Interception**: Fixed backend download signature issues and wired a frontend interceptor to map raw local sandbox links generated by the execution engine to clean download actions in the UI.
+
+### 18.2. Unified Capability Self-Awareness Registry
+- **Dynamic System Prompt Construction**: Introduced [capability_registry.py](file:///C:/Users/T14%20GEN%205/Documents/WORK%20AND%20PLAN/AZURE%20SYSTEM-AUTH%20AT%20SCALE/agent-ochuko/backend/app/core/capability_registry.py) as the single source of truth for agent capabilities, supported formats (Mermaid, SVG, LaTeX, Markdown), and sub-agent routing rules.
+- **Formatting Skills**: Added custom project-scoped guidelines/instructions for generating beautiful Word reports (`.agents/skills/docx/SKILL.md`), formatting PDFs (`.agents/skills/pdf/SKILL.md`), and modern web interfaces (`.agents/skills/frontend-design/SKILL.md`).
+- **Enforced File Generation Rule**: The agent is explicitly instructed to execute code and output downloadable files (DOCX, PDF, XLSX, CSV) whenever a user requests document creation, rather than outputting plain text in the chat bubble.
+- **Proactive Web Grounding**: Enforced aggressive search queries in system prompts to ensure real-time Google search grounding is triggered prior to synthesizing responses for current events or documentation.
+- **Native Frontend Rendering**: Integrated `ResponseRenderer.tsx` using `marked`, `DOMPurify` (to sanitize inline SVGs), and `mermaid.js` (to draw diagrams).
+
+### 18.3. UI/UX Polish & Dashboard Enhancements
+- **Dynamic Input Bar**: Redesigned the chat input section to render thumbnails/previews of uploaded documents or images *inside* the chat input area prior to sending, and upgraded the input element from a static text field to an auto-growing textarea.
+- **Reasoning Loop Step Indicators**: Fixed an infinite spinning spinner bug on step loop execution, added visual checkmarks upon completing sub-steps in the OODA loop, and polished indicators by hiding the denominator (`/3` etc.) when steps are completely resolved.
+- **Click-to-Copy Copyable Templates**: Wrapped copyable output templates in formatted `blockquote` and code blocks, and added a quick "Click-to-Copy" button directly on blockquote cards.
+- **Binary File Previewing**: Enabled the right-side artifact panel to detect and render high-fidelity download widgets for binary formats (like `.docx` files) instead of displaying raw text or failing, preventing office viewer wrapping.
+- **Rich Inline Previews**: Renders uploaded images and document thumbnails directly in the chat history alongside user prompts.
+- **Robust Event Polling Fallback**: Replaced fragile real-time subscriptions with a hybrid WebSocket subscription + polling fallback and a 90-second stall guard for image generation jobs.
+- **Download Proxy Endpoint**: Added a `GET /v1/agents/download-proxy` endpoint in [agents.py](file:///C:/Users/T14%20GEN%205/Documents/WORK%20AND%20PLAN/AZURE%20SYSTEM-AUTH%20AT%20SCALE/agent-ochuko/backend/app/api/v1/endpoints/agents.py#L545-L585) to stream R2 files to clients directly as attachments, bypassing cross-origin browser download security policies.
+- **Admin Budget Fix**: Adjusted `admin_service.py` to upsert budgets using a composite constraint on `(user_id, period)` to prevent DB key clashes.
+- **Search Syntax Error Fix**: Resolved a 500 server error caused by database search syntax exceptions during conversational message lookup.
+- **Branding**: Renamed references of "Claude" to "Agent Ochuko" inside instructions and skill sets.

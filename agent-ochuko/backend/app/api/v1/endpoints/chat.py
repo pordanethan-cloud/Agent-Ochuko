@@ -776,6 +776,7 @@ async def chat_stream_generator(
       - [DONE]:              stream termination signal
     """
     client = get_openai_client()
+    image_jobs: List[Dict[str, Any]] = []
 
     last_user_msg = next(
         (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
@@ -1223,6 +1224,12 @@ async def chat_stream_generator(
                                                 job_id = await _enqueue_image_gen(
                                                     user_id, conversation_id, img_prompt, img_style
                                                 )
+                                                image_jobs.append({
+                                                    "job_id": job_id,
+                                                    "prompt": img_prompt,
+                                                    "style": img_style,
+                                                    "status": "pending"
+                                                })
                                                 yield (
                                                     "data: "
                                                     + json.dumps({
@@ -1590,6 +1597,7 @@ async def chat_stream_generator(
                 "tokens_input": prompt_tokens,
                 "tokens_output": completion_tokens,
             }
+            content_parts = {}
             if all_sources:
                 seen_urls: set[str] = set()
                 deduped: List[Dict] = []
@@ -1598,7 +1606,12 @@ async def chat_stream_generator(
                     if url and url not in seen_urls:
                         seen_urls.add(url)
                         deduped.append(s)
-                assistant_msg_insert["content_parts"] = {"sources": deduped}
+                content_parts["sources"] = deduped
+            if image_jobs:
+                content_parts["image_jobs"] = image_jobs
+
+            if content_parts:
+                assistant_msg_insert["content_parts"] = content_parts
 
             supabase = get_supabase_admin()
             supabase.table("messages").insert(assistant_msg_insert).execute()

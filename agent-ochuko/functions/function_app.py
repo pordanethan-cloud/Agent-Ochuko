@@ -966,6 +966,31 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
                 "artistic_style": expanded.get("artistic_style", "")
             }
 
+            # Update the message in the messages table containing this job_id
+            try:
+                msg_res = (
+                    db.table("messages")
+                    .select("id, content_parts")
+                    .contains("content_parts", {"image_jobs": [{"job_id": job_id}]})
+                    .execute()
+                )
+                if msg_res and hasattr(msg_res, "data") and msg_res.data:
+                    for msg in msg_res.data:
+                        msg_id = msg.get("id")
+                        parts = msg.get("content_parts") or {}
+                        jobs_list = parts.get("image_jobs") or []
+                        updated_jobs = []
+                        for job in jobs_list:
+                            if job.get("job_id") == job_id:
+                                job["status"] = "done"
+                                job["image_url"] = image_url
+                            updated_jobs.append(job)
+                        parts["image_jobs"] = updated_jobs
+                        db.table("messages").update({"content_parts": parts}).eq("id", msg_id).execute()
+                        logger.info("Updated message %s content_parts with generated image url: %s", msg_id, image_url)
+            except Exception as msg_update_err:
+                logger.error("Failed to update message content_parts with image url: %s", msg_update_err)
+
             # Increment monthly image_gen quota
             period = datetime.now(timezone.utc).strftime("%Y-%m")
             quota_res = db.table("agent_quotas").select("image_gen_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
