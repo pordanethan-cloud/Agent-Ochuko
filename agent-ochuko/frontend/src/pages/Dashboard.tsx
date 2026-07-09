@@ -3791,7 +3791,19 @@ export const Dashboard: React.FC = () => {
 
   const handleSignOut = async () => {
 
-    await supabase.auth.signOut()
+    try {
+
+      await supabase.auth.signOut()
+
+    } catch (err) {
+
+      console.error('Sign out failed:', err)
+
+    } finally {
+
+      window.location.assign('/login')
+
+    }
 
   }
 
@@ -7360,7 +7372,8 @@ export const Dashboard: React.FC = () => {
 
         ))}
 
-      
+      </div>
+
       {/* App Lock Overlays */}
       {isLocked && (
         <AppLock
@@ -7383,7 +7396,6 @@ export const Dashboard: React.FC = () => {
           onClose={() => setLockMode(null)}
         />
       )}
-</div>
 
     </div>
 
