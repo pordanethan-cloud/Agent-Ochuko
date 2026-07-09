@@ -2307,6 +2307,12 @@ function getFriendlyErrorMessage(message: string): string {
 
   }
 
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("load failed") || lower.includes("network error") || lower.includes("server unavailable")) {
+
+    return "We couldn't reach the server — it may still be starting up. Please try sending your message again in a few seconds."
+
+  }
+
   if (lower.includes("openai") || lower.includes("rate limit") || lower.includes("model")) {
 
     return "The AI engine is temporarily experiencing high traffic. Please try again shortly."
@@ -2660,6 +2666,11 @@ export const Dashboard: React.FC = () => {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [isHeaderSettingsOpen])
+
+  // Warm up the backend on mount so the first message doesn't hit a cold server
+  useEffect(() => {
+    fetch(`${API_BASE}/ready`).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!isArtifactCopyOpen) return
@@ -3898,7 +3909,7 @@ export const Dashboard: React.FC = () => {
 
       const token = session.data.session?.access_token
 
-      const response = await fetch(`${API_BASE}/v1/responses/stream`, {
+      const sendStreamRequest = () => fetch(`${API_BASE}/v1/responses/stream`, {
 
         method: 'POST',
 
@@ -3927,6 +3938,59 @@ export const Dashboard: React.FC = () => {
         signal: abortController.signal,
 
       })
+
+      // Retry transient failures (cold-start / network blips) with backoff so the
+      // first message doesn't fall through while the server is waking up.
+      const MAX_STREAM_ATTEMPTS = 3
+
+      let response: Response | undefined
+
+      for (let attempt = 1; attempt <= MAX_STREAM_ATTEMPTS; attempt++) {
+
+        try {
+
+          response = await sendStreamRequest()
+
+          if ([502, 503, 504].includes(response.status) && attempt < MAX_STREAM_ATTEMPTS) {
+
+            throw new TypeError(`Server unavailable (status ${response.status})`)
+
+          }
+
+          break
+
+        } catch (attemptErr: any) {
+
+          if (attemptErr.name === 'AbortError') throw attemptErr
+
+          const isTransient = attemptErr instanceof TypeError ||
+            /failed to fetch|networkerror|load failed|network request failed|server unavailable/i.test(attemptErr.message || '')
+
+          if (!isTransient || attempt === MAX_STREAM_ATTEMPTS) throw attemptErr
+
+          setMessages((prev) => {
+
+            const updated = [...prev]
+
+            updated[updated.length - 1] = {
+
+              ...updated[updated.length - 1],
+
+              content: 'Waking up the server, one moment...'
+
+            }
+
+            return updated
+
+          })
+
+          await new Promise((resolve) => setTimeout(resolve, 2000 * attempt))
+
+        }
+
+      }
+
+      if (!response) throw new Error('No response from server')
 
       if (!response.ok) {
 
@@ -5752,7 +5816,7 @@ export const Dashboard: React.FC = () => {
 
         {/* Header */}
 
-        <header className="h-14 border-b border-[#1a1c1f] bg-[#0a0b0d]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0">
+        <header className="relative z-30 h-14 border-b border-[#1a1c1f] bg-[#0a0b0d]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0">
 
           <div className="flex items-center gap-3.5">
 
