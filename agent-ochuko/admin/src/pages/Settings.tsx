@@ -109,7 +109,7 @@ export function Settings() {
       <Section title="Registration & Access">
         {val("maintenance_mode") === "true" && (
           <div className="mb-4 p-3 bg-amber-900/30 border border-amber-700/40 rounded-lg text-amber-300 text-xs">
-            ⚠️ Maintenance mode is ON — all non-admin requests return 503.
+            Warning: Maintenance mode is ON — all non-admin requests return 503.
           </div>
         )}
         <Field label="Registration Cap" hint="Max registered users allowed.">

@@ -1057,6 +1057,7 @@ async def chat_stream_generator(
     previous_response_id: Optional[str] = None,
     tz: Optional[str] = None,
     local_time: Optional[str] = None,
+    user: Optional[Dict[str, Any]] = None,
 ):
     """
     Streams a response from the Azure OpenAI Responses API.
@@ -1127,11 +1128,23 @@ async def chat_stream_generator(
                 "--- END CONTEXT ---\n\n"
             )
 
+        # ── Resolve user preferred name context ──
+        user_metadata = user.get("user_metadata", {}) if user else {}
+        preferred_name = user_metadata.get("preferred_name") or user_metadata.get("full_name") or user_metadata.get("name")
+        user_context = ""
+        if preferred_name:
+            user_context = (
+                f"\n\n--- USER INFORMATION ---\n"
+                f"User's Preferred Name: {preferred_name}\n"
+                f"Address the user as {preferred_name} when appropriate and natural.\n"
+                f"--- END USER INFORMATION ---\n\n"
+            )
+
         # ── System prompt: lite for discuss/nano, full for think/solve ──
         if routing_mode in ("discuss", "nano"):
-            full_system = _OCHUKO_LITE_RULE + "\n\n" + time_context + system_prompt
+            full_system = _OCHUKO_LITE_RULE + "\n\n" + user_context + time_context + system_prompt
         else:
-            full_system = _OCHUKO_RULE + "\n\n" + build_capability_section() + "\n\n" + time_context + system_prompt
+            full_system = _OCHUKO_RULE + "\n\n" + build_capability_section() + "\n\n" + user_context + time_context + system_prompt
 
         # ── Latest user message for intent detection ──
         _latest_user_msg = next(
@@ -2010,6 +2023,7 @@ async def stream_chat(
             previous_response_id=previous_response_id,
             tz=tz,
             local_time=local_time,
+            user=user,
         ),
         media_type="text/event-stream",
     )

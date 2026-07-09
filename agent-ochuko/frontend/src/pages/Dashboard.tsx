@@ -2447,9 +2447,36 @@ const LazyMessage: React.FC<{
 }
 
 
+const saveConvoCache = (id: string, messages: Message[], mode: string) => {
+  try {
+    const cacheKey = `convo_cache_${id}`
+    localStorage.setItem(cacheKey, JSON.stringify({ messages, mode }))
+
+    let cachedIds: string[] = []
+    try {
+      const rawIds = localStorage.getItem('cached_convo_ids')
+      cachedIds = rawIds ? JSON.parse(rawIds) : []
+    } catch {}
+
+    cachedIds = cachedIds.filter(cid => cid !== id)
+    cachedIds.push(id)
+
+    if (cachedIds.length > 20) {
+      const oldestId = cachedIds.shift()
+      if (oldestId) {
+        localStorage.removeItem(`convo_cache_${oldestId}`)
+      }
+    }
+    localStorage.setItem('cached_convo_ids', JSON.stringify(cachedIds))
+  } catch (e) {
+    console.warn("Failed to save conversation cache to localStorage:", e)
+  }
+}
+
 export const Dashboard: React.FC = () => {
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [preferredName, setPreferredName] = useState<string | null>(null)
 
   const [isLocked, setIsLocked] = useState(() => !!localStorage.getItem('app_lock_pin'))
   const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
@@ -2520,13 +2547,37 @@ export const Dashboard: React.FC = () => {
     }
   }, [isLocked])
 
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const cachedId = localStorage.getItem('active_conversation_id')
+      if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
+        const raw = localStorage.getItem(`convo_cache_${cachedId}`)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          return parsed.messages || []
+        }
+      }
+    } catch {}
+    return []
+  })
 
   const [input, setInput] = useState('')
 
   const [isStreaming, setIsStreaming] = useState(false)
 
-  const [mode, setMode] = useState<'think' | 'solve' | 'discuss'>('discuss')
+  const [mode, setMode] = useState<'think' | 'solve' | 'discuss'>(() => {
+    try {
+      const cachedId = localStorage.getItem('active_conversation_id')
+      if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
+        const raw = localStorage.getItem(`convo_cache_${cachedId}`)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          return parsed.mode || 'discuss'
+        }
+      }
+    } catch {}
+    return 'discuss'
+  })
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
@@ -2981,7 +3032,14 @@ export const Dashboard: React.FC = () => {
     }
   }
 
-  const [conversations, setConversations] = useState<any[]>([])
+  const [conversations, setConversations] = useState<any[]>(() => {
+    try {
+      const cached = localStorage.getItem('local_conversations')
+      return cached ? JSON.parse(cached) : []
+    } catch {
+      return []
+    }
+  })
 
   const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
 
@@ -3240,6 +3298,8 @@ export const Dashboard: React.FC = () => {
 
         setConversations(data)
 
+        localStorage.setItem('local_conversations', JSON.stringify(data))
+
       }
 
     } catch (e) {
@@ -3332,6 +3392,26 @@ export const Dashboard: React.FC = () => {
 
       setWebSearchStatus('idle')
 
+    }
+
+    // --- SWR Cache Read ---
+    const cacheKey = `convo_cache_${id}`
+    const cachedData = localStorage.getItem(cacheKey)
+    if (cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData)
+        if (parsed && Array.isArray(parsed.messages)) {
+          setMessages(parsed.messages)
+          setMode(convoMode)
+          setActiveConversationId(id)
+          localStorage.setItem('active_conversation_id', id)
+        }
+      } catch (e) {
+        console.warn("Failed to load cached conversation:", e)
+      }
+    } else {
+      // Clear if no cache to avoid flicker
+      setMessages([])
     }
 
     try {
@@ -3480,6 +3560,9 @@ export const Dashboard: React.FC = () => {
 
         setMode(convoMode)
 
+        // --- SWR Cache Write ---
+        saveConvoCache(id, mapped, convoMode)
+
         setIsSidebarOpen(false)
 
         setTimeout(() => inputRef.current?.focus(), 0)
@@ -3545,6 +3628,10 @@ export const Dashboard: React.FC = () => {
       if (user) {
 
         setUserEmail(user.email || 'User')
+
+        const metadata = user.user_metadata || {}
+        const name = metadata.preferred_name || metadata.full_name || metadata.name || user.email?.split('@')[0] || 'User'
+        setPreferredName(name)
 
         fetchConversations()
 
@@ -5585,9 +5672,9 @@ export const Dashboard: React.FC = () => {
 
             <div className="truncate">
 
-              <p className="text-[9px] text-brand-muted uppercase font-bold tracking-widest">Authenticated</p>
+              <p className="text-[11px] text-brand-text font-bold truncate">{preferredName}</p>
 
-              <p className="text-[11px] text-brand-text font-medium truncate mt-0.5">{userEmail}</p>
+              <p className="text-[9.5px] text-brand-muted truncate mt-0.5">{userEmail}</p>
 
             </div>
 
