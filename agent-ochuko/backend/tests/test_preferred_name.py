@@ -55,4 +55,4 @@ async def test_preferred_name_injection_in_system_prompt(mock_get_client, mock_s
     system_msg = [m for m in messages_input if m["role"] == "system"][0]
     
     assert "Okon" in system_msg["content"]
-    assert "Address the user as Okon" in system_msg["content"]
+    assert "Address naturally, sparingly" in system_msg["content"]

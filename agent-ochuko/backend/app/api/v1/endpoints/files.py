@@ -7,8 +7,11 @@ import uuid
 import logging
 import os
 from typing import Any, Dict
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
+import httpx
+from jose import jwt, JWTError
 
 from app.core.jwt_validator import verify_jwt
 from app.services.supabase_admin import get_supabase_admin
@@ -85,3 +88,113 @@ async def get_upload_sas(
     except Exception as e:
         logger.error(f"Failed to generate upload SAS URL for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate upload target: {str(e)}")
+
+
+@router.get("/download-proxy", summary="Proxy download of a remote file to conserve R2 storage")
+async def download_file_proxy(
+    url: str = Query(..., description="Target file URL to download"),
+    filename: str = Query(None, description="Filename for disposition"),
+    token: str = Query(None, description="Auth token passed in query string for browser redirects"),
+    request: Request = None
+):
+    """
+    Acts as a pass-through proxy to stream files from remote URLs (like GitHub).
+    This ensures that large files do not consume Cloudflare R2 storage while
+    remaining downloadable by the user.
+    """
+    # 1. Extract token from Header or Query
+    auth_token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        auth_token = auth_header.split(" ")[1]
+    elif token:
+        auth_token = token
+
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="Authentication token required.")
+
+    # 2. Validate token
+    jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
+    if not jwt_secret:
+        raise HTTPException(status_code=500, detail="JWT validator is not configured.")
+
+    try:
+        jwt.decode(
+            auth_token, jwt_secret, algorithms=["HS256"], options={"verify_aud": False}
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired authentication token.")
+
+    # 3. Stream validation & fetching
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid URL protocol. Only HTTP/HTTPS are supported.")
+
+    if not filename:
+        try:
+            filename = url.split("/")[-1].split("?")[0]
+        except Exception:
+            filename = "downloaded_file"
+
+    async def file_streamer():
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream("GET", url) as response:
+                    if response.status_code != 200:
+                        logger.error("Failed to fetch file from remote source: HTTP %d", response.status_code)
+                        return
+                    async for chunk in response.iter_bytes(chunk_size=1024 * 64):
+                        yield chunk
+        except Exception as e:
+            logger.error("Error streaming file from %s: %s", url, e)
+
+    # Guess MIME type
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(filename)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+
+    disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
+    headers = {
+        "Content-Disposition": f"{disposition}; filename=\"{filename}\""
+    }
+
+    return StreamingResponse(
+        file_streamer(),
+        media_type=mime_type,
+        headers=headers
+    )
+
+
+@router.get("/sandbox/{conversation_id}/{filename}", summary="Serve sandboxed files locally during development/testing")
+async def serve_sandbox_file(
+    conversation_id: str,
+    filename: str
+):
+    """
+    Serves a generated file from the local workspace sandbox directory.
+    """
+    # Standardize path matching execute_code_in_sandbox
+    work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
+    file_path = os.path.join(work_dir, filename)
+
+    if not os.path.exists(file_path):
+        # Check case-insensitive fallback just in case
+        for f in os.listdir(work_dir) if os.path.exists(work_dir) else []:
+            if f.lower() == filename.lower():
+                file_path = os.path.join(work_dir, f)
+                break
+        else:
+            raise HTTPException(status_code=404, detail="File not found in sandbox.")
+
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+
+    # Serve file
+    return FileResponse(
+        path=file_path,
+        media_type=mime_type,
+        filename=filename
+    )
+

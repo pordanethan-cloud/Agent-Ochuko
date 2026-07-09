@@ -311,9 +311,29 @@ Object (principal) ID=3d5c8611-af84-4ed4-a0bf-34d0e18d98ee
 - [ ] Container Apps environment created with Managed Identity enabled
 - [ ] Function App created with Managed Identity + Key Vault access
 - [ ] All credentials stored in Key Vault (not on your computer!)
+- [ ] Cost Management Reader role assigned to the Container App's Managed Identity
+
+---
+
+## Service 9 — Azure Cost Management RBAC (for Usage & Balance Dashboard)
+
+To display actual Azure subscription costs and remaining credit balances on the Admin Usage page, the Container App's Managed Identity needs read permissions for cost data at the subscription level.
+
+1. **Assign Cost Management Reader Role**:
+   - In the Azure Portal, navigate to your **Subscription** resource.
+   - Click **Access control (IAM)** in the left sidebar.
+   - Click **+ Add** → **Add role assignment**.
+   - Search for and select the **Cost Management Reader** role, then click **Next**.
+   - Under **Assign access to**, select **Managed identity**.
+   - Click **+ Select members**, choose your Subscription, select your Container App's Managed Identity, and click **Select**.
+   - Click **Review + assign** to save.
+
+> [!NOTE]
+> If these permissions are not yet configured or when running in local development mode, the backend automatically falls back to a database-driven token consumption pricing aggregator so that the dashboard remains fully functional.
 
 ---
 
 ## Next Step
 
 → Proceed to `03_supabase_setup.md`
+

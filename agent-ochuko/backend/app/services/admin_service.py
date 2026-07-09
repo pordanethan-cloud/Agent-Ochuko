@@ -415,3 +415,117 @@ def _days_ago_iso(days: int) -> str:
     from datetime import timedelta
     dt = datetime.now(timezone.utc) - timedelta(days=days)
     return dt.isoformat()
+
+
+async def get_azure_billing_info() -> Dict[str, Any]:
+    """
+    Fetch the accumulated Azure cost for the current month and compare it
+    against the configured credit limit to calculate the remaining balance.
+    Falls back to a token-cost database calculation if Azure credentials/IDs are missing.
+    """
+    import os
+    import httpx
+    from azure.identity import DefaultAzureCredential
+
+    db = get_supabase_admin()
+    
+    # 1. Fetch limit from admin_settings
+    limit = 150.00
+    try:
+        limit_setting = db.table("admin_settings").select("value").eq("key", "azure_monthly_credit_limit").maybe_single().execute()
+        if limit_setting.data:
+            limit = float(limit_setting.data.get("value", 150.00))
+    except Exception:
+        pass
+
+    subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+    cost = 0.0
+    is_fallback = True
+
+    # 2. Try querying Azure Cost Management API if subscription ID is present
+    if subscription_id:
+        try:
+            credential = DefaultAzureCredential()
+            token_obj = credential.get_token("https://management.azure.com/.default")
+            access_token = token_obj.token
+
+            url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.CostManagement/query?api-version=2021-10-01"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+
+            today = datetime.now(timezone.utc)
+            start_date = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT00:00:00Z")
+            end_date = today.strftime("%Y-%m-%dT23:59:59Z")
+
+            payload = {
+                "type": "ActualCost",
+                "timeframe": "Custom",
+                "timePeriod": {
+                    "from": start_date,
+                    "to": end_date
+                },
+                "dataset": {
+                    "granularity": "None",
+                    "aggregation": {
+                        "totalCost": {
+                            "name": "PreTaxCost",
+                            "function": "Sum"
+                        }
+                    }
+                }
+            }
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload, timeout=10.0)
+                if response.status_code == 200:
+                    resp_data = response.json()
+                    rows = resp_data.get("properties", {}).get("rows", [])
+                    if rows and len(rows) > 0 and len(rows[0]) > 0:
+                        cost = float(rows[0][0])
+                        is_fallback = False
+                        logger.info("Successfully fetched actual cost from Azure API: %f", cost)
+                else:
+                    logger.warning("Azure Cost API returned status %d: %s", response.status_code, response.text)
+        except Exception as e:
+            logger.warning("Azure Cost API request failed, falling back to database token estimate: %s", e)
+
+    # 3. Fallback: Estimate OpenAI token cost for the month from database
+    if is_fallback:
+        try:
+            first_day = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+            res = (
+                db.table("messages")
+                .select("tokens_input, tokens_output, model")
+                .eq("role", "assistant")
+                .gte("created_at", first_day)
+                .execute()
+            )
+            total_est = 0.0
+            for msg in (res.data or []):
+                model = msg.get("model") or ""
+                t_in = msg.get("tokens_input") or 0
+                t_out = msg.get("tokens_output") or 0
+
+                # Current Azure OpenAI rates (per token)
+                if model == "gpt-5.4": # Think (GPT-4o)
+                    total_est += (t_in * 0.0000025) + (t_out * 0.0000100)
+                elif model in ("gpt-5.4-mini", "gpt-5.4-pro"): # Solve (GPT-4o-mini)
+                    total_est += (t_in * 0.00000015) + (t_out * 0.00000060)
+                elif model == "gpt-5.4-nano": # Discuss (Nano)
+                    total_est += (t_in * 0.00000050) + (t_out * 0.00000150)
+                else:
+                    total_est += (t_in * 0.00000015) + (t_out * 0.00000060)
+
+            cost = round(total_est, 2)
+            logger.info("Computed database token cost fallback: %f", cost)
+        except Exception as db_err:
+            logger.error("Failed to calculate fallback token cost: %s", db_err)
+
+    return {
+        "azure_actual_cost": cost,
+        "azure_credit_limit": limit,
+        "azure_is_fallback": is_fallback,
+        "azure_balance": round(max(0.0, limit - cost), 2)
+    }

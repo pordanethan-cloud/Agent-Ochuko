@@ -155,7 +155,7 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
       <style>{`
         @keyframes shake {
           0%, 100% { transform: translateX(0); }

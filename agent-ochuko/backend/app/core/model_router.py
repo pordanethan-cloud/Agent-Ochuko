@@ -33,6 +33,21 @@ _TRIVIAL_PATTERNS = [
 # Compiled once at module load
 _TRIVIAL_RE = re.compile("|".join(_TRIVIAL_PATTERNS), re.IGNORECASE)
 
+# Whitelist topics for explicitly simple informational lookup queries
+_SIMPLE_QUERY_PATTERNS = [
+    r"\b(weather|temperature|forecast|rain|sunny|wind|humidity|climate)\b",
+    r"\b(score|scores|match|matches|football|soccer|basketball|nba|nfl|mlb|game|games|standings|fixtures|playoff|tournament)\b",
+    r"\b(time\s*in|timezone|what\s*time|local\s*time)\b",
+]
+
+_SIMPLE_QUERY_RE = re.compile("|".join(_SIMPLE_QUERY_PATTERNS), re.IGNORECASE)
+
+# Whitelist prefixes for short lookup questions
+_SIMPLE_PREFIX_RE = re.compile(
+    r"^(who\s*is|what\s*is|where\s*is|when\s*was|how\s*old\s*is|capital\s*of|define|meaning\s*of)\b",
+    re.IGNORECASE
+)
+
 
 @dataclass
 class RoutingDecision:
@@ -55,6 +70,30 @@ def _is_trivial(message_text: str) -> bool:
     # Very short messages that don't look like code or structured content
     if len(stripped) <= 8 and not any(c in stripped for c in "{}[]()=<>|&;"):
         return True
+    return False
+
+
+def _is_simple_request(message_text: str) -> bool:
+    """
+    Check if a message is explicitly a simple informational lookup query
+    (weather, sports scores, basic fact lookup prefixes) that is short.
+    """
+    if not message_text:
+        return False
+    stripped = message_text.strip()
+    
+    # Simple requests must be short (e.g. <= 90 characters) to avoid false positives on longer complex prompts
+    if len(stripped) > 90:
+        return False
+        
+    # Check if it explicitly matches weather, time, or sports patterns
+    if _SIMPLE_QUERY_RE.search(stripped):
+        return True
+        
+    # Check if it is a short question starting with simple lookup prefixes
+    if _SIMPLE_PREFIX_RE.match(stripped):
+        return True
+        
     return False
 
 
@@ -133,6 +172,21 @@ async def route(
             routing_mode="nano",
             routing_reason=(
                 f"Nano intercepted: trivial message "
+                f"(turn {nano_turn_count + 1}/{nano_max_turns})"
+            ),
+            was_intercepted=True,
+        )
+
+    # ── Layer 1b: Simple Query Interceptor ──────────────────────────────
+    # For THINK/SOLVE mode: if the message is explicitly a simple informational request
+    # and we haven't exceeded NANO_MAX_TURNS, route to nano using the discuss prompt ruleset.
+    if _is_simple_request(user_message) and nano_turn_count < nano_max_turns:
+        return RoutingDecision(
+            deployment=nano_deployment,
+            system_prompt=discuss_prompt,
+            routing_mode="nano",
+            routing_reason=(
+                f"Nano intercepted: simple query "
                 f"(turn {nano_turn_count + 1}/{nano_max_turns})"
             ),
             was_intercepted=True,

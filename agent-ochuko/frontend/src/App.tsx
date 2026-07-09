@@ -4,6 +4,7 @@ import { Login } from './pages/Login'
 import { AuthCallback } from './pages/AuthCallback'
 import { Dashboard } from './pages/Dashboard'
 import { SharedView } from './pages/SharedView'
+import { Capabilities } from './pages/Capabilities'
 import { ProtectedRoute } from './components/ProtectedRoute'
 
 const App: React.FC = () => {
@@ -13,6 +14,7 @@ const App: React.FC = () => {
         <Route path="/login" element={<Login />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/shared/:token" element={<SharedView />} />
+        <Route path="/capabilities" element={<Capabilities />} />
         <Route
           path="/"
           element={
