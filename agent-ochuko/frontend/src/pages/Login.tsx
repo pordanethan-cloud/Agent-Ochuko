@@ -13,6 +13,8 @@ export const Login: React.FC = () => {
   const [password, setPassword] = useState('')
   const [preferredName, setPreferredName] = useState('')
 
+
+
   const handleGoogleLogin = async () => {
     setLoading(true)
     setError(null)
@@ -92,7 +94,7 @@ export const Login: React.FC = () => {
   }
 
   return (
-    <div className="relative min-h-screen bg-brand-bg flex items-center justify-center px-4 overflow-hidden selection:bg-brand-accent/20">
+    <div className="relative min-h-screen bg-brand-bg flex flex-col items-center justify-center px-4 overflow-hidden selection:bg-brand-accent/20">
       
       {/* Premium Warm Ambient Glow Background */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-brand-accent/5 rounded-full blur-[140px] pointer-events-none" />
@@ -194,19 +196,20 @@ export const Login: React.FC = () => {
         </div>
 
         {/* Action Area: Warm-themed Google button */}
-        <div className="space-y-4">
+        <div className="flex flex-col items-center w-full gap-4 mt-2">
           <button
             type="button"
             onClick={handleGoogleLogin}
             disabled={loading}
-            className="w-full h-11 bg-[#161412] hover:bg-[#1f1b19] border border-[#2d2722] hover:border-[#c5a880]/30 text-[#f5f2eb] font-medium rounded-xl flex items-center justify-center gap-3 transition-all duration-200 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none group shadow-lg shadow-black/40"
+            className="w-full h-11 bg-[#161412] hover:bg-[#1f1b19] border border-[#2d2722] hover:border-[#c5a880]/30 text-[#f5f2eb] font-semibold rounded-xl flex items-center justify-center gap-3 transition-all duration-200 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none shadow-lg shadow-black/40"
+            title="Sign in with Google"
           >
             {loading ? (
               <span className="w-5 h-5 border-2 border-[#f5f2eb]/30 border-t-[#f5f2eb] rounded-full animate-spin" />
             ) : (
               <>
                 {/* SVG for Google logo */}
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
                   <path
                     fill="#EA4335"
                     d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.213-5.26 4.758l3.528 2.733c2.062-1.9 3.245-4.702 3.245-8.02 0-.61-.052-1.226-.157-1.833z"
@@ -224,13 +227,13 @@ export const Login: React.FC = () => {
                     d="M4.67 8.16C5.7 5.06 8.59 2.76 12 2.76c1.8 0 3.42.62 4.7 1.83l3.528-3.528C17.97.87 15.22 0 12 0 7.27 0 3.18 2.85 1.18 6.94l3.49 1.22z"
                   />
                 </svg>
-                <span className="text-sm font-semibold tracking-wide text-[#f5f2eb]">Google Authenticate</span>
+                <span>Continue with Google</span>
               </>
             )}
           </button>
 
           {/* Toggle form type */}
-          <p className="text-center text-xs text-brand-muted font-normal mt-6">
+          <p className="text-center text-xs text-brand-muted font-normal mt-1">
             {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
             <button
               type="button"
@@ -246,13 +249,13 @@ export const Login: React.FC = () => {
           </p>
 
           {error && (
-            <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400 text-center leading-relaxed">
+            <div className="w-full p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400 text-center leading-relaxed">
               {error}
             </div>
           )}
 
           {success && (
-            <div className="p-3 bg-emerald-950/40 border border-emerald-900/50 rounded-xl text-xs text-emerald-400 text-center leading-relaxed">
+            <div className="w-full p-3 bg-emerald-950/40 border border-emerald-900/50 rounded-xl text-xs text-emerald-400 text-center leading-relaxed">
               {success}
             </div>
           )}
@@ -261,10 +264,11 @@ export const Login: React.FC = () => {
         {/* Footer info */}
         <div className="mt-8 pt-5 border-t border-brand-border/60 flex items-center justify-center gap-2 text-[10px] text-brand-muted/70 font-semibold tracking-wide">
           <Shield className="w-3.5 h-3.5 text-brand-muted/60" />
-          <span>Supabase Cryptographic Authentication Protocol</span>
+          <span>Secured via Supabase Auth & Row-Level Security</span>
         </div>
 
       </div>
+
     </div>
   )
 }

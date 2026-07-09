@@ -1,5 +1,5 @@
 // src/components/Layout.tsx
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet } from "react-router-dom";
 import {
   Users,
   BarChart2,
@@ -19,11 +19,23 @@ const NAV_ITEMS = [
 ];
 
 export function Layout() {
-  const navigate = useNavigate();
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/", { replace: true });
+    try {
+      const keysToRemove: string[] = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)
+        if (key && (key.startsWith('sb-') || key.includes('supabase'))) {
+          keysToRemove.push(key)
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key))
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error("Error signing out from admin:", error);
+    } finally {
+      window.location.href = "/";
+    }
   };
 
   return (

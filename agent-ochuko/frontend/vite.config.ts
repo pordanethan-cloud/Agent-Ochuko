@@ -4,9 +4,14 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
+  server: {
+    port: 5173,
+    strictPort: true
+  },
   plugins: [
     react(),
     VitePWA({
+      selfDestroying: true,
       registerType: 'prompt',
       includeAssets: ['favicon.png', 'favicon.svg'],
       manifest: {

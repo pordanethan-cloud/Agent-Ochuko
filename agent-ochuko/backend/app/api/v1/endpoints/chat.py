@@ -371,11 +371,12 @@ async def _upload_generated_file(
     """
     Uploads a code-interpreter generated file to Cloudflare R2 under
     generated/{conversation_id}/{filename} and saves metadata to generated_files.
-    Returns the public R2 URL.
+    Returns the public R2 URL. Supports smart gzip compression for text assets.
     """
     import boto3 as _boto3
     from botocore.config import Config as _BotoConfig
     import mimetypes
+    import gzip
 
     # Automatically guess correct MIME type if application/octet-stream is passed
     if mime_type == "application/octet-stream" or not mime_type:
@@ -387,43 +388,89 @@ async def _upload_generated_file(
     bucket = os.getenv("R2_BUCKET_NAME", "agent-ochuko-storage")
     public_domain = os.getenv("R2_PUBLIC_DOMAIN", "").rstrip("/")
 
-    # Upload to R2 (sync via thread to avoid blocking event loop)
-    def _do_upload():
-        s3 = _boto3.client(
-            "s3",
-            endpoint_url=os.environ["R2_ENDPOINT"],
-            aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-            aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-            config=_BotoConfig(signature_version="s3v4"),
-        )
-        disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
-        s3.put_object(
-            Bucket=bucket,
-            Key=r2_key,
-            Body=file_bytes,
-            ContentType=mime_type,
-            ContentDisposition=f"{disposition}; filename=\"{filename}\"",
-        )
+    # Check if the file is highly compressible text/code
+    is_compressible = (
+        (mime_type and mime_type.startswith(("text/", "application/json", "application/javascript", "application/xml", "image/svg+xml")))
+        or filename.lower().endswith((".md", ".txt", ".json", ".csv", ".xml", ".html", ".js", ".ts", ".py", ".sh", ".css"))
+    )
 
-    await asyncio.to_thread(_do_upload)
+    original_size = len(file_bytes)
+    upload_bytes = file_bytes
+    content_encoding = None
 
-    r2_url = f"{public_domain}/{r2_key}"
+    if is_compressible:
+        try:
+            compressed = gzip.compress(file_bytes)
+            if len(compressed) < original_size:
+                upload_bytes = compressed
+                content_encoding = "gzip"
+                logger.info("Compressed %s from %d to %d bytes (gzip)", filename, original_size, len(compressed))
+        except Exception as gzip_err:
+            logger.warning("Gzip compression failed for %s: %s", filename, gzip_err)
 
-    # Persist metadata so the frontend can reload download cards on session return
     try:
-        supabase = get_supabase_admin()
-        supabase.table("generated_files").insert({
-            "conversation_id": conversation_id,
-            "user_id": user_id,
-            "filename": filename,
-            "r2_url": r2_url,
-            "size_bytes": len(file_bytes),
-            "mime_type": mime_type,
-        }).execute()
-    except Exception as db_err:
-        logger.warning("Failed to save generated_file metadata: %s", db_err)
+        # Upload to R2 (sync via thread to avoid blocking event loop)
+        def _do_upload():
+            s3 = _boto3.client(
+                "s3",
+                endpoint_url=os.environ["R2_ENDPOINT"],
+                aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+                aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+                config=_BotoConfig(signature_version="s3v4"),
+            )
+            disposition = "inline" if mime_type.startswith(("image/", "application/pdf")) else "attachment"
+            
+            put_kwargs = {
+                "Bucket": bucket,
+                "Key": r2_key,
+                "Body": upload_bytes,
+                "ContentType": mime_type,
+                "ContentDisposition": f"{disposition}; filename=\"{filename}\"",
+            }
+            if content_encoding:
+                put_kwargs["ContentEncoding"] = content_encoding
 
-    return r2_url
+            s3.put_object(**put_kwargs)
+
+        await asyncio.to_thread(_do_upload)
+        r2_url = f"{public_domain}/{r2_key}"
+
+        # Persist metadata so the frontend can reload download cards on session return
+        try:
+            supabase = get_supabase_admin()
+            supabase.table("generated_files").insert({
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "filename": filename,
+                "r2_url": r2_url,
+                "size_bytes": original_size,  # Keep original size for UI reporting
+                "mime_type": mime_type,
+            }).execute()
+        except Exception as db_err:
+            logger.warning("Failed to save generated_file metadata: %s", db_err)
+
+        return r2_url
+
+    except Exception as upload_err:
+        logger.warning("R2 upload failed, falling back to local serving: %s", upload_err)
+        backend_url = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+        local_url = f"{backend_url}/v1/files/sandbox/{conversation_id}/{filename}"
+        
+        # Also persist metadata with the local URL
+        try:
+            supabase = get_supabase_admin()
+            supabase.table("generated_files").insert({
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "filename": filename,
+                "r2_url": local_url,
+                "size_bytes": original_size,
+                "mime_type": mime_type,
+            }).execute()
+        except Exception as db_err:
+            logger.warning("Failed to save generated_file metadata for local fallback: %s", db_err)
+            
+        return local_url
 
 
 # ---------------------------------------------------------------------------
@@ -1133,12 +1180,7 @@ async def chat_stream_generator(
         preferred_name = user_metadata.get("preferred_name") or user_metadata.get("full_name") or user_metadata.get("name")
         user_context = ""
         if preferred_name:
-            user_context = (
-                f"\n\n--- USER INFORMATION ---\n"
-                f"User's Preferred Name: {preferred_name}\n"
-                f"Address the user as {preferred_name} when appropriate and natural.\n"
-                f"--- END USER INFORMATION ---\n\n"
-            )
+            user_context = f"\nUser Name: {preferred_name}. Address naturally, sparingly.\n"
 
         # ── System prompt: lite for discuss/nano, full for think/solve ──
         if routing_mode in ("discuss", "nano"):

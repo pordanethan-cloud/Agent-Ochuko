@@ -243,7 +243,12 @@ async def get_usage(
 ) -> Dict[str, Any]:
     data = admin_service.get_usage_stats(days=days)
     top_users = admin_service.get_top_users(limit=5)
-    return {**data, "top_users": top_users}
+    billing_info = await admin_service.get_azure_billing_info()
+    return {
+        **data,
+        "top_users": top_users,
+        **billing_info
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -3,8 +3,9 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock } from 'lucide-react'
 
+import { useNavigate } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
 
@@ -84,6 +85,8 @@ interface Message {
   routing_reason?: string
 
   fileAttachment?: { name: string; jobType: 'ocr' | 'vision'; url?: string }
+
+  fileAttachments?: { name: string; jobType: 'ocr' | 'vision'; url?: string }[]
 
   sources?: Source[]
 
@@ -382,6 +385,56 @@ function MermaidBlock({ code }: { code: string }) {
 
   }
 
+  const handleDownload = () => {
+    const svgEl = diagramRef.current?.querySelector('svg')
+    if (!svgEl) return
+    const svgString = new XMLSerializer().serializeToString(svgEl)
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
+    const blobURL = window.URL.createObjectURL(svgBlob)
+    const image = new Image()
+    image.onload = () => {
+      const canvas = document.createElement('canvas')
+      const bbox = svgEl.getBoundingClientRect()
+      const width = svgEl.viewBox.baseVal.width || bbox.width || 800
+      const height = svgEl.viewBox.baseVal.height || bbox.height || 600
+      
+      const scale = 2
+      canvas.width = width * scale
+      canvas.height = height * scale
+      const context = canvas.getContext('2d')
+      if (context) {
+        context.fillStyle = '#0d1117'
+        context.fillRect(0, 0, canvas.width, canvas.height)
+        context.scale(scale, scale)
+        context.drawImage(image, 0, 0, width, height)
+        const pngURL = canvas.toDataURL('image/png')
+        const downloadLink = document.createElement('a')
+        downloadLink.href = pngURL
+        downloadLink.download = `mermaid_diagram_${Date.now()}.png`
+        document.body.appendChild(downloadLink)
+        downloadLink.click()
+        document.body.removeChild(downloadLink)
+      }
+      window.URL.revokeObjectURL(blobURL)
+    }
+    image.src = blobURL
+  }
+
+  const handleFullscreen = () => {
+    const svgEl = diagramRef.current?.querySelector('svg')
+    if (!svgEl) return
+    const svgString = new XMLSerializer().serializeToString(svgEl)
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
+    const blobUrl = window.URL.createObjectURL(svgBlob)
+    window.dispatchEvent(new CustomEvent('open-file-preview', {
+      detail: {
+        name: 'Mermaid Diagram',
+        type: 'image/svg+xml',
+        url: blobUrl
+      }
+    }))
+  }
+
   return (
 
     <div className="group my-3 relative rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
@@ -467,6 +520,30 @@ function MermaidBlock({ code }: { code: string }) {
           )}
 
         </button>
+
+        {!showSource && (
+          <>
+            {/* Maximize/Fullscreen */}
+            <button
+              type="button"
+              onClick={handleFullscreen}
+              title="Expand Diagram"
+              className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Download */}
+            <button
+              type="button"
+              onClick={handleDownload}
+              title="Download as PNG"
+              className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
 
       </div>
 
@@ -746,27 +823,30 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
 
     } else if (fullMatch.startsWith('http://') || fullMatch.startsWith('https://')) {
 
-      segments.push(
+      // Suppress raw localhost placeholder URLs silently (LLM hallucination artefact)
+      if (!fullMatch.includes('localhost') && !fullMatch.includes('127.0.0.1')) {
+        segments.push(
 
-        <a
+          <a
 
-          key={`${keyBase}-url${match.index}`}
+            key={`${keyBase}-url${match.index}`}
 
-          href={fullMatch}
+            href={fullMatch}
 
-          target="_blank"
+            target="_blank"
 
-          rel="noopener noreferrer"
+            rel="noopener noreferrer"
 
-          className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
+            className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
 
-        >
+          >
 
-          {fullMatch}
+            {fullMatch}
 
-        </a>
+          </a>
 
-      )
+        )
+      }
 
     } else if (fullMatch.startsWith('[')) {
 
@@ -774,10 +854,11 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
 
       let url = match[8]
 
+      // Resolve sandbox paths
       if ((url.includes('/mnt/data/') || url.startsWith('sandbox:')) && generatedFiles) {
         const filename = url.split('/').pop() || '';
-        const matchingFile = generatedFiles.find(gf => 
-          gf.filename?.toLowerCase() === filename.toLowerCase() || 
+        const matchingFile = generatedFiles.find(gf =>
+          gf.filename?.toLowerCase() === filename.toLowerCase() ||
           gf.filename?.toLowerCase().endsWith(filename.toLowerCase())
         );
         if (matchingFile && matchingFile.download_url) {
@@ -785,7 +866,24 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
         }
       }
 
-      const isSandboxLink = url.startsWith('sandbox:') || url.includes('/mnt/data/');
+      // Resolve localhost or placeholder links by matching label text to a generated file
+      if (
+        generatedFiles &&
+        (url.includes('localhost') || url === '#' || url === '' || url === '/') &&
+        label
+      ) {
+        const labelLower = label.trim().toLowerCase();
+        const matchingFile = generatedFiles.find(gf =>
+          gf.filename?.toLowerCase() === labelLower ||
+          labelLower.endsWith(gf.filename?.toLowerCase() || '__never__')
+        );
+        if (matchingFile && matchingFile.download_url) {
+          url = matchingFile.download_url;
+        }
+      }
+
+      const isSandboxLink = (url.startsWith('sandbox:') || url.includes('/mnt/data/')) &&
+        !(url.startsWith('https://') || url.startsWith('http://'));
 
       segments.push(
 
@@ -944,61 +1042,50 @@ const ImagePending: React.FC<{ prompt?: string }> = ({ prompt }) => (
 
 // ── ImageBubble — premium image card shown once generation is done ───────────
 
-const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }) => (
+const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }) => {
+  const handlePreview = () => {
+    const event = new CustomEvent('open-file-preview', {
+      detail: {
+        name: prompt || 'Generated Image',
+        type: 'image/png',
+        url: url
+      }
+    })
+    window.dispatchEvent(event)
+  }
 
-  <div className="flex flex-col gap-2 my-1 group/img">
-
-    <div className="relative rounded-2xl overflow-hidden border border-[#1e2025] shadow-xl shadow-black/50 w-fit max-w-sm">
-
-      <img
-
-        src={url}
-
-        alt={prompt || 'Generated image'}
-
-        className="block w-full max-w-sm object-cover transition-transform duration-500 group-hover/img:scale-[1.02]"
-
-        loading="eager"
-
-      />
-
-      {/* Download overlay on hover */}
-
-      <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-all duration-300 flex items-end justify-end p-3">
-
-        <a
-
-          href={url}
-
-          download
-
-          target="_blank"
-
-          rel="noopener noreferrer"
-
-          className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#ffffff] text-[#08090a] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
-
-          onClick={(e) => e.stopPropagation()}
-
-        >
-
-          ↓ Download
-
-        </a>
-
+  return (
+    <div className="flex flex-col gap-2 my-1 group/img">
+      <div 
+        onClick={handlePreview}
+        className="relative rounded-2xl overflow-hidden border border-[#1e2025] shadow-xl shadow-black/50 w-fit max-w-sm cursor-pointer"
+      >
+        <img
+          src={url}
+          alt={prompt || 'Generated image'}
+          className="block w-full max-w-sm object-cover transition-transform duration-500 group-hover/img:scale-[1.02]"
+          loading="eager"
+        />
+        {/* Download overlay on hover */}
+        <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-all duration-300 flex items-end justify-end p-3">
+          <a
+            href={url}
+            download
+            target="_blank"
+            rel="noopener noreferrer"
+            className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#ffffff] text-[#08090a] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            ↓ Download
+          </a>
+        </div>
       </div>
-
+      {prompt && (
+        <p className="text-[10px] text-brand-muted/70 italic px-1 max-w-[320px]">{prompt}</p>
+      )}
     </div>
-
-    {prompt && (
-
-      <p className="text-[10px] text-brand-muted/70 italic px-1 max-w-[320px]">{prompt}</p>
-
-    )}
-
-  </div>
-
-)
+  )
+}
 
 // ─── Language → file extension map ───────────────────────────────────────────
 
@@ -1290,6 +1377,40 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
               </button>
 
+              <button
+
+                onClick={() => {
+
+                  const event = new CustomEvent('open-file-preview', {
+
+                    detail: {
+
+                      name: `code${ext}`,
+
+                      type: 'text/plain',
+
+                      content: content
+
+                    }
+
+                  })
+
+                  window.dispatchEvent(event)
+
+                  setMenuOpen(false)
+
+                }}
+
+                className="w-full text-left px-3 py-2.5 text-[12px] text-[#c9d1d9] hover:bg-[#21262d] transition-colors flex items-center gap-2 border-t border-[#1e2025]"
+
+              >
+
+                <Maximize2 className="w-3.5 h-3.5 text-brand-text/80" />
+
+                Preview Fullscreen
+
+              </button>
+
             </div>
 
           )}
@@ -1406,7 +1527,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
               <img
 
-                src={`https://www.google.com/s2/favicons?sz=64&domain=${host}`}
+                src={`https://icons.duckduckgo.com/ip3/${host}.ico`}
 
                 alt=""
 
@@ -1414,17 +1535,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
                 onError={(e) => {
 
-                  const target = e.currentTarget as HTMLImageElement;
-
-                  if (!target.src.includes('duckduckgo.com')) {
-
-                    target.src = `https://icons.duckduckgo.com/ip3/${host}.ico`;
-
-                  } else {
-
-                    target.style.display = 'none';
-
-                  }
+                  e.currentTarget.style.display = 'none';
 
                 }}
 
@@ -1490,7 +1601,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
               <img
 
-                src={`https://www.google.com/s2/favicons?sz=32&domain=${(() => {
+                src={`https://icons.duckduckgo.com/ip3/${(() => {
 
                   try {
 
@@ -1510,7 +1621,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
                   }
 
-                })()}`}
+                })()}.ico`}
 
                 alt=""
 
@@ -1518,33 +1629,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
                 onError={(e) => {
 
-                  const target = e.currentTarget as HTMLImageElement;
-
-                  if (!target.src.includes('duckduckgo.com')) {
-
-                    try {
-
-                      let domain = new URL(src.url).hostname;
-
-                      if (domain === 'vertexaisearch.cloud.google.com' && src.title && src.title.includes('.')) {
-
-                        domain = src.title.trim().toLowerCase();
-
-                      }
-
-                      target.src = `https://icons.duckduckgo.com/ip3/${domain}.ico`;
-
-                    } catch (_) {
-
-                      target.style.display = 'none';
-
-                    }
-
-                  } else {
-
-                    target.style.display = 'none';
-
-                  }
+                  e.currentTarget.style.display = 'none';
 
                 }}
 
@@ -2421,11 +2506,92 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: str
 
 // ─── LazyMessage (Virtualized rendering for long message history) ────────────────
 
+const ChatSkeleton: React.FC = () => (
+    <div className="max-w-2xl mx-auto space-y-8 animate-pulse pt-4">
+      {/* Assistant message skeleton */}
+      <div className="flex gap-4 items-start">
+        <div className="w-8 h-8 rounded-lg bg-[#1e2025]/60 border border-[#ffffff]/5 shrink-0" />
+        <div className="flex-1 space-y-3 pt-1">
+          <div className="h-4 bg-[#1e2025]/60 rounded w-1/4" />
+          <div className="h-3 bg-[#1e2025]/40 rounded w-3/4" />
+          <div className="h-3 bg-[#1e2025]/40 rounded w-5/6" />
+          <div className="h-3 bg-[#1e2025]/30 rounded w-1/2" />
+        </div>
+      </div>
+      
+      {/* User message skeleton */}
+      <div className="flex gap-4 items-start justify-end">
+        <div className="flex flex-col items-end space-y-3 w-[70%]">
+          <div className="h-4 bg-[#1e2025]/60 rounded w-1/3" />
+          <div className="h-3 bg-[#1e2025]/40 rounded w-full" />
+          <div className="h-3 bg-[#1e2025]/30 rounded w-2/3" />
+        </div>
+      </div>
+
+      {/* Assistant message skeleton 2 */}
+      <div className="flex gap-4 items-start">
+        <div className="w-8 h-8 rounded-lg bg-[#1e2025]/60 border border-[#ffffff]/5 shrink-0" />
+        <div className="flex-1 space-y-3 pt-1">
+          <div className="h-4 bg-[#1e2025]/60 rounded w-1/5" />
+          <div className="h-3 bg-[#1e2025]/40 rounded w-2/3" />
+          <div className="h-3 bg-[#1e2025]/40 rounded w-4/5" />
+        </div>
+      </div>
+    </div>
+  )
+
+const FileAttachmentChip: React.FC<{
+  attachment: { name: string; jobType: 'ocr' | 'vision'; url?: string }
+}> = ({ attachment }) => {
+  const handlePreview = () => {
+    if (!attachment.url) return
+    const isPdf = attachment.jobType === 'ocr' || attachment.name.toLowerCase().endsWith('.pdf')
+    const event = new CustomEvent('open-file-preview', {
+      detail: {
+        name: attachment.name,
+        type: isPdf ? 'application/pdf' : 'image/png',
+        url: attachment.url
+      }
+    })
+    window.dispatchEvent(event)
+  }
+
+  return attachment.jobType === 'vision' && attachment.url ? (
+    <div 
+      onClick={handlePreview}
+      className="w-full max-w-sm rounded-xl overflow-hidden border border-[#ffffff]/10 bg-[#111316]/20 cursor-pointer hover:border-[#ffffff]/25 transition"
+    >
+      <img
+        src={attachment.url}
+        alt={attachment.name}
+        className="w-full h-auto max-h-64 object-contain"
+      />
+    </div>
+  ) : (
+    <div 
+      onClick={handlePreview}
+      className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20 cursor-pointer hover:bg-[#ffffff]/15 transition"
+    >
+      <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest leading-none">
+          {attachment.jobType === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
+        </p>
+        <p className="text-[13px] text-brand-text/90 font-medium truncate mt-1">
+          {attachment.name}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 const LazyMessage: React.FC<{
   children: React.ReactNode
   estimatedHeight?: number
 }> = ({ children, estimatedHeight = 100 }) => {
   const [isVisible, setIsVisible] = useState(false)
+  const [hasBeenVisible, setHasBeenVisible] = useState(false)
+  const [renderedHeight, setRenderedHeight] = useState<number | null>(null)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -2434,20 +2600,48 @@ const LazyMessage: React.FC<{
     const observer = new IntersectionObserver(
       ([entry]) => {
         setIsVisible(entry.isIntersecting)
+        if (entry.isIntersecting) {
+          setHasBeenVisible(true)
+        }
       },
       {
-        rootMargin: '300px 0px 300px 0px'
+        rootMargin: '800px 0px 800px 0px'
       }
     )
     observer.observe(el)
     return () => {
-      if (el) observer.unobserve(el)
+      observer.unobserve(el)
     }
   }, [])
 
+  useEffect(() => {
+    if (isVisible && ref.current) {
+      const observer = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
+          if (height > 0) {
+            setRenderedHeight(height)
+          }
+        }
+      })
+      observer.observe(ref.current)
+      return () => {
+        observer.disconnect()
+      }
+    }
+  }, [isVisible])
+
+  const heightToUse = renderedHeight !== null ? `${renderedHeight}px` : `${estimatedHeight}px`
+
   return (
-    <div ref={ref} style={{ minHeight: isVisible ? undefined : `${estimatedHeight}px` }}>
-      {isVisible ? children : <div className="h-full w-full" />}
+    <div 
+      ref={ref} 
+      style={{ 
+        minHeight: heightToUse,
+        height: hasBeenVisible ? undefined : heightToUse 
+      }}
+    >
+      {hasBeenVisible ? children : <div className="h-full w-full" />}
     </div>
   )
 }
@@ -2480,9 +2674,11 @@ const saveConvoCache = (id: string, messages: Message[], mode: string) => {
 }
 
 export const Dashboard: React.FC = () => {
+  const navigate = useNavigate()
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [preferredName, setPreferredName] = useState<string | null>(null)
+  const [isFetchingHistory, setIsFetchingHistory] = useState(false)
 
   const [isLocked, setIsLocked] = useState(() => !!localStorage.getItem('app_lock_pin'))
   const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
@@ -2593,6 +2789,7 @@ export const Dashboard: React.FC = () => {
 
   const [isShareModalOpen, setIsShareModalOpen] = useState(false)
   const [sharing, setSharing] = useState(false)
+  const [showCapabilitiesNote, setShowCapabilitiesNote] = useState(() => !localStorage.getItem('dismissed_capabilities_note'))
 
   const handleShareToggle = async (shouldShare: boolean) => {
     if (!activeConversationId || activeConversationId === '00000000-0000-0000-0000-000000000000') return
@@ -2862,17 +3059,30 @@ export const Dashboard: React.FC = () => {
 
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  const [attachedFile, setAttachedFile] = useState<{
-
+  interface AttachedFile {
     name: string
-
     type: string
-
     blobUrl: string
-
     fileId: string
+  }
 
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
+
+  const [previewingFile, setPreviewingFile] = useState<{
+    name: string
+    type: string
+    url?: string
+    content?: string
   } | null>(null)
+
+  useEffect(() => {
+    const handleOpenPreview = (e: Event) => {
+      const customEvent = e as CustomEvent
+      setPreviewingFile(customEvent.detail)
+    }
+    window.addEventListener('open-file-preview', handleOpenPreview)
+    return () => window.removeEventListener('open-file-preview', handleOpenPreview)
+  }, [])
 
   const [pastedText, setPastedText] = useState<{
 
@@ -2999,12 +3209,15 @@ export const Dashboard: React.FC = () => {
         xhr.send(file)
       })
 
-      setAttachedFile({
-        name: file.name,
-        type: file.type,
-        blobUrl: blob_url,
-        fileId: file_id
-      })
+      setAttachedFiles(prev => [
+        ...prev,
+        {
+          name: file.name,
+          type: file.type,
+          blobUrl: blob_url,
+          fileId: file_id
+        }
+      ])
     } catch (err: any) {
       console.error('File upload error:', err)
       alert(`File upload failed: ${err.message || err}`)
@@ -3016,12 +3229,12 @@ export const Dashboard: React.FC = () => {
   }
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    // 1. Check for files (images, PDFs)
     const files = e.clipboardData.files
     if (files && files.length > 0) {
       e.preventDefault()
-      const file = files[0]
-      await uploadFile(file)
+      for (let i = 0; i < files.length; i++) {
+        await uploadFile(files[i])
+      }
       return
     }
 
@@ -3405,6 +3618,8 @@ export const Dashboard: React.FC = () => {
 
     }
 
+    setIsFetchingHistory(true)
+
     // --- SWR Cache Read ---
     const cacheKey = `convo_cache_${id}`
     const cachedData = localStorage.getItem(cacheKey)
@@ -3463,17 +3678,46 @@ export const Dashboard: React.FC = () => {
 
           if (m.role === 'system') {
 
-            const match = m.content.match(/File URL:\s*(https?:\/\/[^\s\)]+)/i)
+            // Match R2 / Azure Blob URLs which may have query strings
+            const match = m.content.match(/File URL:\s*(https?:\/\/\S+)/i)
 
             if (match && mapped.length > 0) {
 
-              const url = match[1].replace(/^[).,]+|[).,]+$/g, '')
+              // Strip trailing punctuation (not query strings)
+              const url = match[1].replace(/[),.'"]+$/, '')
 
-              const lastMsg = mapped[mapped.length - 1]
+              // Walk backwards to find the nearest user message to map this URL to
+              for (let mi = mapped.length - 1; mi >= 0; mi--) {
 
-              if (lastMsg.role === 'user' && lastMsg.fileAttachment) {
+                const candidate = mapped[mi]
 
-                lastMsg.fileAttachment.url = url
+                if (candidate.role === 'user') {
+
+                  // 1. Single attachment compatibility
+                  if (candidate.fileAttachment && !candidate.fileAttachment.url) {
+                    candidate.fileAttachment.url = url
+                    break
+                  }
+
+                  // 2. Multiple attachments
+                  if (candidate.fileAttachments && candidate.fileAttachments.length > 0) {
+                    // Try to match by filename in URL
+                    const matchingAttachment = candidate.fileAttachments.find(
+                      att => !att.url && url.toLowerCase().includes(att.name.toLowerCase())
+                    )
+                    if (matchingAttachment) {
+                      matchingAttachment.url = url
+                      break
+                    }
+                    // Fallback to the first empty URL slot
+                    const emptyAttachment = candidate.fileAttachments.find(att => !att.url)
+                    if (emptyAttachment) {
+                      emptyAttachment.url = url
+                      break
+                    }
+                  }
+
+                }
 
               }
 
@@ -3509,6 +3753,8 @@ export const Dashboard: React.FC = () => {
 
             const isVision = m.content.startsWith('[Image Analysis:')
 
+            const isMulti = m.content.startsWith('[Analysis for:')
+
             if (isOcr || isVision) {
 
               const jobType = isOcr ? 'ocr' : 'vision'
@@ -3518,6 +3764,30 @@ export const Dashboard: React.FC = () => {
               const name = nameMatch ? nameMatch[1] : (isOcr ? 'document.pdf' : 'image.png')
 
               msgObj.fileAttachment = { name, jobType }
+
+            } else if (isMulti) {
+
+              const namesMatch = m.content.match(/^\[Analysis for:\s*([^\]]+)\]/)
+
+              if (namesMatch) {
+
+                const names = namesMatch[1].split(',').map((n: string) => n.trim())
+
+                msgObj.fileAttachments = names.map((name: string) => {
+
+                  const isPdf = name.toLowerCase().endsWith('.pdf')
+
+                  return {
+
+                    name,
+
+                    jobType: isPdf ? 'ocr' : 'vision'
+
+                  }
+
+                })
+
+              }
 
             }
 
@@ -3583,6 +3853,10 @@ export const Dashboard: React.FC = () => {
     } catch (e) {
 
       console.error("Failed to load message history:", e)
+
+    } finally {
+
+      setIsFetchingHistory(false)
 
     }
 
@@ -3680,16 +3954,7 @@ export const Dashboard: React.FC = () => {
 
       const mod = e.ctrlKey || e.metaKey
 
-      // Block Ctrl+R / Ctrl+Shift+R (browser reload / force-reload) — prevents
-      // Mermaid chart renderer from hijacking these shortcuts mid-session.
-
-      if (mod && (e.key === 'r' || e.key === 'R')) {
-
-        e.preventDefault()
-
-        return
-
-      }
+      // Standard page reloads (Ctrl+R / Ctrl+Shift+R) are allowed.
 
       // Ctrl/Cmd + Shift + N → new session
 
@@ -3741,9 +4006,9 @@ export const Dashboard: React.FC = () => {
 
       }
 
-      // Escape → close sidebar
-
       if (e.key === 'Escape') {
+
+        setPreviewingFile(null)
 
         setIsSidebarOpen(false)
 
@@ -3761,15 +4026,43 @@ export const Dashboard: React.FC = () => {
 
   // Check scroll position to determine if we should stay locked to the bottom
 
+  const [showScrollBottomButton, setShowScrollBottomButton] = useState(false)
+
   const handleScroll = () => {
 
     const container = scrollContainerRef.current
 
     if (container) {
 
-      const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100
+      const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150
 
       isAutoScrollEnabledRef.current = isAtBottom
+
+      setShowScrollBottomButton(!isAtBottom)
+
+    }
+
+  }
+
+  // Smooth scroll to the bottom of the chat list
+
+  const scrollToBottom = () => {
+
+    const container = scrollContainerRef.current
+
+    if (container) {
+
+      container.scrollTo({
+
+        top: container.scrollHeight,
+
+        behavior: 'smooth'
+
+      })
+
+      isAutoScrollEnabledRef.current = true
+
+      setShowScrollBottomButton(false)
 
     }
 
@@ -4599,17 +4892,19 @@ export const Dashboard: React.FC = () => {
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    await uploadFile(file)
+    const files = e.target.files
+    if (!files || files.length === 0) return
+    for (let i = 0; i < files.length; i++) {
+      await uploadFile(files[i])
+    }
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
   }
 
-  const triggerAgentJob = async (jobType: 'ocr' | 'vision', blobUrl: string, promptText?: string) => {
+  const triggerAgentJobs = async (files: AttachedFile[], promptText?: string) => {
 
-    const historyBeforeJob = [...messages]
+    const historyBeforeJobs = [...messages]
 
     setIsStreaming(true)
 
@@ -4625,33 +4920,39 @@ export const Dashboard: React.FC = () => {
 
     }
 
-    // Capture file metadata now — before any setState calls clear it
+    const attachments = files.map(f => {
 
-    const fileName = attachedFile?.name || (jobType === 'ocr' ? 'document.pdf' : 'image.png')
+      const isPdf = f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
 
-    const fileAttachment: Message['fileAttachment'] = { name: fileName, jobType, url: blobUrl }
+      return {
 
-    // Plain-text version stored to DB (content field must be a string)
+        name: f.name,
+
+        jobType: (isPdf ? 'ocr' : 'vision') as 'ocr' | 'vision',
+
+        url: f.blobUrl
+
+      }
+
+    })
+
+    const fileNames = files.map(f => f.name).join(', ')
 
     const userMsgText = promptText
 
-      ? `[${jobType === 'ocr' ? 'Document' : 'Image'} Analysis: ${fileName}] ${promptText}`
+      ? `[Analysis for: ${fileNames}] ${promptText}`
 
-      : `[${jobType === 'ocr' ? 'Document' : 'Image'} Analysis: ${fileName}]`
-
-    // Use functional update to avoid stale messages closure
+      : `[Analysis for: ${fileNames}]`
 
     setMessages((prev) => [
 
       ...prev,
 
-      { role: 'user', content: userMsgText, fileAttachment },
+      { role: 'user', content: userMsgText, fileAttachments: attachments },
 
-      { role: 'assistant', content: '' }
+      { role: 'assistant', content: 'Cognitive model preparing backend analysis tasks...' }
 
     ])
-
-    setAttachedFile(null)
 
     try {
 
@@ -4661,235 +4962,207 @@ export const Dashboard: React.FC = () => {
 
       if (!token) throw new Error('Authentication session not found.')
 
-      const endpoint = jobType === 'ocr' ? '/v1/agents/ocr' : '/v1/agents/vision'
+      // 1. Launch all jobs in parallel
 
-      const requestBody = jobType === 'ocr'
+      const jobPromises = files.map(async (file) => {
 
-        ? { conversation_id: convoId, blob_url: blobUrl }
+        const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 
-        : { conversation_id: convoId, blob_url: blobUrl, prompt: promptText || 'Describe the content in this image.' }
+        const jobType = isPdf ? 'ocr' : 'vision'
 
-      const res = await fetch(`${API_BASE}${endpoint}`, {
+        const endpoint = isPdf ? '/v1/agents/ocr' : '/v1/agents/vision'
 
-        method: 'POST',
+        const requestBody = isPdf
 
-        headers: {
+          ? { conversation_id: convoId, blob_url: file.blobUrl }
 
-          'Content-Type': 'application/json',
+          : { conversation_id: convoId, blob_url: file.blobUrl, prompt: promptText || 'Describe the content in this image.' }
 
-          Authorization: `Bearer ${token}`
+        const res = await fetch(`${API_BASE}${endpoint}`, {
 
-        },
+          method: 'POST',
 
-        body: JSON.stringify(requestBody)
+          headers: {
 
-      })
+            'Content-Type': 'application/json',
 
-      if (!res.ok) {
+            Authorization: `Bearer ${token}`
 
-        let errDetail = 'The document analysis service is temporarily unavailable.'
+          },
 
-        try {
-
-          const errBody = await res.json()
-
-          errDetail = errBody?.detail || errBody?.message || errDetail
-
-        } catch {
-
-          errDetail = (await res.text()) || errDetail
-
-        }
-
-        throw new Error(errDetail)
-
-      }
-
-      const { job_id } = await res.json()
-
-      // Subscribe to Supabase Realtime updates on the jobs table
-
-      const channel = supabase
-
-        .channel(`job-${job_id}`)
-
-        .on(
-
-          'postgres_changes',
-
-          { event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${job_id}` },
-
-          async (payload) => {
-
-            const updatedJob = payload.new
-
-            clearTimeout(stallTimer)
-
-            if (updatedJob.status === 'processing') {
-
-               setMessages((prev) => {
-
-                 const next = [...prev]
-
-                 next[next.length - 1] = {
-
-                   role: 'assistant',
-
-                   content: 'Cognitive model actively processing layouts and extracting content...'
-
-                 }
-
-                 return next
-
-               })
-
-            } else if (updatedJob.status === 'done') {
-
-              const textResult = updatedJob.result?.text || 'No result data returned by the agent.'
-
-              // Unsubscribe from Supabase realtime job channel
-
-              channel.unsubscribe()
-
-              // Save the system context message containing the analysis results to history
-
-              try {
-
-                await supabase.from('messages').insert([
-
-                  {
-
-                    conversation_id: convoId,
-
-                    role: 'system',
-
-                    content: `[System Context: The user has attached a file. File URL: ${blobUrl}. Analysis result: ${textResult}]`,
-
-                    routing_mode: 'discuss'
-
-                  }
-
-                ])
-
-              } catch (dbErr) {
-
-                console.error('Failed to commit system context to history:', dbErr)
-
-              }
-
-              // Trigger the stream response using the LLM. 
-
-              // We pass the userMessageObj with the fileAttachment to keep the UI chip rendered!
-
-              await triggerStream(historyBeforeJob, {
-
-                role: 'user',
-
-                content: userMsgText,
-
-                fileAttachment
-
-              }, convoId)
-
-            } else if (updatedJob.status === 'failed') {
-
-              const errMsg = updatedJob.error || 'Background analysis encountered an error.'
-
-              setMessages((prev) => {
-
-                const next = [...prev]
-
-                const last = next[next.length - 1]
-
-                // Replace if still in a loading/processing state (empty placeholder or processing message)
-
-                if (last.role === 'assistant' && (
-
-                  last.content === '' ||
-
-                  last.content.includes('processing layouts') ||
-
-                  last.content.includes('Queuing')
-
-                )) {
-
-                  next[next.length - 1] = {
-
-                    role: 'assistant',
-
-                    content: errMsg
-
-                  }
-
-                }
-
-                return next
-
-              })
-
-              setIsStreaming(false)
-
-              channel.unsubscribe()
-
-              setTimeout(() => inputRef.current?.focus(), 0)
-
-            }
-
-          }
-
-        )
-
-        .subscribe()
-
-      // Timeout — if Azure Function hasn't updated the job within 90 s, unblock the UI
-
-      let stallTimer = setTimeout(() => {
-
-        setMessages((prev) => {
-
-          const next = [...prev]
-
-          const last = next[next.length - 1]
-
-          // Replace if still in a loading/processing state (empty placeholder or processing message)
-
-          if (last.role === 'assistant' && (
-
-            last.content === '' ||
-
-            last.content.includes('processing layouts') ||
-
-            last.content.includes('Queuing')
-
-          )) {
-
-            next[next.length - 1] = {
-
-              role: 'assistant',
-
-              content: `Your document has been queued for analysis. Results will be added here automatically once processing completes — this may take a minute.`
-
-            }
-
-          }
-
-          return next
+          body: JSON.stringify(requestBody)
 
         })
 
-        setIsStreaming(false)
+        if (!res.ok) {
 
-        channel.unsubscribe()
+          let errDetail = `The document analysis service failed for ${file.name}.`
 
-        setTimeout(() => inputRef.current?.focus(), 0)
+          try {
 
-      }, 90_000)
+            const errBody = await res.json()
+
+            errDetail = errBody?.detail || errBody?.message || errDetail
+
+          } catch (_) {
+
+            try {
+
+              errDetail = (await res.text()) || errDetail
+
+            } catch (_) {}
+
+          }
+
+          throw new Error(errDetail)
+
+        }
+
+        const { job_id } = await res.json()
+
+        return { file, job_id, jobType }
+
+      })
+
+      const queuedJobs = await Promise.all(jobPromises)
+
+      // 2. Track status of all jobs
+
+      const results: { file: AttachedFile; text: string; success: boolean }[] = []
+
+      const pollJobs = queuedJobs.map(async ({ file, job_id }) => {
+
+        return new Promise<void>((resolve) => {
+
+          // Stall timer per job (90 seconds)
+
+          const stallTimer = setTimeout(() => {
+
+            channel.unsubscribe()
+
+            results.push({ file, text: 'Analysis job timeout.', success: false })
+
+            resolve()
+
+          }, 90_000)
+
+          const channel = supabase
+
+            .channel(`job-${job_id}`)
+
+            .on(
+
+              'postgres_changes',
+
+              { event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${job_id}` },
+
+              async (payload) => {
+
+                const updatedJob = payload.new
+
+                if (updatedJob.status === 'processing') {
+
+                   setMessages((prev) => {
+
+                     const next = [...prev]
+
+                     next[next.length - 1] = {
+
+                       role: 'assistant',
+
+                       content: `Analyzing ${file.name}: processing layouts and extracting content...`
+
+                     }
+
+                     return next
+
+                   })
+
+                } else if (updatedJob.status === 'done') {
+
+                  clearTimeout(stallTimer)
+
+                  const textResult = updatedJob.result?.text || 'No result data returned by the agent.'
+
+                  channel.unsubscribe()
+
+                  try {
+
+                    await supabase.from('messages').insert([
+
+                      {
+
+                        conversation_id: convoId,
+
+                        role: 'system',
+
+                        content: `[System Context: The user has attached a file. File URL: ${file.blobUrl}. Analysis result: ${textResult}]`,
+
+                        routing_mode: 'discuss'
+
+                      }
+
+                    ])
+
+                  } catch (dbErr) {
+
+                    console.error('Failed to commit system context to history:', dbErr)
+
+                  }
+
+                  results.push({ file, text: textResult, success: true })
+
+                  resolve()
+
+                } else if (updatedJob.status === 'failed') {
+
+                  clearTimeout(stallTimer)
+
+                  channel.unsubscribe()
+
+                  results.push({ file, text: updatedJob.error || 'Background analysis encountered an error.', success: false })
+
+                  resolve()
+
+                }
+
+              }
+
+            )
+
+          channel.subscribe()
+
+        })
+
+      })
+
+      // Wait for all analyses to complete
+
+      await Promise.all(pollJobs)
+
+      const failedJobs = results.filter(r => !r.success)
+
+      if (failedJobs.length > 0) {
+
+        console.warn('Some file analysis jobs failed:', failedJobs)
+
+      }
+
+      // 3. Trigger the LLM stream response
+
+      await triggerStream(historyBeforeJobs, {
+
+        role: 'user',
+
+        content: userMsgText,
+
+        fileAttachments: attachments
+
+      }, convoId)
 
     } catch (err: any) {
 
       console.error('Agent job trigger failed:', err)
-
-      // err.message is already the clean detail string from our API response parser
 
       const explanation = err.message && !err.message.startsWith('{') && !err.message.startsWith('Error:')
 
@@ -5199,19 +5472,19 @@ export const Dashboard: React.FC = () => {
 
     }
 
-    if (attachedFile) {
+    if (attachedFiles.length > 0) {
 
-      const isPdf = attachedFile.type === 'application/pdf' || attachedFile.name.toLowerCase().endsWith('.pdf')
-
-      const jobType = isPdf ? 'ocr' : 'vision'
+      const filesToProcess = [...attachedFiles]
 
       const promptText = input.trim()
 
       setInput('')
 
+      setAttachedFiles([])
+
       setTimeout(() => inputRef.current?.focus(), 0)
 
-      await triggerAgentJob(jobType, attachedFile.blobUrl, promptText)
+      await triggerAgentJobs(filesToProcess, promptText)
 
       return
 
@@ -5792,6 +6065,14 @@ export const Dashboard: React.FC = () => {
           )}
 
           <button
+            onClick={() => navigate('/capabilities')}
+            className="w-full h-9 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#1e2025] hover:border-white/10 mb-1"
+          >
+            <Cpu className="w-3.5 h-3.5" />
+            <span>Agent Capabilities</span>
+          </button>
+
+          <button
 
             onClick={handleSignOut}
 
@@ -5858,6 +6139,13 @@ export const Dashboard: React.FC = () => {
 
             </span>
 
+            {isFetchingHistory && (
+              <span className="flex items-center gap-1.5 text-[10px] text-brand-muted animate-pulse ml-1">
+                <Loader2 className="w-3 h-3 animate-spin text-[#ffffff]" />
+                <span className="hidden sm:inline">Syncing...</span>
+              </span>
+            )}
+
           </div>
 
           <div className="flex items-center gap-3">
@@ -5901,6 +6189,7 @@ export const Dashboard: React.FC = () => {
                         }}
                         className="w-full text-left px-4 py-2.5 text-[11px] text-brand-muted hover:text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
                       >
+                        <KeyRound className="w-3.5 h-3.5 text-brand-muted" />
                         <span>Change PIN</span>
                       </button>
                       <button
@@ -5910,6 +6199,7 @@ export const Dashboard: React.FC = () => {
                         }}
                         className="w-full text-left px-4 py-2.5 text-[11px] text-red-400/70 hover:text-red-400 hover:bg-red-950/10 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
                       >
+                        <Unlock className="w-3.5 h-3.5 text-red-400/50" />
                         <span>Disable PIN</span>
                       </button>
                     </>
@@ -5972,11 +6262,15 @@ export const Dashboard: React.FC = () => {
 
               onScroll={handleScroll}
 
-              className="flex-1 overflow-y-auto py-8 px-5 md:px-10 relative z-10"
+              className="flex-1 overflow-y-auto pt-8 pb-28 md:pb-32 px-5 md:px-10 relative z-10"
 
             >
 
-          {messages.length === 0 ? (
+          {isFetchingHistory && messages.length === 0 ? (
+
+            <ChatSkeleton />
+
+          ) : messages.length === 0 ? (
 
             <div className="h-full flex flex-col items-center justify-center max-w-lg mx-auto text-center space-y-7">
 
@@ -6124,53 +6418,23 @@ export const Dashboard: React.FC = () => {
 
                           </div>
 
-                        ) : msg.fileAttachment ? (
+                        ) : (msg.fileAttachment || (msg.fileAttachments && msg.fileAttachments.length > 0)) ? (
 
-                          /* Agent job — render as file chip + optional prompt text */
+                          /* Agent job — render as file chip(s) + optional prompt text */
 
                           <div className="space-y-2">
 
-                            {msg.fileAttachment.jobType === 'vision' && msg.fileAttachment.url ? (
+                            {msg.fileAttachment && (
 
-                              <div className="w-full max-w-sm rounded-xl overflow-hidden border border-[#ffffff]/10 bg-[#111316]/20">
-
-                                <img
-
-                                  src={msg.fileAttachment.url}
-
-                                  alt={msg.fileAttachment.name}
-
-                                  className="w-full h-auto max-h-64 object-contain"
-
-                                />
-
-                              </div>
-
-                            ) : (
-
-                              <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20">
-
-                                <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
-
-                                <div className="min-w-0">
-
-                                  <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest">
-
-                                    {msg.fileAttachment.jobType === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
-
-                                  </p>
-
-                                  <p className="text-[13px] text-brand-text/90 font-medium truncate">
-
-                                    {msg.fileAttachment.name}
-
-                                  </p>
-
-                                </div>
-
-                              </div>
+                              <FileAttachmentChip attachment={msg.fileAttachment} />
 
                             )}
+
+                            {msg.fileAttachments && msg.fileAttachments.map((attachment, idx) => (
+
+                              <FileAttachmentChip key={idx} attachment={attachment} />
+
+                            ))}
 
                             {/* Show any prompt text the user typed alongside the file */}
 
@@ -6648,257 +6912,250 @@ export const Dashboard: React.FC = () => {
 
         </div>
 
-        {/* Input area */}
-
-        <div className="shrink-0 px-5 md:px-10 pb-6 pt-3 border-t border-[#141618] bg-gradient-to-t from-brand-bg to-transparent relative z-10">
-
-          {/* Mode selector + Web Search toggle */}
-
-          <div className="max-w-2xl mx-auto mb-3 flex gap-1.5 items-center">
-
-            {([
-
-              { id: 'think', label: 'Think', icon: Brain },
-
-              { id: 'solve', label: 'Solve', icon: Cpu },
-
-              { id: 'discuss', label: 'Discuss', icon: MessageSquare },
-
-            ] as const).map(({ id, label, icon: Icon }) => {
-
-              const active = mode === id
-
-              return (
-
-                <button
-
-                  key={id}
-
-                  type="button"
-
-                  onClick={() => handleModeChange(id)}
-
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all duration-200 active:scale-95 tracking-widest uppercase ${
-
-                    active
-
-                      ? 'bg-[#ffffff]/8 border-[#ffffff]/40 text-[#ffffff]'
-
-                      : 'bg-transparent border-[#1a1d20] text-brand-muted hover:border-[#252830] hover:text-brand-text/60'
-
-                  }`}
-
-                >
-
-                  <Icon className="w-3 h-3" />
-
-                  <span>{label}</span>
-
-                </button>
-
-              )
-
-            })}
-
-          </div>
-
-          {/* Uploading progress indicator */}
-          {uploading && (
-            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between p-2 bg-[#0d0f11] border border-[#1e2025]/50 rounded-lg animate-pulse">
-              <div className="flex items-center gap-2">
-                <Loader2 className="w-3.5 h-3.5 text-[#ffffff] animate-spin" />
-                <span className="text-[11px] text-[#ffffff] font-semibold tracking-wide">
-                  Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
-                </span>
-              </div>
-            </div>
+        {/* Pinned Input Area (Unified Console Card) */}
+        <div
+          className="fixed left-0 right-0 bottom-0 px-5 md:px-10 pb-0 pt-1.5 bg-[#0a0b0d] border-t border-[#1a1c1f] z-20"
+        >
+          {showScrollBottomButton && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="absolute bottom-[calc(100%+12px)] right-6 md:right-10 p-2 rounded-full bg-[#1c1d22]/90 border border-[#2e323b] text-[#8e95a2] hover:text-brand-text shadow-xl backdrop-blur-md transition duration-150 active:scale-95 z-30 flex items-center justify-center animate-fadeIn"
+              title="Jump to last message"
+            >
+              <ChevronDown className="w-4 h-4 animate-bounce" />
+            </button>
           )}
 
-          {/* Voice recording status strip */}
-          {voice.isRecording && (
-            <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between px-1">
-              <div className="flex items-center gap-2.5">
-                <VoiceWaveform volume={voice.currentVolume} />
-                <span className="text-[10px] font-bold text-[#ffffff]/80 tracking-widest uppercase"
-                  style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
-                >
-                  Listening...
-                </span>
-              </div>
-              <span className="text-[9px] text-brand-muted/40 font-medium select-none">
-                {voice.currentVolume > 0.08 ? 'Voice detected' : 'Waiting for speech...'}
-              </span>
-            </div>
-          )}
+          <form 
+            ref={formRef} 
+            onSubmit={handleSend} 
+            className="max-w-2xl mx-auto bg-[#0d0f11]/95 border-t border-x border-[#1e2025] rounded-t-xl rounded-b-none pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
+          >
 
-          {/* Input */}
-
-          <form ref={formRef} onSubmit={handleSend} className="max-w-2xl mx-auto relative flex items-center gap-2">
-
-            <div className={`relative flex-1 flex flex-col bg-[#0d0f11]/80 border rounded-xl overflow-hidden transition duration-150 ${
-              voice.isRecording
-                ? 'border-[#ffffff]/40 focus-within:border-[#ffffff]/60 focus-within:ring-1 focus-within:ring-[#ffffff]/20'
-                : 'border-[#1a1d20] focus-within:border-[#ffffff]/40 focus-within:ring-1 focus-within:ring-[#ffffff]/15'
-            }`}>
-
-              {/* Thumbnail/File Preview Container inside Input Box */}
-              {(attachedFile || pastedText) && (
-                <div className="flex items-center gap-3 p-3 border-b border-[#1a1c1f]/40 bg-black/25 shrink-0 select-none">
-                  {attachedFile ? (
-                    attachedFile.type.startsWith('image/') ? (
-                       <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-[#1e2025] group/thumb shrink-0">
-                         <img
-                           src={attachedFile.blobUrl}
-                           alt={attachedFile.name}
-                           className="w-full h-full object-cover"
-                         />
-                         <button
-                           type="button"
-                           onClick={() => setAttachedFile(null)}
-                           className="absolute top-1 right-1 p-0.5 bg-black/70 hover:bg-red-600/80 text-white rounded-full transition opacity-0 group-hover/thumb:opacity-100 duration-150"
-                           title="Remove image"
-                         >
-                           <X className="w-2.5 h-2.5" />
-                         </button>
-                       </div>
-                    ) : (
-                       <div className="relative flex items-center gap-2 p-2 rounded-lg bg-[#141619] border border-[#1e2025] group/thumb shrink-0">
-                         <FileText className="w-4 h-4 text-brand-muted shrink-0" />
-                         <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[120px]">
-                           {attachedFile.name}
-                         </span>
-                         <button
-                           type="button"
-                           onClick={() => setAttachedFile(null)}
-                           className="p-1 text-[#8e95a2] hover:text-red-400 transition"
-                           title="Remove file"
-                         >
-                           <X className="w-3.5 h-3.5" />
-                         </button>
-                       </div>
-                    )
-                  ) : pastedText ? (
-                     <div className="relative flex items-center gap-2 p-2 rounded-lg bg-[#141619] border border-[#1e2025] group/thumb shrink-0">
-                       <FileText className="w-4 h-4 text-brand-muted shrink-0" />
-                       <span className="text-[11px] text-brand-text/80 font-medium truncate max-w-[120px]">
-                         {pastedText.name}
-                       </span>
-                       <button
-                         type="button"
-                         onClick={() => setPastedText(null)}
-                         className="p-1 text-[#8e95a2] hover:text-red-400 transition"
-                         title="Remove pasted text"
-                       >
-                         <X className="w-3.5 h-3.5" />
-                       </button>
-                     </div>
-                  ) : null}
+            {/* Uploading progress indicator */}
+            {uploading && (
+              <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 text-brand-text animate-spin shrink-0" />
+                  <span className="text-[11px] text-brand-text font-semibold tracking-wide">
+                    Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
+                  </span>
                 </div>
-              )}
+              </div>
+            )}
 
-              <div className="relative flex items-center">
-                {/* Mic button — hidden when browser doesn’t support MediaRecorder */}
+            {/* Voice recording status strip */}
+            {voice.isRecording && (
+              <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
+                <div className="flex items-center gap-2.5">
+                  <VoiceWaveform volume={voice.currentVolume} />
+                  <span className="text-[10px] font-bold text-brand-text tracking-widest uppercase">
+                    Listening...
+                  </span>
+                </div>
+                <span className="text-[9px] text-brand-muted font-medium select-none">
+                  {voice.currentVolume > 0.08 ? 'Voice detected' : 'Waiting for speech...'}
+                </span>
+              </div>
+            )}
+
+            {/* Middle Row: Textarea input */}
+            <div className="relative flex-1">
+              <textarea
+                ref={inputRef as any}
+                rows={1}
+                value={input}
+                onPaste={handlePaste}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    formRef.current?.requestSubmit()
+                  }
+                }}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  if (voice.isRecording) voice.clearTranscript()
+                }}
+                disabled={uploading}
+                placeholder={
+                  voice.isRecording ? 'Listening...' :
+                  attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
+                  pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
+                }
+                className="w-full h-[22px] bg-transparent text-[13.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5"
+              />
+              {voice.isTranscribing && <div className="input-loading-bar" aria-hidden />}
+            </div>
+
+            {/* Bottom Row: Attachments status & action buttons */}
+            <div className="flex items-center justify-between border-t border-brand-border/30 pt-2.5 mt-0.5">
+              {/* Left Side: Voice Mic, Attach File, File previews */}
+              <div className="flex items-center gap-2">
                 {voice.isSupported && (
                   <button
                     id="voice-mic-button"
                     type="button"
                     onClick={toggleVoice}
                     disabled={isStreaming || uploading}
-                    title={voice.isRecording ? 'Stop recording' : 'Voice input'}
-                    aria-label={voice.isRecording ? 'Stop recording' : 'Start voice input'}
-                    className={`absolute left-3 top-1/2 -translate-y-1/2 p-0.5 transition-all duration-150 active:scale-95 rounded z-10 disabled:opacity-20 ${
+                    className={`p-1.5 transition-all duration-150 active:scale-95 rounded disabled:opacity-20 ${
                       voice.isRecording
                         ? 'text-[#ffffff] voice-pulse-ring'
-                        : 'text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5'
+                        : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
                     }`}
                   >
                     <Mic className="w-4 h-4" />
                   </button>
                 )}
 
-                <textarea
-                  ref={inputRef as any}
-                  rows={1}
-                  value={input}
-                  onPaste={handlePaste}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      formRef.current?.requestSubmit()
-                    }
-                  }}
-                  onChange={(e) => {
-                    setInput(e.target.value)
-                    // User manually edited — detach from live transcript
-                    if (voice.isRecording) voice.clearTranscript()
-                  }}
-                  disabled={uploading}
-                  placeholder={
-                    voice.isRecording ? 'Listening...' :
-                    attachedFile ? 'Add prompt details for the agent...' :
-                    pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
-                  }
-                  className={`w-full bg-transparent pr-14 text-[13.5px] text-brand-text placeholder-[#8e95a2]/40 focus:outline-none transition duration-150 disabled:opacity-50 disabled:cursor-not-allowed resize-none max-h-48 overflow-y-auto pt-3.5 pb-2.5 ${
-                    voice.isSupported ? 'pl-10' : 'pl-4'
-                  }`}
-                  style={{ height: 'auto', display: 'block' }}
-                />
-
-                {voice.isTranscribing && <div className="input-loading-bar" aria-hidden />}
-
                 <button
                   type="button"
                   onClick={handleTriggerUpload}
                   disabled={uploading}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 text-[#8e95a2] hover:text-[#ffffff] hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
+                  className="p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
                   title="Attach document or image"
                 >
                   <Paperclip className="w-4 h-4" />
                 </button>
+
+                {/* Mode Selector Pill Group */}
+                <div className="flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 ml-1 select-none">
+                  {([
+                    { id: 'think', label: 'Think', icon: Brain },
+                    { id: 'solve', label: 'Solve', icon: Cpu },
+                    { id: 'discuss', label: 'Discuss', icon: MessageSquare },
+                  ] as const).map(({ id, label, icon: Icon }) => {
+                    const active = mode === id
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => handleModeChange(id)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-bold transition-all duration-150 tracking-wider uppercase ${
+                          active
+                            ? 'bg-[#ffffff]/8 text-[#ffffff] shadow-sm'
+                            : 'text-brand-muted hover:text-brand-text/75'
+                        }`}
+                      >
+                        <Icon className="w-3 h-3" />
+                        <span className="hidden sm:inline">{label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Inline File Previews */}
+                {(attachedFiles.length > 0 || pastedText) && (
+                  <div className="flex flex-wrap items-center gap-2 ml-2">
+                    {attachedFiles.map((file, idx) => (
+                      file.type.startsWith('image/') ? (
+                        <div 
+                          key={idx} 
+                          className="relative w-8 h-8 rounded border border-brand-border shrink-0 animate-fadeIn group"
+                        >
+                          <img 
+                            src={file.blobUrl} 
+                            alt={file.name} 
+                            onClick={() => setPreviewingFile({ name: file.name, type: file.type, url: file.blobUrl })}
+                            className="w-full h-full object-cover cursor-pointer rounded" 
+                            title="Click to view image"
+                          />
+                          <button 
+                            type="button" 
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
+                            }} 
+                            className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-red-500 hover:bg-red-600 text-white shadow-md transition z-20 flex items-center justify-center"
+                            title="Delete image"
+                          >
+                            <X className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div 
+                          key={idx} 
+                          onClick={() => setPreviewingFile({ name: file.name, type: file.type, url: file.blobUrl })}
+                          className="flex items-center gap-1 pl-2 pr-6 py-1 rounded bg-brand-bg/50 border border-brand-border animate-fadeIn cursor-pointer hover:bg-[#ffffff]/5 transition relative group"
+                          title="Click to view document"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-brand-muted" />
+                          <span className="text-[10px] text-brand-text max-w-[80px] truncate">{file.name}</span>
+                          <button 
+                            type="button" 
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
+                            }} 
+                            className="absolute right-1 text-brand-muted hover:text-red-400 p-0.5 hover:bg-[#ffffff]/10 rounded-full transition z-20 flex items-center justify-center"
+                            title="Delete file"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )
+                    ))}
+                    {pastedText && (
+                      <div 
+                        onClick={() => setPreviewingFile({ name: pastedText.name, type: 'text/plain', content: pastedText.content })}
+                        className="flex items-center gap-1 pl-2 pr-6 py-1 rounded bg-brand-bg/50 border border-brand-border animate-fadeIn cursor-pointer hover:bg-[#ffffff]/5 transition relative group"
+                        title="Click to view pasted text"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-brand-muted" />
+                        <span className="text-[10px] text-brand-text max-w-[80px] truncate">{pastedText.name}</span>
+                        <button 
+                          type="button" 
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setPastedText(null)
+                          }} 
+                          className="absolute right-1 text-brand-muted hover:text-red-400 p-0.5 hover:bg-[#ffffff]/10 rounded-full transition z-20 flex items-center justify-center"
+                          title="Delete pasted text"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
+              {/* Right Side: Stop/Send Actions */}
+              <div className="flex items-center gap-2">
+                {isStreaming && (
+                  <button
+                    type="button"
+                    onClick={handleStop}
+                    className="w-8 h-8 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
+                  >
+                    <Square className="w-3 h-3 fill-red-400" />
+                  </button>
+                )}
+
+                 <button
+                  type="submit"
+                  disabled={uploading || (!input.trim() && attachedFiles.length === 0 && !pastedText)}
+                  className="px-3.5 py-1.5 bg-brand-text text-brand-bg text-[12px] font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow"
+                >
+                  <span>Send</span>
+                  <Send className="w-3 h-3" />
+                </button>
+              </div>
             </div>
-
-            {isStreaming && (
-              <button
-                type="button"
-                onClick={handleStop}
-                aria-label="Stop generation"
-                title="Stop generation"
-                className="w-12 h-12 bg-[#1a1c20] border border-[#2b2e35] text-red-400 rounded-xl flex items-center justify-center hover:bg-red-950/15 hover:border-red-900/30 transition duration-150 active:scale-95 shadow-md shrink-0 group"
-              >
-                <Square className="w-[14px] h-[14px] fill-red-400 group-hover:fill-red-300 transition duration-150" />
-              </button>
-            )}
-
-            <button
-              type="submit"
-              disabled={uploading || (!input.trim() && !attachedFile && !pastedText)}
-              aria-label="Send"
-              className="w-12 h-12 bg-[#ffffff] text-[#08090a] rounded-xl flex items-center justify-center hover:bg-[#f3f4f6] transition duration-150 disabled:opacity-20 active:scale-95 shadow-md shadow-[#ffffff]/10 font-bold shrink-0"
-            >
-              <Send className="w-4 h-4" />
-            </button>
 
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               onChange={handleFileChange}
               accept=".pdf,.png,.jpg,.jpeg,.webp,.gif"
               className="hidden"
             />
-
           </form>
-
-          <p className="text-center text-[9px] text-brand-muted/40 font-bold tracking-[0.15em] uppercase mt-3">
-
-            Secure · OAuth Synced · Legal Parameters Active
-
-          </p>
 
         </div>
 
-          </div>
+      </div>
 
           {/* Artifact Preview Panel */}
 
@@ -7374,6 +7631,38 @@ export const Dashboard: React.FC = () => {
 
       </div>
 
+      {/* Floating Capabilities Popup at Bottom Left (White background, Black text, Minimalist) */}
+      {showCapabilitiesNote && (
+        <div className="fixed bottom-3 left-6 w-80 p-4 rounded-xl border border-black/10 bg-white shadow-2xl flex flex-col gap-2.5 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 pointer-events-auto select-none">
+          <div className="flex items-start justify-between">
+            <span className="text-[10px] uppercase tracking-widest text-black/50 font-bold">
+              System Notice
+            </span>
+            <button 
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setShowCapabilitiesNote(false)
+                localStorage.setItem('dismissed_capabilities_note', 'true')
+              }}
+              className="text-black/40 hover:text-black transition p-0.5 rounded hover:bg-black/5"
+              title="Dismiss notification"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <p className="text-[11.5px] text-black leading-relaxed font-semibold">
+            Ochuko can run calculations, analyze files, read images, and search the web.
+          </p>
+          <a 
+            href="/capabilities"
+            className="text-[11px] text-black hover:text-black/75 font-bold underline align-self-start mt-1"
+          >
+            Explore Capabilities →
+          </a>
+        </div>
+      )}
+
       {/* App Lock Overlays */}
       {isLocked && (
         <AppLock
@@ -7386,15 +7675,157 @@ export const Dashboard: React.FC = () => {
         <AppLock
           mode={lockMode}
           onSuccess={() => {
+            const currentMode = lockMode
             setLockMode(null)
             showToast(
-              lockMode === 'setup' ? 'Security PIN enabled' :
-              lockMode === 'change' ? 'Security PIN changed successfully' :
+              currentMode === 'setup' ? 'Security PIN enabled' :
+              currentMode === 'change' ? 'Security PIN changed successfully' :
               'Security PIN disabled'
             )
           }}
           onClose={() => setLockMode(null)}
         />
+      )}
+      {/* Unified File/Text Preview Modal */}
+      {previewingFile && (
+        <div 
+          className="fixed inset-0 bg-[#07080a]/95 backdrop-blur-md z-[100] flex flex-col items-center justify-between p-4 md:p-6 animate-fadeIn"
+          onClick={() => setPreviewingFile(null)}
+        >
+          {/* Modal Header */}
+          <div 
+            className="w-full max-w-5xl flex items-center justify-between pb-4 border-b border-[#1e2025] mb-4 relative z-10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <FileText className="w-5 h-5 text-brand-text/80" />
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-wide">
+                  {previewingFile.name}
+                </h3>
+                <p className="text-[10px] text-brand-muted/70 uppercase tracking-widest font-semibold mt-0.5">
+                  {previewingFile.type}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {previewingFile.type === 'image/svg+xml' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    let width = 800
+                    let height = 600
+                    try {
+                      const res = await fetch(previewingFile.url || '')
+                      const svgText = await res.text()
+                      if (svgText) {
+                        const parser = new DOMParser()
+                        const doc = parser.parseFromString(svgText, 'image/svg+xml')
+                        const svgEl = doc.querySelector('svg')
+                        if (svgEl) {
+                          const viewBox = svgEl.getAttribute('viewBox')
+                          if (viewBox) {
+                            const parts = viewBox.split(/\s+/).map(Number)
+                            if (parts.length === 4 && !isNaN(parts[2]) && !isNaN(parts[3])) {
+                              width = parts[2]
+                              height = parts[3]
+                            }
+                          } else {
+                            const wAttr = svgEl.getAttribute('width')
+                            const hAttr = svgEl.getAttribute('height')
+                            if (wAttr && hAttr) {
+                              width = parseFloat(wAttr) || width
+                              height = parseFloat(hAttr) || height
+                            }
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      console.warn("Failed to parse SVG dimensions:", e)
+                    }
+
+                    const img = new Image()
+                    img.onload = () => {
+                      const canvas = document.createElement('canvas')
+                      const scale = 2
+                      canvas.width = width * scale
+                      canvas.height = height * scale
+                      const ctx = canvas.getContext('2d')
+                      if (ctx) {
+                        ctx.fillStyle = '#0d1117'
+                        ctx.fillRect(0, 0, canvas.width, canvas.height)
+                        ctx.scale(scale, scale)
+                        ctx.drawImage(img, 0, 0, width, height)
+                        const pngURL = canvas.toDataURL('image/png')
+                        const downloadLink = document.createElement('a')
+                        downloadLink.href = pngURL
+                        downloadLink.download = `${previewingFile.name.replace(/\s+/g, '_')}_expanded.png`
+                        document.body.appendChild(downloadLink);
+                        downloadLink.click();
+                        document.body.removeChild(downloadLink);
+                      }
+                    }
+                    img.src = previewingFile.url || ''
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[11px] font-bold text-brand-text border border-[#ffffff]/10 transition flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download PNG</span>
+                </button>
+              )}
+              {previewingFile.url && (
+                <a 
+                  href={previewingFile.url} 
+                  target="_blank" 
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[11px] font-bold text-brand-text border border-[#ffffff]/10 transition flex items-center gap-1.5"
+                >
+                  <span>Open in browser</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+              <button 
+                type="button" 
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setPreviewingFile(null)
+                }} 
+                className="p-1.5 rounded-lg bg-[#ffffff]/5 hover:bg-[#ffffff]/10 hover:text-white text-brand-muted border border-[#ffffff]/10 transition relative z-20"
+              >
+                <X className="w-4 h-4 pointer-events-none" />
+              </button>
+            </div>
+          </div>
+
+          {/* Modal Content */}
+          <div 
+            className="flex-1 w-full max-w-5xl flex items-center justify-center overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {previewingFile.type.startsWith('image/') ? (
+              <img 
+                src={previewingFile.url} 
+                alt={previewingFile.name} 
+                className="max-w-full max-h-[75vh] object-contain rounded-xl border border-[#ffffff]/10 shadow-2xl animate-scaleIn"
+              />
+            ) : previewingFile.type === 'application/pdf' ? (
+              <embed 
+                src={previewingFile.url} 
+                type="application/pdf" 
+                className="w-full h-full max-h-[75vh] rounded-xl border border-[#ffffff]/10 shadow-2xl bg-[#0b0c0e]" 
+              />
+            ) : (
+              <pre className="w-full h-full max-h-[75vh] bg-[#0b0c0f] border border-[#1e2025] rounded-xl p-5 text-[#8b949e] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
+                {previewingFile.content || "No text content available to display."}
+              </pre>
+            )}
+          </div>
+
+          {/* Footer Info */}
+          <div className="pt-4 text-[10px] text-brand-muted/40 font-medium select-none">
+            Click outside or press ESC to dismiss preview
+          </div>
+        </div>
       )}
 
     </div>
