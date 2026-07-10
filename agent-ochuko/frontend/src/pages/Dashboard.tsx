@@ -3362,7 +3362,7 @@ export const Dashboard: React.FC = () => {
 
   // ── Voice dictation ────────────────────────────────────────────────────────
 
-  const voice = useVoice((text: string) => setInput(text))
+  const voice = useVoice((text: string) => setInput(prev => prev + text))
 
   // ── TTS per-message playback state ─────────────────────────────────────────
 
