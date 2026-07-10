@@ -1667,7 +1667,7 @@ async def chat_stream_generator(
                                             code_to_run = args.get("code", "").strip()
                                             lang = args.get("language", "javascript").strip()
                                             task_desc = args.get("task", "").strip()
-                                            
+
                                             if not code_to_run:
                                                 raise ValueError("code is required for sandbox execution")
 
@@ -1683,13 +1683,26 @@ async def chat_stream_generator(
                                             )
 
                                             from app.services.code_sandbox import execute_code_in_sandbox
-                                            
-                                            # Execute the code in our custom sandbox runner
-                                            sandbox_output, generated_files_info = await execute_code_in_sandbox(
+
+                                            sandbox_output = ""
+                                            generated_files_info = []
+                                            async for event in execute_code_in_sandbox(
                                                 code=code_to_run,
                                                 language=lang,
-                                                conversation_id=conversation_id
-                                            )
+                                                conversation_id=conversation_id,
+                                                user_id=user_id
+                                            ):
+                                                if event["type"] == "sandbox_line":
+                                                    yield (
+                                                        "data: " + json.dumps({
+                                                            "type": "sandbox_progress",
+                                                            "stream": event["stream"],
+                                                            "line": event["line"],
+                                                        }) + "\n\n"
+                                                    )
+                                                elif event["type"] == "sandbox_result":
+                                                    sandbox_output = event["stdout"]
+                                                    generated_files_info = event["files"]
 
                                             # Emit download cards for each generated file
                                             for gf in generated_files_info:
@@ -2121,3 +2134,26 @@ async def warmup_chat(
         logger.error(f"Warmup endpoint failed: {e}")
         # Return success anyway - warmup failure shouldn't break the system
         return {"status": "warmup_failed", "error": str(e)}
+
+
+@router.get("/v1/files/preview/{conversation_id}/{filename}")
+async def preview_file(conversation_id: str, filename: str, user=Depends(verify_jwt)):
+    """
+    Returns raw file bytes with inline Content-Disposition, for iframe preview.
+    Only for text/html, text/css, text/javascript, image/* — reuses the same
+    R2 object already uploaded by _upload_generated_file, just re-serves it
+    with disposition=inline regardless of the stored default.
+    """
+    from fastapi.responses import RedirectResponse
+    supabase = get_supabase_admin()
+    row = (
+        supabase.table("generated_files")
+        .select("r2_url, mime_type")
+        .eq("conversation_id", conversation_id)
+        .eq("filename", filename)
+        .single()
+        .execute()
+    )
+    if not row.data:
+        raise HTTPException(404, "File not found")
+    return RedirectResponse(row.data["r2_url"])

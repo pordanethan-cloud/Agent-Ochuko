@@ -52,6 +52,41 @@ def _find_bash_executable() -> str:
 
 logger = logging.getLogger("app.services.code_sandbox")
 
+async def _stream_process_output(proc: asyncio.subprocess.Process):
+    """
+    Reads stdout and stderr concurrently, yielding (stream_name, line) tuples
+    as they arrive. Replaces the blocking proc.communicate() call.
+    """
+    async def _read_stream(stream, name):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            yield (name, line.decode("utf-8", errors="replace").rstrip("\n"))
+
+    stdout_gen = _read_stream(proc.stdout, "stdout")
+    stderr_gen = _read_stream(proc.stderr, "stderr")
+
+    async def _drain(gen, queue):
+        async for item in gen:
+            await queue.put(item)
+        await queue.put(None)  # sentinel
+
+    queue: asyncio.Queue = asyncio.Queue()
+    t1 = asyncio.create_task(_drain(stdout_gen, queue))
+    t2 = asyncio.create_task(_drain(stderr_gen, queue))
+
+    done_count = 0
+    while done_count < 2:
+        item = await queue.get()
+        if item is None:
+            done_count += 1
+            continue
+        yield item
+
+    await asyncio.gather(t1, t2)
+    await proc.wait()
+
 # Define global persistent library paths
 GLOBAL_LIBS_DIR = "/app/sandbox_libs"
 PYTHON_LIBS_DIR = os.path.join(GLOBAL_LIBS_DIR, "python_packages")
@@ -67,11 +102,12 @@ async def execute_code_in_sandbox(
     conversation_id: str,
     user_id: str = "00000000-0000-0000-0000-000000000000",
     timeout_seconds: int = 45
-) -> Tuple[str, List[Dict[str, str]]]:
+):
     """
     Executes Python or JavaScript code inside a secure local sandbox.
     Captures stdout, stderr, and uploads any generated files to R2 storage.
     Automatically catches missing module errors and installs/caches them.
+    Now an async generator that yields streaming events.
     """
     language = language.lower().strip()
     
@@ -114,7 +150,7 @@ async def execute_code_in_sandbox(
             script_path = os.path.join(work_dir, "command.sh")
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(code)
-                
+
             bash_executable = _find_bash_executable()
             proc = await asyncio.create_subprocess_exec(
                 bash_executable, "command.sh",
@@ -123,21 +159,31 @@ async def execute_code_in_sandbox(
                 env=env,
                 cwd=work_dir
             )
+            stdout_lines, stderr_lines = [], []
             try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+                async for stream_name, line in asyncio.wait_for(_stream_process_output(proc), timeout=timeout_seconds):
+                    if stream_name == "stdout":
+                        stdout_lines.append(line)
+                    else:
+                        stderr_lines.append(line)
+                    yield {"type": "sandbox_line", "stream": stream_name, "line": line}
             except asyncio.TimeoutError:
                 proc.kill()
-                return "Execution Timeout (exceeded 45s limit)", []
-                
-            stdout_str = stdout_bytes.decode("utf-8", errors="replace")
-            stderr_str = stderr_bytes.decode("utf-8", errors="replace")
+                yield {"type": "sandbox_line", "stream": "stderr", "line": "Execution Timeout (exceeded 45s limit)"}
+                stdout_str = "\n".join(stdout_lines)
+                stderr_str = "\n".join(stderr_lines) + "\nExecution Timeout (exceeded 45s limit)"
+                yield {"type": "sandbox_result", "stdout": stdout_str, "files": []}
+                return
+
+            stdout_str = "\n".join(stdout_lines)
+            stderr_str = "\n".join(stderr_lines)
 
         elif language == "javascript" or language == "js" or language == "node":
             # JS execution path
             script_path = os.path.join(work_dir, "script.js")
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(code)
-                
+
             for attempt in range(3):
                 proc = await asyncio.create_subprocess_exec(
                     "node", script_path,
@@ -146,18 +192,28 @@ async def execute_code_in_sandbox(
                     env=env,
                     cwd=work_dir
                 )
+                stdout_lines, stderr_lines = [], []
                 try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+                    async for stream_name, line in asyncio.wait_for(_stream_process_output(proc), timeout=timeout_seconds):
+                        if stream_name == "stdout":
+                            stdout_lines.append(line)
+                        else:
+                            stderr_lines.append(line)
+                        yield {"type": "sandbox_line", "stream": stream_name, "line": line}
                 except asyncio.TimeoutError:
                     proc.kill()
-                    return "Execution Timeout (exceeded 45s limit)", []
-                    
-                stdout_str = stdout_bytes.decode("utf-8", errors="replace")
-                stderr_str = stderr_bytes.decode("utf-8", errors="replace")
-                
+                    yield {"type": "sandbox_line", "stream": "stderr", "line": "Execution Timeout (exceeded 45s limit)"}
+                    stdout_str = "\n".join(stdout_lines)
+                    stderr_str = "\n".join(stderr_lines) + "\nExecution Timeout (exceeded 45s limit)"
+                    yield {"type": "sandbox_result", "stdout": stdout_str, "files": []}
+                    return
+
+                stdout_str = "\n".join(stdout_lines)
+                stderr_str = "\n".join(stderr_lines)
+
                 if proc.returncode == 0:
                     break
-                    
+
                 # Auto-install missing node packages if possible
                 if "Cannot find module" in stderr_str:
                     m = re.search(r"Cannot find module ['\"](.*?)['\"]", stderr_str)
@@ -179,7 +235,7 @@ async def execute_code_in_sandbox(
             script_path = os.path.join(work_dir, "script.py")
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(code)
-                
+
             for attempt in range(3):
                 proc = await asyncio.create_subprocess_exec(
                     sys.executable, script_path,
@@ -188,18 +244,28 @@ async def execute_code_in_sandbox(
                     env=env,
                     cwd=work_dir
                 )
+                stdout_lines, stderr_lines = [], []
                 try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+                    async for stream_name, line in asyncio.wait_for(_stream_process_output(proc), timeout=timeout_seconds):
+                        if stream_name == "stdout":
+                            stdout_lines.append(line)
+                        else:
+                            stderr_lines.append(line)
+                        yield {"type": "sandbox_line", "stream": stream_name, "line": line}
                 except asyncio.TimeoutError:
                     proc.kill()
-                    return "Execution Timeout (exceeded 45s limit)", []
-                    
-                stdout_str = stdout_bytes.decode("utf-8", errors="replace")
-                stderr_str = stderr_bytes.decode("utf-8", errors="replace")
-                
+                    yield {"type": "sandbox_line", "stream": "stderr", "line": "Execution Timeout (exceeded 45s limit)"}
+                    stdout_str = "\n".join(stdout_lines)
+                    stderr_str = "\n".join(stderr_lines) + "\nExecution Timeout (exceeded 45s limit)"
+                    yield {"type": "sandbox_result", "stdout": stdout_str, "files": []}
+                    return
+
+                stdout_str = "\n".join(stdout_lines)
+                stderr_str = "\n".join(stderr_lines)
+
                 if proc.returncode == 0:
                     break
-                    
+
                 # Auto-install missing Python packages if possible
                 if "ModuleNotFoundError" in stderr_str:
                     m = re.search(r"No module named ['\"](.*?)['\"]", stderr_str)
@@ -208,7 +274,7 @@ async def execute_code_in_sandbox(
                         # Map common module imports to their actual PyPI package names
                         pkg_map = {"yaml": "pyyaml", "PIL": "Pillow", "docx": "python-docx"}
                         install_name = pkg_map.get(missing_pkg, missing_pkg)
-                        
+
                         logger.info(f"Auto-installing Python package: {install_name}")
                         install_proc = await asyncio.create_subprocess_exec(
                             sys.executable, "-m", "pip", "install", "--target", PYTHON_LIBS_DIR, install_name,
@@ -321,5 +387,5 @@ async def execute_code_in_sandbox(
     full_output = stdout_str
     if stderr_str:
         full_output += f"\n\n--- Standard Error ---\n{stderr_str}"
-        
-    return full_output, generated_files
+
+    yield {"type": "sandbox_result", "stdout": full_output, "files": generated_files}

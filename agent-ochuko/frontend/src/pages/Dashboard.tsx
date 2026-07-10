@@ -108,6 +108,10 @@ interface Message {
 
   generatedFiles?: { filename: string; download_url: string; size_bytes: number }[]
 
+  sandboxLines?: { stream: string; line: string }[]
+
+  showSandboxLog?: boolean
+
 }
 
 const triggerDirectDownload = async (url: string, fallbackFilename: string) => {
@@ -224,12 +228,14 @@ function FileDownloadCard({
   filename,
   download_url,
   size_bytes,
-  onView
+  onView,
+  onPreview
 }: {
   filename: string
   download_url: string
   size_bytes: number
   onView?: () => void
+  onPreview?: () => void
 }) {
   const ext = filename.split('.').pop()?.toLowerCase() || ''
   const extLabel = ext.toUpperCase() || 'FILE'
@@ -249,6 +255,7 @@ function FileDownloadCard({
   const accentColor = extColor[ext] || '#c5a880'
 
   const hasUrl = download_url && !download_url.startsWith('sandbox:') && !download_url.includes('/mnt/data/')
+  const isPreviewable = filename.match(/\.(html|css|js|svg|png|jpg|jpeg|gif)$/i)
 
   return (
     <div className="mt-2 flex items-center gap-3 px-3.5 py-2.5 rounded-xl border border-[#ffffff]/15 bg-[#0d0f11]/60 hover:bg-[#0d0f11]/90 hover:border-[#ffffff]/30 transition-all duration-200 group/dl w-full select-none">
@@ -271,7 +278,16 @@ function FileDownloadCard({
 
       {/* Actions */}
       <div className="flex items-center gap-1.5 shrink-0">
-        {onView && hasUrl && (
+        {isPreviewable && onPreview && hasUrl && (
+          <button
+            onClick={onPreview}
+            className="px-2.5 py-1 rounded-lg text-[10px] font-semibold text-[#8e95a2] hover:text-brand-text border border-[#ffffff]/10 hover:border-[#ffffff]/25 hover:bg-white/5 transition duration-150"
+            title="Preview file"
+          >
+            Preview
+          </button>
+        )}
+        {onView && hasUrl && !isPreviewable && (
           <button
             onClick={onView}
             className="px-2.5 py-1 rounded-lg text-[10px] font-semibold text-[#8e95a2] hover:text-brand-text border border-[#ffffff]/10 hover:border-[#ffffff]/25 hover:bg-white/5 transition duration-150"
@@ -1043,6 +1059,8 @@ const ImagePending: React.FC<{ prompt?: string }> = ({ prompt }) => (
 // ── ImageBubble — premium image card shown once generation is done ───────────
 
 const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }) => {
+  const [expanded, setExpanded] = useState(false)
+
   const handlePreview = () => {
     const event = new CustomEvent('open-file-preview', {
       detail: {
@@ -1054,33 +1072,43 @@ const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }
     window.dispatchEvent(event)
   }
 
+  const handleDownload = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    triggerDirectDownload(url, prompt || 'generated-image.png')
+  }
+
   return (
     <div className="flex flex-col gap-2 my-1 group/img">
-      <div 
-        onClick={handlePreview}
-        className="relative rounded-2xl overflow-hidden border border-[#1e2025] shadow-xl shadow-black/50 w-fit max-w-sm cursor-pointer"
-      >
-        <img
-          src={url}
-          alt={prompt || 'Generated image'}
-          className="block w-full max-w-sm object-cover transition-transform duration-500 group-hover/img:scale-[1.02]"
-          loading="eager"
-        />
-        {/* Download overlay on hover */}
-        <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-all duration-300 flex items-end justify-end p-3">
-          <a
-            href={url}
-            download
-            target="_blank"
-            rel="noopener noreferrer"
-            className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#ffffff] text-[#08090a] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            ↓ Download
-          </a>
-        </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1.5 text-[11px] font-semibold text-[#8e95a2] hover:text-brand-text transition-colors"
+        >
+          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          Generated Image
+        </button>
+        <button
+          onClick={handleDownload}
+          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-[#8e95a2] hover:text-brand-text border border-[#ffffff]/10 hover:border-[#ffffff]/25 hover:bg-white/5 transition duration-150"
+          title="Download image"
+        >
+          Download
+        </button>
       </div>
-      {prompt && (
+      {expanded && (
+        <div
+          onClick={handlePreview}
+          className="relative rounded-2xl overflow-hidden border border-[#1e2025] shadow-xl shadow-black/50 w-fit max-w-sm cursor-pointer"
+        >
+          <img
+            src={url}
+            alt={prompt || 'Generated image'}
+            className="block w-full max-w-sm object-cover transition-transform duration-500 group-hover/img:scale-[1.02]"
+            loading="eager"
+          />
+        </div>
+      )}
+      {prompt && expanded && (
         <p className="text-[10px] text-brand-muted/70 italic px-1 max-w-[320px]">{prompt}</p>
       )}
     </div>
@@ -2880,6 +2908,8 @@ export const Dashboard: React.FC = () => {
   const headerSettingsRef = useRef<HTMLDivElement>(null)
   const artifactCopyRef = useRef<HTMLDivElement>(null)
 
+  const [previewFile, setPreviewFile] = useState<{ filename: string; download_url: string } | null>(null)
+
   useEffect(() => {
     if (!isHeaderSettingsOpen) return
     const handler = (e: MouseEvent) => {
@@ -4543,10 +4573,23 @@ export const Dashboard: React.FC = () => {
 
                 setWebSearchStatus('idle')
 
-                setActivityLabel(data.label || 'Search failed.')
-
               }
 
+            } else if (data.type === 'sandbox_progress') {
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = updated[updated.length - 1]
+                  updated[updated.length - 1] = {
+                    ...last,
+                    sandboxLines: [
+                      ...(last.sandboxLines || []),
+                      { stream: data.stream, line: data.line },
+                    ],
+                  }
+                }
+                return updated
+              })
             } else if (data.type === 'image_gen_queued') {
 
               // AI decided to generate an image — show pending bubble and subscribe
@@ -6795,12 +6838,58 @@ export const Dashboard: React.FC = () => {
                                     sizeBytes: gf.size_bytes
                                   })}
 
+                                  onPreview={() => setPreviewFile({
+                                    filename: gf.filename,
+                                    download_url: gf.download_url
+                                  })}
+
                                 />
 
                               ))}
 
                             </div>
 
+                          )}
+
+                          {/* Sandbox execution log — collapsible */}
+                          {msg.sandboxLines && msg.sandboxLines.length > 0 && (
+                            <div className="mt-3">
+                              <button
+                                onClick={() => {
+                                  setMessages((prev) => {
+                                    const updated = [...prev]
+                                    const idx = updated.indexOf(msg)
+                                    if (idx >= 0) {
+                                      updated[idx] = { ...updated[idx], showSandboxLog: !(updated[idx] as any).showSandboxLog } as any
+                                    }
+                                    return updated
+                                  })
+                                }}
+                                className="flex items-center gap-2 text-[11px] font-semibold text-[#8e95a2] hover:text-brand-text transition-colors"
+                              >
+                                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${(msg as any).showSandboxLog ? 'rotate-180' : ''}`} />
+                                Execution Log ({msg.sandboxLines.length} lines)
+                              </button>
+                              {(msg as any).showSandboxLog && (
+                                <div className="mt-2 rounded-lg border border-[#1e2025] bg-[#0a0b0d] overflow-hidden">
+                                  <div className="max-h-48 overflow-y-auto p-3 font-mono text-[11px] leading-relaxed">
+                                    {msg.sandboxLines.map((line, i) => (
+                                      <div
+                                        key={i}
+                                        className={`py-0.5 ${
+                                          line.stream === 'stderr'
+                                            ? 'text-amber-400'
+                                            : 'text-[#8e95a2]'
+                                        }`}
+                                      >
+                                        <span className="opacity-50 mr-2">[{line.stream}]</span>
+                                        {line.line}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           )}
 
                           {/* Image pending spinner or resolved image — always below file cards */}
@@ -6823,12 +6912,31 @@ export const Dashboard: React.FC = () => {
 
                     </div>
 
-                    {/* Overlapping Sources Stack */}
-
+                    {/* Overlapping Sources Stack — collapsible */}
                     {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
-
-                      <SourcesStack sources={msg.sources} />
-
+                      <div className="mt-3">
+                        <button
+                          onClick={() => {
+                            setMessages((prev) => {
+                              const updated = [...prev]
+                              const idx = updated.indexOf(msg)
+                              if (idx >= 0) {
+                                updated[idx] = { ...updated[idx], showSources: !(updated[idx] as any).showSources } as any
+                              }
+                              return updated
+                            })
+                          }}
+                          className="flex items-center gap-2 text-[11px] font-semibold text-[#8e95a2] hover:text-brand-text transition-colors"
+                        >
+                          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${(msg as any).showSources ? 'rotate-180' : ''}`} />
+                          Sources ({msg.sources.length})
+                        </button>
+                        {(msg as any).showSources && (
+                          <div className="mt-2">
+                            <SourcesStack sources={msg.sources} />
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {/* Relative timestamp — visible on hover */}
@@ -7565,6 +7673,53 @@ export const Dashboard: React.FC = () => {
         </div>
 
       </main>
+
+      {/* Preview Modal for HTML/CSS/JS/Images */}
+      {previewFile && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0d0f11] border border-[#1e2025] rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e2025]">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-brand-text truncate max-w-md">{previewFile.filename}</span>
+              </div>
+              <button
+                onClick={() => setPreviewFile(null)}
+                className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Content */}
+            <div className="flex-1 overflow-hidden bg-[#0a0b0d]">
+              {previewFile.filename.match(/\.(html|htm)$/i) ? (
+                <iframe
+                  src={`${API_BASE}/v1/files/preview/${activeConversationId}/${previewFile.filename}`}
+                  className="w-full h-full border-0"
+                  sandbox="allow-scripts allow-same-origin"
+                  title={previewFile.filename}
+                />
+              ) : previewFile.filename.match(/\.(png|jpg|jpeg|gif|svg)$/i) ? (
+                <div className="h-full flex items-center justify-center p-4">
+                  <img
+                    src={previewFile.download_url}
+                    alt={previewFile.filename}
+                    className="max-w-full max-h-full object-contain rounded"
+                  />
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center p-4">
+                  <iframe
+                    src={previewFile.download_url}
+                    className="w-full h-full border-0"
+                    title={previewFile.filename}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {convoToDelete && (
 
