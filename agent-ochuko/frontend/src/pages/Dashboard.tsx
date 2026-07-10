@@ -3,17 +3,158 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
-import { useVoice } from '../hooks/useVoice'
 
 import { useJob } from '../hooks/useJob'
 
 import DOMPurify from 'dompurify'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+// ─── Visit Tracking ───────────────────────────────────────────────────────────────
+
+interface VisitData {
+  firstVisit: number
+  lastVisit: number
+  visitCount: number
+  consecutiveDays: number
+}
+
+function getVisitData(): VisitData {
+  const stored = localStorage.getItem('visit_data')
+  if (stored) {
+    try {
+      return JSON.parse(stored)
+    } catch {
+      // Corrupted data, start fresh
+    }
+  }
+  return {
+    firstVisit: Date.now(),
+    lastVisit: Date.now(),
+    visitCount: 1,
+    consecutiveDays: 1
+  }
+}
+
+function updateVisitData(): VisitData {
+  const current = getVisitData()
+  const now = Date.now()
+  const oneDay = 24 * 60 * 60 * 1000
+  const daysSinceLast = Math.floor((now - current.lastVisit) / oneDay)
+  
+  let newConsecutiveDays = current.consecutiveDays
+  if (daysSinceLast === 1) {
+    newConsecutiveDays++
+  } else if (daysSinceLast > 1) {
+    newConsecutiveDays = 1
+  }
+  
+  const updated: VisitData = {
+    firstVisit: current.firstVisit,
+    lastVisit: now,
+    visitCount: current.visitCount + 1,
+    consecutiveDays: newConsecutiveDays
+  }
+  
+  localStorage.setItem('visit_data', JSON.stringify(updated))
+  return updated
+}
+
+// ─── Name Extraction ─────────────────────────────────────────────────────────────
+
+function extractFirstName(email: string): string {
+  if (!email) return ''
+  const localPart = email.split('@')[0]
+  // Remove numbers, dots, underscores, and capitalize first letter
+  const cleaned = localPart.replace(/[0-9._-]/g, ' ').trim()
+  const parts = cleaned.split(/\s+/).filter(p => p.length > 0)
+  if (parts.length > 0) {
+    return parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase()
+  }
+  return ''
+}
+
+function getDisplayName(preferredName: string | null, userEmail: string | null): string {
+  if (preferredName && preferredName.trim()) {
+    return preferredName.trim()
+  }
+  if (userEmail) {
+    const firstName = extractFirstName(userEmail)
+    if (firstName) return firstName
+  }
+  // Honorific fallback
+  const honorifics = ['Scholar', 'Strategist', 'Counselor', 'Advisor']
+  const index = Math.floor(Math.random() * honorifics.length)
+  return honorifics[index]
+}
+
+// ─── Time-Based Greetings ─────────────────────────────────────────────────────────
+
+function getTimeGreeting(hour: number): string {
+  if (hour >= 5 && hour < 12) return 'Good morning'
+  if (hour >= 12 && hour < 17) return 'Good afternoon'
+  if (hour >= 17 && hour < 21) return 'Good evening'
+  // Late night (21:00 - 5:00)
+  const lateNightGreetings = ['Working late', 'Burning the midnight oil', 'Still at it']
+  return lateNightGreetings[Math.floor(Math.random() * lateNightGreetings.length)]
+}
+
+function getVisitModifier(visitData: VisitData): string {
+  const now = Date.now()
+  const oneDay = 24 * 60 * 60 * 1000
+  const oneWeek = 7 * oneDay
+  const daysSinceFirst = Math.floor((now - visitData.firstVisit) / oneDay)
+  const daysSinceLast = Math.floor((now - visitData.lastVisit) / oneDay)
+  
+  if (visitData.visitCount === 1) {
+    // First visit ever
+    const firstVisitGreetings = ['Welcome', 'Good to have you', 'Let\'s get started']
+    return firstVisitGreetings[Math.floor(Math.random() * firstVisitGreetings.length)]
+  }
+  
+  if (daysSinceLast === 0 && visitData.visitCount > 1) {
+    // Same day return
+    const sameDayGreetings = ['Back again', 'Round two', 'Still here']
+    return sameDayGreetings[Math.floor(Math.random() * sameDayGreetings.length)]
+  }
+  
+  if (daysSinceLast >= 7) {
+    // Long absence
+    return 'It\'s been a while'
+  }
+  
+  if (visitData.consecutiveDays >= 5) {
+    // Frequent user
+    return 'Welcome back'
+  }
+  
+  // Regular return
+  return 'Welcome back'
+}
+
+function getDynamicGreeting(preferredName: string | null, userEmail: string | null): string {
+  const visitData = updateVisitData()
+  const hour = new Date().getHours()
+  const displayName = getDisplayName(preferredName, userEmail)
+  const timeGreeting = getTimeGreeting(hour)
+  const visitModifier = getVisitModifier(visitData)
+  
+  // Late night has different structure
+  if (hour >= 21 || hour < 5) {
+    return `${timeGreeting}, ${displayName}?`
+  }
+  
+  // Regular time-based greetings
+  if (visitData.visitCount === 1) {
+    return `${visitModifier}, ${displayName}.`
+  }
+  
+  return `${timeGreeting}, ${displayName}. ${visitModifier}.`
+}
 
 // ─── KaTeX lazy-loader ────────────────────────────────────────────────────────
 
@@ -2569,42 +2710,6 @@ function getFriendlyErrorMessage(message: string): string {
 
 }
 
-// ── VoiceWaveform — 5-bar volume-driven equaliser ────────────────────────────
-
-const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
-
-  const bars = [0.35, 0.65, 1.0, 0.65, 0.35]
-
-  return (
-
-    <div className="flex items-end justify-center gap-[3px] h-4" aria-hidden>
-
-      {bars.map((base, idx) => (
-
-        <div
-
-          key={idx}
-
-          className="w-[3px] rounded-full bg-[#ffffff] transition-all duration-75"
-
-          style={{
-
-            height: `${Math.max(3, Math.round(base * volume * 14 + 3))}px`,
-
-            opacity: 0.4 + base * volume * 0.6,
-
-          }}
-
-        />
-
-      ))}
-
-    </div>
-
-  )
-
-}
-
 const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: string; isComplete?: boolean }> = ({ step, maxSteps, label, isComplete }) => (
 
   <div className="flex items-center gap-2.5 mb-3 select-none animate-fadeIn">
@@ -2835,6 +2940,9 @@ export const Dashboard: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [preferredName, setPreferredName] = useState<string | null>(null)
   const [isFetchingHistory, setIsFetchingHistory] = useState(false)
+  const [dynamicGreeting, setDynamicGreeting] = useState<string>('Agent Ochuko')
+  const [isEditingNickname, setIsEditingNickname] = useState(false)
+  const [nicknameInput, setNicknameInput] = useState('')
 
   const [isLocked, setIsLocked] = useState(() => !!localStorage.getItem('app_lock_pin'))
   const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
@@ -2860,6 +2968,12 @@ export const Dashboard: React.FC = () => {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  // Update dynamic greeting when user data changes
+  useEffect(() => {
+    const greeting = getDynamicGreeting(preferredName, userEmail)
+    setDynamicGreeting(greeting)
+  }, [preferredName, userEmail])
 
   // Apply zoom to document
   useEffect(() => {
@@ -3497,10 +3611,6 @@ export const Dashboard: React.FC = () => {
 
   const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
 
-  // ── Voice dictation ────────────────────────────────────────────────────────
-
-  const voice = useVoice((text: string) => setInput(prev => prev + text))
-
   // ── TTS per-message playback state ─────────────────────────────────────────
 
   const [activeTtsJobId, setActiveTtsJobId] = useState<string | null>(null)
@@ -3534,26 +3644,6 @@ export const Dashboard: React.FC = () => {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
 
   }, [])
-
-  // Surface voice hook errors as toasts
-
-  useEffect(() => {
-
-    if (voice.error === 'permission_denied') {
-
-      showToast('Microphone access required for voice input', 'error')
-
-    } else if (voice.error === 'transcription_failed') {
-
-      showToast('Transcription failed — please try again', 'error')
-
-    } else if (voice.error === 'browser_incompatible') {
-
-      showToast('Voice input is not supported in this browser', 'info')
-
-    }
-
-  }, [voice.error, showToast])
 
   // TTS job completion: play audio or fall back to browser speechSynthesis
 
@@ -3636,20 +3726,6 @@ export const Dashboard: React.FC = () => {
     }
 
   }, [activeTtsJob.status, activeTtsJob.resultBlobUrl, messages])
-
-  const toggleVoice = useCallback(async () => {
-
-    if (voice.isRecording) {
-
-      voice.stopRecording()
-
-    } else {
-
-      await voice.startRecording()
-
-    }
-
-  }, [voice])
 
   const handleTTSPlay = useCallback(async (idx: number, content: string) => {
 
@@ -4206,18 +4282,6 @@ export const Dashboard: React.FC = () => {
 
       }
 
-      // Ctrl/Cmd + Shift + V → toggle voice
-
-      if (mod && e.shiftKey && e.key === 'V') {
-
-        e.preventDefault()
-
-        toggleVoice()
-
-        return
-
-      }
-
       // Ctrl/Cmd + 1/2/3 → switch mode
 
       if (mod && !e.shiftKey) {
@@ -4260,7 +4324,7 @@ export const Dashboard: React.FC = () => {
 
     return () => window.removeEventListener('keydown', handler)
 
-  }, [toggleVoice, handleModeChange])
+  }, [handleModeChange])
 
   // Check scroll position to determine if we should stay locked to the bottom
 
@@ -6547,7 +6611,7 @@ export const Dashboard: React.FC = () => {
 
               onScroll={handleScroll}
 
-              className="flex-1 overflow-y-auto pt-8 pb-28 md:pb-32 px-5 md:px-10 relative z-10"
+              className="flex-1 overflow-y-auto pt-8 pb-32 px-5 md:px-10 relative z-10"
 
             >
 
@@ -6579,7 +6643,56 @@ export const Dashboard: React.FC = () => {
 
               <div className="space-y-3">
 
-                <h2 className="text-[21px] font-bold tracking-tight text-brand-text">Agent Ochuko</h2>
+                <div className="flex items-center gap-2 justify-center">
+                  <h2 className="text-[21px] font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
+                  <button
+                    onClick={() => {
+                      setIsEditingNickname(true)
+                      setNicknameInput(preferredName || extractFirstName(userEmail || '') || '')
+                    }}
+                    className="p-1 rounded hover:bg-white/10 text-brand-muted hover:text-brand-text transition"
+                    title="Edit nickname"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {isEditingNickname && (
+                  <div className="flex items-center gap-2 justify-center">
+                    <input
+                      ref={renameInputRef}
+                      type="text"
+                      value={nicknameInput}
+                      onChange={(e) => setNicknameInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          setPreferredName(nicknameInput.trim())
+                          setIsEditingNickname(false)
+                        } else if (e.key === 'Escape') {
+                          setIsEditingNickname(false)
+                        }
+                      }}
+                      className="bg-[#1e2025] border border-[#ffffff]/20 rounded px-2 py-1 text-sm text-brand-text focus:outline-none focus:border-brand-accent w-32"
+                      placeholder="Enter nickname"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => {
+                        setPreferredName(nicknameInput.trim())
+                        setIsEditingNickname(false)
+                      }}
+                      className="p-1 rounded bg-brand-accent/20 hover:bg-brand-accent/30 text-brand-accent transition"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setIsEditingNickname(false)}
+                      className="p-1 rounded hover:bg-white/10 text-brand-muted transition"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
 
                 <p className="text-[13px] text-brand-muted leading-relaxed max-w-[280px] mx-auto">
 
@@ -7184,7 +7297,7 @@ export const Dashboard: React.FC = () => {
 
                               ) : (
 
-                                <><Volume2 className="w-3.5 h-3.5" /><span>Listen</span></>
+                                <span>Listen</span>
 
                               )}
 
@@ -7263,35 +7376,13 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Pinned Input Area (Unified Console Card) */}
-<<<<<<< HEAD
-        <div
-          className={`fixed left-0 right-0 bottom-4 px-5 md:px-10 pb-0 pt-1.5 bg-[#0a0b0d] border-t border-[#1a1c1f] transition-all duration-300 ${
-            (isSidebarOpen || isSidebarHovered) ? 'blur-sm z-10' : 'z-40'
-          }`}
-        >
-          {showScrollBottomButton && (
-            <button
-              type="button"
-              onClick={scrollToBottom}
-              className="absolute bottom-[calc(100%+12px)] right-6 md:right-10 p-2 rounded-full bg-[#1c1d22]/90 border border-[#2e323b] text-[#8e95a2] hover:text-brand-text shadow-xl backdrop-blur-md transition duration-150 active:scale-95 z-30 flex items-center justify-center animate-fadeIn"
-              title="Jump to last message"
+        <div className="absolute bottom-8 left-0 right-0 px-5 md:px-10 z-20">
+          <div className="max-w-2xl mx-auto">
+            <form
+              ref={formRef}
+              onSubmit={handleSend}
+              className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
             >
-              <ChevronDown className="w-4 h-4 animate-bounce" />
-            </button>
-          )}
-
-          <form
-            ref={formRef}
-            onSubmit={handleSend}
-            className="max-w-2xl mx-auto bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
-=======
-        <div className="max-w-2xl mx-auto mb-4">
-          <form
-            ref={formRef}
-            onSubmit={handleSend}
-            className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
->>>>>>> main
-          >
 
             {/* Uploading progress indicator */}
             {uploading && (
@@ -7302,21 +7393,6 @@ export const Dashboard: React.FC = () => {
                     Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
                   </span>
                 </div>
-              </div>
-            )}
-
-            {/* Voice recording status strip */}
-            {voice.isRecording && (
-              <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
-                <div className="flex items-center gap-2.5">
-                  <VoiceWaveform volume={voice.currentVolume} />
-                  <span className="text-[10px] font-bold text-brand-text tracking-widest uppercase">
-                    Listening...
-                  </span>
-                </div>
-                <span className="text-[9px] text-brand-muted font-medium select-none">
-                  {voice.currentVolume > 0.08 ? 'Voice detected' : 'Waiting for speech...'}
-                </span>
               </div>
             )}
 
@@ -7335,38 +7411,20 @@ export const Dashboard: React.FC = () => {
                 }}
                 onChange={(e) => {
                   setInput(e.target.value)
-                  if (voice.isRecording) voice.clearTranscript()
                 }}
                 disabled={uploading}
                 placeholder={
-                  voice.isRecording ? 'Listening...' :
                   attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
                   pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
                 }
                 className="w-full h-[22px] bg-transparent text-[13.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5"
               />
-              {voice.isTranscribing && <div className="input-loading-bar" aria-hidden />}
             </div>
 
             {/* Bottom Row: Attachments status & action buttons */}
-            <div className="flex items-center justify-between pt-2.5 mt-0.5">
-              {/* Left Side: Voice Mic, Attach File, File previews */}
+            <div className="flex items-center justify-between pt-2">
+              {/* Left Side: Attach File, File previews */}
               <div className="flex items-center gap-2">
-                {voice.isSupported && (
-                  <button
-                    id="voice-mic-button"
-                    type="button"
-                    onClick={toggleVoice}
-                    disabled={isStreaming || uploading}
-                    className={`p-1.5 transition-all duration-150 active:scale-95 rounded disabled:opacity-20 ${
-                      voice.isRecording
-                        ? 'text-[#ffffff] voice-pulse-ring'
-                        : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
-                    }`}
-                  >
-                    <Mic className="w-4 h-4" />
-                  </button>
-                )}
 
                 <button
                   type="button"
@@ -7512,6 +7570,7 @@ export const Dashboard: React.FC = () => {
               className="hidden"
             />
           </form>
+          </div>
         </div>
 
       </div>
