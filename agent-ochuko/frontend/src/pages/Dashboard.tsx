@@ -7142,10 +7142,10 @@ export const Dashboard: React.FC = () => {
             </button>
           )}
 
-          <form 
-            ref={formRef} 
-            onSubmit={handleSend} 
-            className="max-w-2xl mx-auto bg-[#0d0f11]/95 border-t border-x border-[#1e2025] rounded-t-xl rounded-b-none pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
+          <form
+            ref={formRef}
+            onSubmit={handleSend}
+            className="max-w-2xl mx-auto bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
           >
 
             {/* Uploading progress indicator */}
@@ -7204,7 +7204,7 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Bottom Row: Attachments status & action buttons */}
-            <div className="flex items-center justify-between border-t border-brand-border/30 pt-2.5 mt-0.5">
+            <div className="flex items-center justify-between pt-2.5 mt-0.5">
               {/* Left Side: Voice Mic, Attach File, File previews */}
               <div className="flex items-center gap-2">
                 {voice.isSupported && (
