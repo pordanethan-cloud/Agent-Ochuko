@@ -6568,7 +6568,7 @@ export const Dashboard: React.FC = () => {
 
               onScroll={handleScroll}
 
-              className="flex-1 overflow-y-auto pt-8 pb-28 md:pb-32 px-5 md:px-10 relative z-10"
+              className="flex-1 overflow-y-auto pt-8 pb-24 px-5 md:px-10 relative z-10"
 
             >
 
@@ -7268,12 +7268,13 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Pinned Input Area (Unified Console Card) */}
-        <div className="max-w-2xl mx-auto mb-4">
-          <form
-            ref={formRef}
-            onSubmit={handleSend}
-            className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
-          >
+        <div className="absolute bottom-6 left-0 right-0 px-5 md:px-10 z-20">
+          <div className="max-w-2xl mx-auto">
+            <form
+              ref={formRef}
+              onSubmit={handleSend}
+              className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
+            >
 
             {/* Uploading progress indicator */}
             {uploading && (
@@ -7313,7 +7314,7 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Bottom Row: Attachments status & action buttons */}
-            <div className="flex items-center justify-between border-t border-brand-border/30 pt-2.5 mt-0.5">
+            <div className="flex items-center justify-between pt-2">
               {/* Left Side: Attach File, File previews */}
               <div className="flex items-center gap-2">
 
@@ -7461,6 +7462,7 @@ export const Dashboard: React.FC = () => {
               className="hidden"
             />
           </form>
+          </div>
         </div>
 
       </div>
