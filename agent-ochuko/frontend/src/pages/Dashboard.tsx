@@ -4486,7 +4486,12 @@ export const Dashboard: React.FC = () => {
 
               localStorage.setItem('active_conversation_id', data.conversation_id)
 
-              fetchConversations()
+              // Fire-and-forget: don't block streaming for conversation list sync
+              setTimeout(() => {
+                fetchConversations().catch(err => {
+                  console.warn('Background conversation sync failed:', err)
+                })
+              }, 0)
 
             } else if (data.type === 'web_search_status') {
 
