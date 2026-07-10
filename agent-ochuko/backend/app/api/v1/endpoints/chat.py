@@ -1294,6 +1294,13 @@ async def chat_stream_generator(
                                     + json.dumps({"type": "content_block_delta", "delta": {"text": event.delta}})
                                     + "\n\n"
                                 )
+                                # Add breathing space after mermaid code blocks complete
+                                if "```" in event.delta and assistant_content.count("```") % 2 == 0:
+                                    # Check if this closes a mermaid block
+                                    recent_content = assistant_content[-500:] if len(assistant_content) > 500 else assistant_content
+                                    if "```mermaid" in recent_content or recent_content.count("```") >= 2:
+                                        # Pause to allow frontend rendering
+                                        await asyncio.sleep(0.3)
 
                             elif event.type == "response.output_item.done":
                                 item = getattr(event, "item", None)

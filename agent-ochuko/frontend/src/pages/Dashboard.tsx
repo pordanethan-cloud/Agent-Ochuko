@@ -319,6 +319,47 @@ let _mermaidReady = false
 
 let _mermaidIdCounter = 0
 
+// Validate and clean mermaid code before rendering
+function validateMermaidCode(code: string): { valid: boolean, cleanedCode: string, error?: string } {
+  if (!code || code.trim().length === 0) {
+    return { valid: false, cleanedCode: '', error: 'Empty mermaid code' }
+  }
+
+  // Clean up common issues
+  let cleaned = code.trim()
+
+  // Remove trailing dashes or other non-mermaid characters at the end
+  cleaned = cleaned.replace(/[-]{3,}$/, '')
+
+  // Remove multiple consecutive dashes that might cause parsing errors
+  cleaned = cleaned.replace(/[-]{4,}/g, '---')
+
+  // Ensure proper line endings
+  cleaned = cleaned.replace(/\r\n/g, '\n')
+
+  // Check for basic mermaid structure
+  const validStartPatterns = /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|mindmap|gitGraph|C4Context|blockDiagram|architecture|requirementDiagram|objectDiagram|networkDiagram|sankey|xychart|block-beta|timeline|sact|packet|circuit|wireframe|info|piechart|quadrantChart|gitGraph)/i
+
+  if (!validStartPatterns.test(cleaned.split('\n')[0])) {
+    return { valid: false, cleanedCode: cleaned, error: 'Invalid mermaid diagram type' }
+  }
+
+  // Check for balanced brackets/parentheses (basic check)
+  const openBrackets = (cleaned.match(/\[/g) || []).length
+  const closeBrackets = (cleaned.match(/\]/g) || []).length
+  if (openBrackets !== closeBrackets) {
+    return { valid: false, cleanedCode: cleaned, error: 'Unbalanced brackets' }
+  }
+
+  const openParens = (cleaned.match(/\(/g) || []).length
+  const closeParens = (cleaned.match(/\)/g) || []).length
+  if (openParens !== closeParens) {
+    return { valid: false, cleanedCode: cleaned, error: 'Unbalanced parentheses' }
+  }
+
+  return { valid: true, cleanedCode: cleaned }
+}
+
 function MermaidBlock({ code }: { code: string }) {
 
   const diagramRef = useRef<HTMLDivElement>(null)
@@ -328,6 +369,13 @@ function MermaidBlock({ code }: { code: string }) {
   const [showSource, setShowSource] = useState(false)
 
   const [copied, setCopied] = useState(false)
+
+  const [renderError, setRenderError] = useState<string | null>(null)
+
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Validate and clean code on mount
+  const validation = useMemo(() => validateMermaidCode(code), [code])
 
   useEffect(() => {
 
@@ -339,29 +387,60 @@ function MermaidBlock({ code }: { code: string }) {
 
       if (!diagramRef.current) return
 
-      if (!_mermaidReady) {
+      setIsLoading(true)
 
-        const m = await import('mermaid')
-
-        m.default.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
-
-        _mermaidReady = true
-
-      }
+      setRenderError(null)
 
       try {
 
+        // Use validated and cleaned code
+        if (!validation.valid) {
+          throw new Error(validation.error || 'Invalid mermaid syntax')
+        }
+
+        if (!_mermaidReady) {
+
+          const m = await import('mermaid')
+
+          m.default.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+
+          _mermaidReady = true
+
+        }
+
         const { default: mermaid } = await import('mermaid')
 
-        const { svg } = await mermaid.render(id, code)
+        const { svg } = await mermaid.render(id, validation.cleanedCode)
 
-        if (!cancelled && diagramRef.current) diagramRef.current.innerHTML = svg
+        if (!cancelled && diagramRef.current) {
+
+          diagramRef.current.innerHTML = svg
+
+        }
 
       } catch (err: any) {
 
-        if (!cancelled && diagramRef.current)
+        console.error('Mermaid rendering error:', err)
 
-          diagramRef.current.innerHTML = `<pre class="text-red-400 text-xs p-2">Diagram error: ${err?.message || 'invalid syntax'}</pre>`
+        if (!cancelled) {
+
+          setRenderError(err?.message || 'Failed to render diagram')
+
+          if (diagramRef.current) {
+
+            diagramRef.current.innerHTML = `<pre class="text-amber-400 text-xs p-2">Diagram error: ${err?.message || 'invalid syntax'}</pre>`
+
+          }
+
+        }
+
+      } finally {
+
+        if (!cancelled) {
+
+          setIsLoading(false)
+
+        }
 
       }
 
@@ -371,7 +450,7 @@ function MermaidBlock({ code }: { code: string }) {
 
     return () => { cancelled = true }
 
-  }, [code, id, showSource])
+  }, [validation, id, showSource])
 
   const handleCopy = () => {
 
@@ -388,51 +467,99 @@ function MermaidBlock({ code }: { code: string }) {
   const handleDownload = () => {
     const svgEl = diagramRef.current?.querySelector('svg')
     if (!svgEl) return
-    const svgString = new XMLSerializer().serializeToString(svgEl)
-    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
-    const blobURL = window.URL.createObjectURL(svgBlob)
-    const image = new Image()
-    image.onload = () => {
-      const canvas = document.createElement('canvas')
-      const bbox = svgEl.getBoundingClientRect()
-      const width = svgEl.viewBox.baseVal.width || bbox.width || 800
-      const height = svgEl.viewBox.baseVal.height || bbox.height || 600
-      
-      const scale = 2
-      canvas.width = width * scale
-      canvas.height = height * scale
-      const context = canvas.getContext('2d')
-      if (context) {
-        context.fillStyle = '#0d1117'
-        context.fillRect(0, 0, canvas.width, canvas.height)
-        context.scale(scale, scale)
-        context.drawImage(image, 0, 0, width, height)
-        const pngURL = canvas.toDataURL('image/png')
-        const downloadLink = document.createElement('a')
-        downloadLink.href = pngURL
-        downloadLink.download = `mermaid_diagram_${Date.now()}.png`
-        document.body.appendChild(downloadLink)
-        downloadLink.click()
-        document.body.removeChild(downloadLink)
+    try {
+      const svgString = new XMLSerializer().serializeToString(svgEl)
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
+      const blobURL = window.URL.createObjectURL(svgBlob)
+      const image = new Image()
+      image.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          const bbox = svgEl.getBoundingClientRect()
+          const width = svgEl.viewBox.baseVal.width || bbox.width || 800
+          const height = svgEl.viewBox.baseVal.height || bbox.height || 600
+
+          const scale = 2
+          canvas.width = width * scale
+          canvas.height = height * scale
+          const context = canvas.getContext('2d')
+          if (context) {
+            context.fillStyle = '#0d1117'
+            context.fillRect(0, 0, canvas.width, canvas.height)
+            context.scale(scale, scale)
+            context.drawImage(image, 0, 0, width, height)
+            const pngURL = canvas.toDataURL('image/png')
+            const downloadLink = document.createElement('a')
+            downloadLink.href = pngURL
+            downloadLink.download = `mermaid_diagram_${Date.now()}.png`
+            document.body.appendChild(downloadLink)
+            downloadLink.click()
+            document.body.removeChild(downloadLink)
+          }
+        } catch (err) {
+          console.error('PNG conversion error:', err)
+        } finally {
+          window.URL.revokeObjectURL(blobURL)
+        }
       }
-      window.URL.revokeObjectURL(blobURL)
+      image.onerror = () => {
+        console.error('Failed to load SVG for PNG conversion')
+        window.URL.revokeObjectURL(blobURL)
+      }
+      image.src = blobURL
+    } catch (err) {
+      console.error('Download error:', err)
     }
-    image.src = blobURL
   }
 
   const handleFullscreen = () => {
     const svgEl = diagramRef.current?.querySelector('svg')
     if (!svgEl) return
-    const svgString = new XMLSerializer().serializeToString(svgEl)
-    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
-    const blobUrl = window.URL.createObjectURL(svgBlob)
-    window.dispatchEvent(new CustomEvent('open-file-preview', {
-      detail: {
-        name: 'Mermaid Diagram',
-        type: 'image/svg+xml',
-        url: blobUrl
-      }
-    }))
+    try {
+      // Clone the SVG and add a dark background
+      const svgClone = svgEl.cloneNode(true) as SVGElement
+      svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+
+      // Add dark background rectangle
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      rect.setAttribute('width', '100%')
+      rect.setAttribute('height', '100%')
+      rect.setAttribute('fill', '#0d1117')
+      svgClone.insertBefore(rect, svgClone.firstChild)
+
+      const svgString = new XMLSerializer().serializeToString(svgClone)
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
+      const blobUrl = window.URL.createObjectURL(svgBlob)
+      window.dispatchEvent(new CustomEvent('open-file-preview', {
+        detail: {
+          name: 'Mermaid Diagram',
+          type: 'image/svg+xml',
+          url: blobUrl
+        }
+      }))
+    } catch (err) {
+      console.error('Preview error:', err)
+    }
+  }
+
+  if (isLoading) {
+
+    return (
+
+      <div className="my-3 p-4 rounded-xl border border-[#1e2025] bg-[#0d1117]/50">
+
+        <div className="flex items-center gap-2">
+
+          <div className="w-4 h-4 border-2 border-brand-muted/30 border-t-brand-text rounded-full animate-spin" />
+
+          <p className="text-sm text-brand-muted">Rendering diagram...</p>
+
+        </div>
+
+      </div>
+
+    )
+
   }
 
   return (
@@ -2870,6 +2997,7 @@ export const Dashboard: React.FC = () => {
   const [artifactTab, setArtifactTab] = useState<'preview' | 'code'>('preview')
   const [artifactContent, setArtifactContent] = useState<string>('')
   const [loadingArtifact, setLoadingArtifact] = useState(false)
+  const [artifactError, setArtifactError] = useState<string | null>(null)
   const [artifactWidth, setArtifactWidth] = useState(480)
   const isArtifactResizingRef = useRef(false)
 
@@ -2973,6 +3101,7 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     if (!activeArtifact) {
       setArtifactContent('')
+      setArtifactError(null)
       return
     }
     const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
@@ -2981,23 +3110,31 @@ export const Dashboard: React.FC = () => {
 
     if (activeArtifact.content !== undefined) {
       setArtifactContent(activeArtifact.content)
+      setArtifactError(null)
       return
     }
     if (activeArtifact.downloadUrl) {
       if (isBinaryFile(activeArtifact.filename) || activeArtifact.filename.toLowerCase().endsWith('.pdf')) {
         setArtifactContent('')
+        setArtifactError(null)
         setLoadingArtifact(false)
         return
       }
       setLoadingArtifact(true)
+      setArtifactError(null)
       fetch(activeArtifact.downloadUrl)
-        .then(res => res.text())
+        .then(res => {
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`)
+          }
+          return res.text()
+        })
         .then(text => {
           setArtifactContent(text)
           setLoadingArtifact(false)
         })
-        .catch(() => {
-          setArtifactContent('Failed to load artifact content.')
+        .catch((err) => {
+          setArtifactError(err.message || 'Failed to load artifact content')
           setLoadingArtifact(false)
         })
     }
@@ -7018,26 +7155,11 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Pinned Input Area (Unified Console Card) */}
-        <div
-          className={`fixed left-0 right-0 bottom-4 px-5 md:px-10 pb-0 pt-1.5 bg-[#0a0b0d] border-t border-[#1a1c1f] transition-all duration-300 ${
-            (isSidebarOpen || isSidebarHovered) ? 'blur-sm z-10' : 'z-40'
-          }`}
-        >
-          {showScrollBottomButton && (
-            <button
-              type="button"
-              onClick={scrollToBottom}
-              className="absolute bottom-[calc(100%+12px)] right-6 md:right-10 p-2 rounded-full bg-[#1c1d22]/90 border border-[#2e323b] text-[#8e95a2] hover:text-brand-text shadow-xl backdrop-blur-md transition duration-150 active:scale-95 z-30 flex items-center justify-center animate-fadeIn"
-              title="Jump to last message"
-            >
-              <ChevronDown className="w-4 h-4 animate-bounce" />
-            </button>
-          )}
-
-          <form 
-            ref={formRef} 
-            onSubmit={handleSend} 
-            className="max-w-2xl mx-auto bg-[#0d0f11]/95 border-t border-x border-[#1e2025] rounded-t-xl rounded-b-none pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
+        <div className="max-w-2xl mx-auto mb-4">
+          <form
+            ref={formRef}
+            onSubmit={handleSend}
+            className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
           >
 
             {/* Uploading progress indicator */}
@@ -7259,7 +7381,6 @@ export const Dashboard: React.FC = () => {
               className="hidden"
             />
           </form>
-
         </div>
 
       </div>
@@ -7294,15 +7415,21 @@ export const Dashboard: React.FC = () => {
             const handleReloadArtifact = () => {
               if (activeArtifact.downloadUrl) {
                 setLoadingArtifact(true)
+                setArtifactError(null)
                 fetch(activeArtifact.downloadUrl)
-                  .then(res => res.text())
+                  .then(res => {
+                    if (!res.ok) {
+                      throw new Error(`HTTP ${res.status}`)
+                    }
+                    return res.text()
+                  })
                   .then(text => {
                     setArtifactContent(text)
                     setLoadingArtifact(false)
                     showToast('Refreshed content', 'info')
                   })
-                  .catch(() => {
-                    setArtifactContent('Failed to load artifact content.')
+                  .catch((err) => {
+                    setArtifactError(err.message || 'Failed to load artifact content')
                     setLoadingArtifact(false)
                     showToast('Failed to refresh', 'error')
                   })
@@ -7433,7 +7560,25 @@ export const Dashboard: React.FC = () => {
 
                 {/* Body */}
                 <div className="flex-1 overflow-auto p-6 bg-[#08090b]">
-                  {loadingArtifact ? (
+                  {artifactError ? (
+                    <div className="h-full flex items-center justify-center">
+                      <div className="max-w-md w-full p-6 rounded-xl border border-red-500/30 bg-red-500/10 flex flex-col items-center text-center space-y-4">
+                        <div className="p-3 rounded-full bg-red-500/20 text-red-400">
+                          <X className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h3 className="text-red-400 font-semibold text-sm">Failed to load artifact</h3>
+                          <p className="text-red-300/70 text-xs mt-1">{artifactError}</p>
+                        </div>
+                        <button
+                          onClick={handleReloadArtifact}
+                          className="flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" /> Try Again
+                        </button>
+                      </div>
+                    </div>
+                  ) : loadingArtifact ? (
                     <div className="h-full flex items-center justify-center">
                       <Loader2 className="w-6 h-6 text-[#ffffff] animate-spin" />
                     </div>

@@ -62,16 +62,18 @@ def _get_nano_deployment() -> str:
     return deployment
 
 
-async def _stitch_text(existing_text: str, new_transcript: str) -> str:
+async def _stitch_text(existing_text: str, new_transcript: str) -> tuple[str, str]:
     """
     Use the Nano model to merge *existing_text* with *new_transcript* into a
     single grammatically-correct, well-capitalised sentence or paragraph.
+
+    Returns a tuple: (full_stitched_text, incremental_delta)
 
     If *existing_text* is empty we skip the stitching call and return
     *new_transcript* directly — avoids a round-trip for the first chunk.
     """
     if not existing_text.strip():
-        return new_transcript.strip()
+        return new_transcript.strip(), new_transcript.strip()
 
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
     api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
@@ -82,7 +84,10 @@ async def _stitch_text(existing_text: str, new_transcript: str) -> str:
         # If OpenAI is unavailable, degrade gracefully — just concatenate
         logger.warning("Azure OpenAI not configured; skipping stitching, concatenating instead.")
         separator = " " if existing_text.endswith((" ", "\n")) else " "
-        return (existing_text + separator + new_transcript).strip()
+        stitched = (existing_text + separator + new_transcript).strip()
+        # Calculate delta: remove existing_text prefix from stitched
+        delta = stitched[len(existing_text.rstrip()):].lstrip()
+        return stitched, delta
 
     url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
     system_prompt = (
@@ -113,11 +118,16 @@ async def _stitch_text(existing_text: str, new_transcript: str) -> str:
             )
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+            stitched = data["choices"][0]["message"]["content"].strip()
+            # Calculate delta: remove existing_text prefix from stitched
+            delta = stitched[len(existing_text.rstrip()):].lstrip()
+            return stitched, delta
     except Exception as exc:
         # Non-fatal: fall back to simple concatenation so the user always gets text
         logger.warning("Nano stitching failed (%s); falling back to concatenation.", exc)
-        return (existing_text + " " + new_transcript).strip()
+        stitched = (existing_text + " " + new_transcript).strip()
+        delta = stitched[len(existing_text.rstrip()):].lstrip()
+        return stitched, delta
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +219,10 @@ async def transcribe_audio(
 
     # ── Stitch with existing text via Nano model ──────────────────────────────
     try:
-        stitched = await _stitch_text(existing_text, raw_transcript)
+        stitched, delta = await _stitch_text(existing_text, raw_transcript)
     except Exception as exc:
         logger.warning("Text stitching error (%s); returning concatenation.", exc)
         stitched = (existing_text + " " + raw_transcript).strip()
+        delta = stitched[len(existing_text.rstrip()):].lstrip()
 
-    return {"text": stitched}
+    return {"text": stitched, "delta": delta}
