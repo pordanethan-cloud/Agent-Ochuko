@@ -15,6 +15,148 @@ import DOMPurify from 'dompurify'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
+// ─── Visit Tracking ───────────────────────────────────────────────────────────────
+
+interface VisitData {
+  firstVisit: number
+  lastVisit: number
+  visitCount: number
+  consecutiveDays: number
+}
+
+function getVisitData(): VisitData {
+  const stored = localStorage.getItem('visit_data')
+  if (stored) {
+    try {
+      return JSON.parse(stored)
+    } catch {
+      // Corrupted data, start fresh
+    }
+  }
+  return {
+    firstVisit: Date.now(),
+    lastVisit: Date.now(),
+    visitCount: 1,
+    consecutiveDays: 1
+  }
+}
+
+function updateVisitData(): VisitData {
+  const current = getVisitData()
+  const now = Date.now()
+  const oneDay = 24 * 60 * 60 * 1000
+  const daysSinceLast = Math.floor((now - current.lastVisit) / oneDay)
+  
+  let newConsecutiveDays = current.consecutiveDays
+  if (daysSinceLast === 1) {
+    newConsecutiveDays++
+  } else if (daysSinceLast > 1) {
+    newConsecutiveDays = 1
+  }
+  
+  const updated: VisitData = {
+    firstVisit: current.firstVisit,
+    lastVisit: now,
+    visitCount: current.visitCount + 1,
+    consecutiveDays: newConsecutiveDays
+  }
+  
+  localStorage.setItem('visit_data', JSON.stringify(updated))
+  return updated
+}
+
+// ─── Name Extraction ─────────────────────────────────────────────────────────────
+
+function extractFirstName(email: string): string {
+  if (!email) return ''
+  const localPart = email.split('@')[0]
+  // Remove numbers, dots, underscores, and capitalize first letter
+  const cleaned = localPart.replace(/[0-9._-]/g, ' ').trim()
+  const parts = cleaned.split(/\s+/).filter(p => p.length > 0)
+  if (parts.length > 0) {
+    return parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase()
+  }
+  return ''
+}
+
+function getDisplayName(preferredName: string | null, userEmail: string | null): string {
+  if (preferredName && preferredName.trim()) {
+    return preferredName.trim()
+  }
+  if (userEmail) {
+    const firstName = extractFirstName(userEmail)
+    if (firstName) return firstName
+  }
+  // Honorific fallback
+  const honorifics = ['Scholar', 'Strategist', 'Counselor', 'Advisor']
+  const index = Math.floor(Math.random() * honorifics.length)
+  return honorifics[index]
+}
+
+// ─── Time-Based Greetings ─────────────────────────────────────────────────────────
+
+function getTimeGreeting(hour: number): string {
+  if (hour >= 5 && hour < 12) return 'Good morning'
+  if (hour >= 12 && hour < 17) return 'Good afternoon'
+  if (hour >= 17 && hour < 21) return 'Good evening'
+  // Late night (21:00 - 5:00)
+  const lateNightGreetings = ['Working late', 'Burning the midnight oil', 'Still at it']
+  return lateNightGreetings[Math.floor(Math.random() * lateNightGreetings.length)]
+}
+
+function getVisitModifier(visitData: VisitData): string {
+  const now = Date.now()
+  const oneDay = 24 * 60 * 60 * 1000
+  const oneWeek = 7 * oneDay
+  const daysSinceFirst = Math.floor((now - visitData.firstVisit) / oneDay)
+  const daysSinceLast = Math.floor((now - visitData.lastVisit) / oneDay)
+  
+  if (visitData.visitCount === 1) {
+    // First visit ever
+    const firstVisitGreetings = ['Welcome', 'Good to have you', 'Let\'s get started']
+    return firstVisitGreetings[Math.floor(Math.random() * firstVisitGreetings.length)]
+  }
+  
+  if (daysSinceLast === 0 && visitData.visitCount > 1) {
+    // Same day return
+    const sameDayGreetings = ['Back again', 'Round two', 'Still here']
+    return sameDayGreetings[Math.floor(Math.random() * sameDayGreetings.length)]
+  }
+  
+  if (daysSinceLast >= 7) {
+    // Long absence
+    return 'It\'s been a while'
+  }
+  
+  if (visitData.consecutiveDays >= 5) {
+    // Frequent user
+    return 'Welcome back'
+  }
+  
+  // Regular return
+  return 'Welcome back'
+}
+
+function getDynamicGreeting(preferredName: string | null, userEmail: string | null): string {
+  const visitData = updateVisitData()
+  const hour = new Date().getHours()
+  const displayName = getDisplayName(preferredName, userEmail)
+  const timeGreeting = getTimeGreeting(hour)
+  const visitModifier = getVisitModifier(visitData)
+  
+  // Late night has different structure
+  if (hour >= 21 || hour < 5) {
+    return `${timeGreeting}, ${displayName}?`
+  }
+  
+  // Regular time-based greetings
+  if (visitData.visitCount === 1) {
+    return `${visitModifier}, ${displayName}.`
+  }
+  
+  return `${timeGreeting}, ${displayName}. ${visitModifier}.`
+}
+
 // ─── KaTeX lazy-loader ────────────────────────────────────────────────────────
 
 // Only loads the KaTeX bundle when a '$' is detected in a message.
@@ -2807,6 +2949,9 @@ export const Dashboard: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [preferredName, setPreferredName] = useState<string | null>(null)
   const [isFetchingHistory, setIsFetchingHistory] = useState(false)
+  const [dynamicGreeting, setDynamicGreeting] = useState<string>('Agent Ochuko')
+  const [isEditingNickname, setIsEditingNickname] = useState(false)
+  const [nicknameInput, setNicknameInput] = useState('')
 
   const [isLocked, setIsLocked] = useState(() => !!localStorage.getItem('app_lock_pin'))
   const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
@@ -2832,6 +2977,12 @@ export const Dashboard: React.FC = () => {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  // Update dynamic greeting when user data changes
+  useEffect(() => {
+    const greeting = getDynamicGreeting(preferredName, userEmail)
+    setDynamicGreeting(greeting)
+  }, [preferredName, userEmail])
 
   // Apply zoom to document
   useEffect(() => {
@@ -6536,7 +6687,56 @@ export const Dashboard: React.FC = () => {
 
               <div className="space-y-3">
 
-                <h2 className="text-[21px] font-bold tracking-tight text-brand-text">Agent Ochuko</h2>
+                <div className="flex items-center gap-2 justify-center">
+                  <h2 className="text-[21px] font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
+                  <button
+                    onClick={() => {
+                      setIsEditingNickname(true)
+                      setNicknameInput(preferredName || extractFirstName(userEmail || '') || '')
+                    }}
+                    className="p-1 rounded hover:bg-white/10 text-brand-muted hover:text-brand-text transition"
+                    title="Edit nickname"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {isEditingNickname && (
+                  <div className="flex items-center gap-2 justify-center">
+                    <input
+                      ref={renameInputRef}
+                      type="text"
+                      value={nicknameInput}
+                      onChange={(e) => setNicknameInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          setPreferredName(nicknameInput.trim())
+                          setIsEditingNickname(false)
+                        } else if (e.key === 'Escape') {
+                          setIsEditingNickname(false)
+                        }
+                      }}
+                      className="bg-[#1e2025] border border-[#ffffff]/20 rounded px-2 py-1 text-sm text-brand-text focus:outline-none focus:border-brand-accent w-32"
+                      placeholder="Enter nickname"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => {
+                        setPreferredName(nicknameInput.trim())
+                        setIsEditingNickname(false)
+                      }}
+                      className="p-1 rounded bg-brand-accent/20 hover:bg-brand-accent/30 text-brand-accent transition"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setIsEditingNickname(false)}
+                      className="p-1 rounded hover:bg-white/10 text-brand-muted transition"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
 
                 <p className="text-[13px] text-brand-muted leading-relaxed max-w-[280px] mx-auto">
 
