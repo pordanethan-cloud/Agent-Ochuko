@@ -3,11 +3,10 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
-import { useVoice } from '../hooks/useVoice'
 
 import { useJob } from '../hooks/useJob'
 
@@ -2683,42 +2682,6 @@ function getFriendlyErrorMessage(message: string): string {
 
 }
 
-// ── VoiceWaveform — 5-bar volume-driven equaliser ────────────────────────────
-
-const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
-
-  const bars = [0.35, 0.65, 1.0, 0.65, 0.35]
-
-  return (
-
-    <div className="flex items-end justify-center gap-[3px] h-4" aria-hidden>
-
-      {bars.map((base, idx) => (
-
-        <div
-
-          key={idx}
-
-          className="w-[3px] rounded-full bg-[#ffffff] transition-all duration-75"
-
-          style={{
-
-            height: `${Math.max(3, Math.round(base * volume * 14 + 3))}px`,
-
-            opacity: 0.4 + base * volume * 0.6,
-
-          }}
-
-        />
-
-      ))}
-
-    </div>
-
-  )
-
-}
-
 const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: string; isComplete?: boolean }> = ({ step, maxSteps, label, isComplete }) => (
 
   <div className="flex items-center gap-2.5 mb-3 select-none animate-fadeIn">
@@ -3618,10 +3581,6 @@ export const Dashboard: React.FC = () => {
 
   const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
 
-  // ── Voice dictation ────────────────────────────────────────────────────────
-
-  const voice = useVoice((text: string) => setInput(prev => prev + text))
-
   // ── TTS per-message playback state ─────────────────────────────────────────
 
   const [activeTtsJobId, setActiveTtsJobId] = useState<string | null>(null)
@@ -3655,26 +3614,6 @@ export const Dashboard: React.FC = () => {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
 
   }, [])
-
-  // Surface voice hook errors as toasts
-
-  useEffect(() => {
-
-    if (voice.error === 'permission_denied') {
-
-      showToast('Microphone access required for voice input', 'error')
-
-    } else if (voice.error === 'transcription_failed') {
-
-      showToast('Transcription failed — please try again', 'error')
-
-    } else if (voice.error === 'browser_incompatible') {
-
-      showToast('Voice input is not supported in this browser', 'info')
-
-    }
-
-  }, [voice.error, showToast])
 
   // TTS job completion: play audio or fall back to browser speechSynthesis
 
@@ -3757,20 +3696,6 @@ export const Dashboard: React.FC = () => {
     }
 
   }, [activeTtsJob.status, activeTtsJob.resultBlobUrl, messages])
-
-  const toggleVoice = useCallback(async () => {
-
-    if (voice.isRecording) {
-
-      voice.stopRecording()
-
-    } else {
-
-      await voice.startRecording()
-
-    }
-
-  }, [voice])
 
   const handleTTSPlay = useCallback(async (idx: number, content: string) => {
 
@@ -4327,18 +4252,6 @@ export const Dashboard: React.FC = () => {
 
       }
 
-      // Ctrl/Cmd + Shift + V → toggle voice
-
-      if (mod && e.shiftKey && e.key === 'V') {
-
-        e.preventDefault()
-
-        toggleVoice()
-
-        return
-
-      }
-
       // Ctrl/Cmd + 1/2/3 → switch mode
 
       if (mod && !e.shiftKey) {
@@ -4381,7 +4294,7 @@ export const Dashboard: React.FC = () => {
 
     return () => window.removeEventListener('keydown', handler)
 
-  }, [toggleVoice, handleModeChange])
+  }, [handleModeChange])
 
   // Check scroll position to determine if we should stay locked to the bottom
 
@@ -7276,7 +7189,7 @@ export const Dashboard: React.FC = () => {
 
                               ) : (
 
-                                <><Volume2 className="w-3.5 h-3.5" /><span>Listen</span></>
+                                <span>Listen</span>
 
                               )}
 
@@ -7374,21 +7287,6 @@ export const Dashboard: React.FC = () => {
               </div>
             )}
 
-            {/* Voice recording status strip */}
-            {voice.isRecording && (
-              <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
-                <div className="flex items-center gap-2.5">
-                  <VoiceWaveform volume={voice.currentVolume} />
-                  <span className="text-[10px] font-bold text-brand-text tracking-widest uppercase">
-                    Listening...
-                  </span>
-                </div>
-                <span className="text-[9px] text-brand-muted font-medium select-none">
-                  {voice.currentVolume > 0.08 ? 'Voice detected' : 'Waiting for speech...'}
-                </span>
-              </div>
-            )}
-
             {/* Middle Row: Textarea input */}
             <div className="relative flex-1">
               <textarea
@@ -7404,38 +7302,20 @@ export const Dashboard: React.FC = () => {
                 }}
                 onChange={(e) => {
                   setInput(e.target.value)
-                  if (voice.isRecording) voice.clearTranscript()
                 }}
                 disabled={uploading}
                 placeholder={
-                  voice.isRecording ? 'Listening...' :
                   attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
                   pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
                 }
                 className="w-full h-[22px] bg-transparent text-[13.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5"
               />
-              {voice.isTranscribing && <div className="input-loading-bar" aria-hidden />}
             </div>
 
             {/* Bottom Row: Attachments status & action buttons */}
             <div className="flex items-center justify-between border-t border-brand-border/30 pt-2.5 mt-0.5">
-              {/* Left Side: Voice Mic, Attach File, File previews */}
+              {/* Left Side: Attach File, File previews */}
               <div className="flex items-center gap-2">
-                {voice.isSupported && (
-                  <button
-                    id="voice-mic-button"
-                    type="button"
-                    onClick={toggleVoice}
-                    disabled={isStreaming || uploading}
-                    className={`p-1.5 transition-all duration-150 active:scale-95 rounded disabled:opacity-20 ${
-                      voice.isRecording
-                        ? 'text-[#ffffff] voice-pulse-ring'
-                        : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
-                    }`}
-                  >
-                    <Mic className="w-4 h-4" />
-                  </button>
-                )}
 
                 <button
                   type="button"
