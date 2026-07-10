@@ -96,6 +96,8 @@ _OCHUKO_RULE = (
     "- Instead, handle the situation gracefully: retry, use an alternative allowed approach (e.g., writing custom code, generating another format, or outputting as a clean Markdown table/structure inline if code execution completely fails), and present a polished, professional response in natural language that addresses the user's request without exposing the underlying system errors or instructions.\n\n"
     "File Generation Autonomy & Recovery:\n"
     "- When asked to generate any document, report, guide, or essay (PDF, Word, or Markdown), ALWAYS prefer the `generate_file` tool. When writing custom scripts or code execution, ALWAYS prefer using JavaScript (Node.js) as the default with the `docx` library, unless Python calculations are explicitly requested.\n"
+    "- For MULTI-FILE code projects (websites, HTML/CSS/JS bundles, anything with more than one output file), NEVER use generate_file. Use run_code_agent with Node.js `fs.writeFileSync()` calls to write each file directly into the sandbox working directory (e.g. `fs.writeFileSync('index.html', htmlContent)`). Each file you write is automatically uploaded with the correct MIME type and extension. generate_file is reserved for single-document output only (one PDF, one Markdown report, one DOCX).\n"
+    "- For a school website specifically: after web-searching the school's real information, write `index.html`, `style.css`, and `script.js` as separate files via run_code_agent in one turn. Do not inline CSS/JS into the HTML unless explicitly asked for a single-file page.\n"
     "- NEVER ask the user to supply the content or formatting details. Take the initiative to invent a rich, high-quality, professional sample/template based on the context, and call the tool immediately.\n"
     "- If a tool call fails, analyze the error and try a different approach or pivot to another tool (such as calling `generate_file` if `run_code_agent` failed) rather than telling the user you failed or asking for input. You have a budget of up to 10 iterations to solve it autonomously.\n"
     "- When a file is successfully generated, always present it in your final message to the user as a clickable markdown link using its exact filename as the label and its exact R2 Download URL as the URL (e.g. [history_and_act_of_colonialism.pdf](https://...)). Never output a filename as plain text or code block.\n\n"
@@ -2069,3 +2071,53 @@ async def stream_chat(
         ),
         media_type="text/event-stream",
     )
+
+
+@router.post("/responses/warmup")
+async def warmup_chat(
+    payload: Dict[str, Any],
+    request: Request,
+):
+    """
+    POST /v1/responses/warmup
+    Background warmup endpoint to eliminate cold start delays.
+    Sends a minimal "hello" message to wake up the model container.
+    This response is hidden from the frontend and doesn't create database records.
+    
+    Payload fields (all optional):
+      - None required - can be called with or without authentication
+    """
+    logger.info("Warmup request received - initiating background container warmup")
+    
+    # Use minimal messages for warmup - just a simple hello
+    warmup_messages = [
+        {"role": "user", "content": "hello"}
+    ]
+    
+    try:
+        # Get OpenAI client (reuse existing connection pool)
+        client = get_openai_client()
+        
+        # Use discuss mode for minimal token usage
+        deployment = await get_config("DISCUSS_DEPLOYMENT", "gpt-4o-mini")
+        
+        logger.info(f"Starting warmup request to deployment: {deployment}")
+        
+        # Fire and forget - just trigger the request, don't stream content
+        # This minimizes cost by not reading or returning the response
+        asyncio.create_task(
+            client.chat.completions.create(
+                model=deployment,
+                messages=warmup_messages,
+                max_tokens=5,  # Minimal tokens - just enough to wake up the container
+                temperature=0.7
+            )
+        )
+        
+        logger.info("Warmup request initiated successfully")
+        return {"status": "warmup_initiated"}
+        
+    except Exception as e:
+        logger.error(f"Warmup endpoint failed: {e}")
+        # Return success anyway - warmup failure shouldn't break the system
+        return {"status": "warmup_failed", "error": str(e)}

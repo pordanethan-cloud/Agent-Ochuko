@@ -65,6 +65,7 @@ async def execute_code_in_sandbox(
     code: str,
     language: str,
     conversation_id: str,
+    user_id: str = "00000000-0000-0000-0000-000000000000",
     timeout_seconds: int = 45
 ) -> Tuple[str, List[Dict[str, str]]]:
     """
@@ -260,6 +261,49 @@ async def execute_code_in_sandbox(
                         })
                 except Exception as upload_err:
                     logger.warning(f"Failed to upload sandbox file {file}: {upload_err}")
+
+        # ── ZIP bundle if multiple new files were produced ────────────────────────
+        if len(generated_files) > 1:
+            import zipfile
+            import io as _io
+
+            zip_buf = _io.BytesIO()
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                for root, dirs, files_in_dir in os.walk(work_dir):
+                    dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "__pycache__")]
+                    for file in files_in_dir:
+                        if file in ("script.py", "script.js", "command.sh"):
+                            continue
+                        file_path = os.path.join(root, file)
+                        # arcname is relative to work_dir so the zip has a clean flat/nested structure
+                        arcname = os.path.relpath(file_path, work_dir)
+                        try:
+                            zf.write(file_path, arcname=arcname)
+                        except OSError as ze:
+                            logger.warning("ZIP: skipping %s: %s", file, ze)
+
+            zip_bytes = zip_buf.getvalue()
+            if zip_bytes:
+                try:
+                    zip_url = await _upload_generated_file(
+                        file_bytes=zip_bytes,
+                        filename="project.zip",
+                        mime_type="application/zip",
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                    )
+                    generated_files.append({
+                        "filename": "project.zip",
+                        "download_url": zip_url,
+                        "size_bytes": len(zip_bytes),
+                    })
+                    logger.info(
+                        "sandbox ZIP: %d files, %d bytes → %s",
+                        len(generated_files) - 1, len(zip_bytes), zip_url,
+                    )
+                except Exception as zip_err:
+                    logger.warning("ZIP upload failed: %s", zip_err)
+                    # Non-fatal — individual files were already uploaded successfully
 
     except Exception as run_err:
         logger.error(f"Sandbox runner internal error: {run_err}", exc_info=True)

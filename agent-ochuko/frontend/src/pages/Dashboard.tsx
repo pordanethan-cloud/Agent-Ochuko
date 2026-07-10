@@ -3,9 +3,9 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, Mic, Volume2, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus } from 'lucide-react'
 
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
 
@@ -2675,6 +2675,7 @@ const saveConvoCache = (id: string, messages: Message[], mode: string) => {
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [preferredName, setPreferredName] = useState<string | null>(null)
@@ -2686,7 +2687,14 @@ export const Dashboard: React.FC = () => {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('sidebar_width')
-    return saved ? parseInt(saved, 10) : 256
+    if (saved) return parseInt(saved, 10)
+    // Default to 90% of viewport width, constrained between 220px and 480px
+    const defaultWidth = Math.floor(window.innerWidth * 0.9)
+    return Math.max(220, Math.min(480, defaultWidth))
+  })
+  const [pageZoom, setPageZoom] = useState(() => {
+    const saved = localStorage.getItem('page_zoom')
+    return saved ? parseFloat(saved) : 1.0
   })
   const isResizingRef = useRef(false)
 
@@ -2697,6 +2705,12 @@ export const Dashboard: React.FC = () => {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  // Apply zoom to document
+  useEffect(() => {
+    document.documentElement.style.zoom = pageZoom.toString()
+    localStorage.setItem('page_zoom', pageZoom.toString())
+  }, [pageZoom])
 
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -2764,6 +2778,19 @@ export const Dashboard: React.FC = () => {
   })
 
   const [input, setInput] = useState('')
+
+  // Read prompt from URL parameter (e.g., from capabilities page play buttons)
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search)
+    const promptParam = searchParams.get('prompt')
+    if (promptParam) {
+      setInput(decodeURIComponent(promptParam))
+      // Clear the URL parameter to prevent re-triggering
+      window.history.replaceState({}, '', window.location.pathname)
+      // Focus on input so user can easily send
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+  }, [location.search])
 
   const [isStreaming, setIsStreaming] = useState(false)
 
@@ -2863,6 +2890,42 @@ export const Dashboard: React.FC = () => {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [isHeaderSettingsOpen])
+
+  // Background warmup function to eliminate cold start delays
+  const triggerWarmup = useCallback(() => {
+    try {
+      const session = supabase.auth.getSession()
+      session.then(({ data: { session } }) => {
+        const token = session?.access_token
+
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        }
+        
+        // Add auth token if available (user-specific warmup)
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`
+        }
+
+        // Fire and forget - don't await the response
+        fetch(`${API_BASE}/v1/responses/warmup`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({}),
+        }).then(response => {
+          if (response.ok) {
+            console.log('Background warmup initiated successfully')
+          } else {
+            console.warn('Background warmup failed, but chat will still work')
+          }
+        }).catch(err => {
+          console.warn('Background warmup request failed:', err)
+        })
+      })
+    } catch (err) {
+      console.warn('Failed to trigger background warmup:', err)
+    }
+  }, [])
 
   // Warm up the backend on mount so the first message doesn't hit a cold server
   useEffect(() => {
@@ -3534,7 +3597,7 @@ export const Dashboard: React.FC = () => {
 
   }
 
-  const handleNewSession = () => {
+  const handleNewSession = (shouldWarmup: boolean = false) => {
 
     setMessages([])
 
@@ -3547,6 +3610,11 @@ export const Dashboard: React.FC = () => {
     setIsSidebarOpen(false)
 
     setTimeout(() => inputRef.current?.focus(), 0)
+
+    // Only trigger warmup when explicitly starting a new session (not when deleting/navigating)
+    if (shouldWarmup) {
+      triggerWarmup()
+    }
 
   }
 
@@ -3582,7 +3650,7 @@ export const Dashboard: React.FC = () => {
 
         if (id === activeConversationId) {
 
-          handleNewSession()
+          handleNewSession(false)  // Don't warmup when deleting current conversation
 
         }
 
@@ -3617,6 +3685,9 @@ export const Dashboard: React.FC = () => {
       setWebSearchStatus('idle')
 
     }
+
+    // Don't warmup when selecting existing conversations - container should already be warm
+    // Warmup only happens for truly new conversations (handleNewSession with shouldWarmup=true)
 
     setIsFetchingHistory(true)
 
@@ -3962,7 +4033,7 @@ export const Dashboard: React.FC = () => {
 
         e.preventDefault()
 
-        handleNewSession()
+        handleNewSession(true)  // Warmup when user explicitly starts new session
 
         return
 
@@ -4201,6 +4272,14 @@ export const Dashboard: React.FC = () => {
       ? { role: 'user', content: newUserMessage }
 
       : newUserMessage
+
+    // Check if this is a new conversation and trigger warmup
+    const currentConvoId = overrideConvoId || activeConversationId
+    const isNewConvo = !currentConvoId || currentConvoId === '00000000-0000-0000-0000-000000000000'
+    
+    if (isNewConvo) {
+      triggerWarmup()
+    }
 
     // Append the new user message and an assistant placeholder
 
@@ -4910,7 +4989,9 @@ export const Dashboard: React.FC = () => {
 
     let convoId = activeConversationId
 
-    if (!convoId || convoId === '00000000-0000-0000-0000-000000000000') {
+    const isNewConvo = !convoId || convoId === '00000000-0000-0000-0000-000000000000'
+
+    if (isNewConvo) {
 
       convoId = crypto.randomUUID()
 
@@ -5608,7 +5689,7 @@ export const Dashboard: React.FC = () => {
 
           <button
 
-            onClick={handleNewSession}
+            onClick={() => handleNewSession(true)}  // Warmup when user clicks New Session
 
             className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
 
@@ -6066,17 +6147,36 @@ export const Dashboard: React.FC = () => {
 
           <button
             onClick={() => navigate('/capabilities')}
-            className="w-full h-9 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#1e2025] hover:border-white/10 mb-1"
+            className="w-full h-9 text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#ffffff]/30 hover:border-[#ffffff]/50 mb-1"
           >
             <Cpu className="w-3.5 h-3.5" />
             <span>Agent Capabilities</span>
           </button>
 
+          {/* Zoom Controls */}
+          <div className="flex items-center gap-2 w-full mb-1">
+            <button
+              onClick={() => setPageZoom(prev => Math.max(0.5, prev - 0.1))}
+              className="flex-1 h-9 text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
+              title="Zoom out"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <span className="text-[10px] text-brand-muted font-mono w-12 text-center">{Math.round(pageZoom * 100)}%</span>
+            <button
+              onClick={() => setPageZoom(prev => Math.min(1.5, prev + 0.1))}
+              className="flex-1 h-9 text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
+              title="Zoom in"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
           <button
 
             onClick={handleSignOut}
 
-            className="w-full h-10 text-red-400/70 hover:text-red-300 hover:bg-red-950/15 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 px-3 border border-transparent hover:border-red-900/30"
+            className="w-full h-10 text-red-400 hover:text-red-300 hover:bg-red-950/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 px-3 border border-red-900/30 hover:border-red-900/50"
 
           >
 
@@ -6103,7 +6203,7 @@ export const Dashboard: React.FC = () => {
       <main
         className="flex-1 flex flex-col relative bg-brand-bg overflow-hidden z-10 min-w-0 transition-all duration-300 ease-out"
         style={{
-          marginLeft: (isDesktop && (isSidebarOpen || isSidebarHovered)) ? `${sidebarWidth + 12}px` : '0px'
+          marginLeft: '0px'
         }}
       >
 
@@ -6914,7 +7014,9 @@ export const Dashboard: React.FC = () => {
 
         {/* Pinned Input Area (Unified Console Card) */}
         <div
-          className="fixed left-0 right-0 bottom-0 px-5 md:px-10 pb-0 pt-1.5 bg-[#0a0b0d] border-t border-[#1a1c1f] z-20"
+          className={`fixed left-0 right-0 bottom-4 px-5 md:px-10 pb-0 pt-1.5 bg-[#0a0b0d] border-t border-[#1a1c1f] transition-all duration-300 ${
+            (isSidebarOpen || isSidebarHovered) ? 'blur-sm z-10' : 'z-40'
+          }`}
         >
           {showScrollBottomButton && (
             <button

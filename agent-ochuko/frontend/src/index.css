@@ -6,7 +6,6 @@
 
 @layer base {
   html {
-    zoom: 0.9;
     overscroll-behavior-y: none;
   }
   body {
