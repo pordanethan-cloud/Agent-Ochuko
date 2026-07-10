@@ -105,7 +105,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
 
     setIsTranscribing(true)
 
-    const attemptUpload = async (): Promise<string> => {
+    const attemptUpload = async (): Promise<{text: string, delta: string}> => {
       const form = new FormData()
       form.append('file', blob, blob.type.includes('mp4') ? 'chunk.mp4' : 'chunk.webm')
       form.append('existing_text', transcriptRef.current)
@@ -118,16 +118,16 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
 
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data = await resp.json()
-      return data.text ?? ''
+      return { text: data.text ?? '', delta: data.delta ?? '' }
     }
 
-    let newText = ''
+    let result = { text: '', delta: '' }
     try {
-      newText = await attemptUpload()
+      result = await attemptUpload()
     } catch {
       // Retry once on network failure (spec requirement)
       try {
-        newText = await attemptUpload()
+        result = await attemptUpload()
       } catch {
         setError('transcription_failed')
         setIsTranscribing(false)
@@ -138,10 +138,11 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
       setIsTranscribing(false)
     }
 
-    if (newText) {
-      transcriptRef.current = newText
-      setTranscribedText(newText)
-      onTextUpdate(newText)
+    if (result.text) {
+      transcriptRef.current = result.text
+      setTranscribedText(result.text)
+      // Use delta for incremental update if available, otherwise fall back to full text
+      onTextUpdate(result.delta)
     }
   }, [onTextUpdate])
 
