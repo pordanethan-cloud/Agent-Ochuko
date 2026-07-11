@@ -230,6 +230,17 @@ async def execute_code_in_sandbox(
             # Skip scanning dependency and version control directories
             if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
                 continue
+            
+            # Skip files from cloned git repos (check for .git in parent dirs)
+            is_external_repo = False
+            check_path = root
+            while check_path != work_dir:
+                if os.path.exists(os.path.join(check_path, ".git")):
+                    is_external_repo = True
+                    break
+                check_path = os.path.dirname(check_path)
+            if is_external_repo:
+                continue  # Skip external repo files
             for file in files_in_dir:
                 if file in ("script.py", "script.js", "command.sh"):
                     continue

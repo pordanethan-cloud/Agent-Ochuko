@@ -1969,25 +1969,40 @@ async def stream_chat(
     is_new_conversation = False
     if not conversation_id or conversation_id == "00000000-0000-0000-0000-000000000000":
         is_new_conversation = True
-        try:
-            title = (last_user_msg[:30] + "...") if len(last_user_msg) > 30 else last_user_msg or "New Chat"
-            conv_res = supabase.table("conversations").insert({
-                "user_id": user_id,
-                "title": title,
-                "mode": mode,
-                "agent_type": "chat",
-            }).execute()
-            if not conv_res.data:
-                raise HTTPException(status_code=500, detail="Failed to create conversation in database.")
-            conversation_id = conv_res.data[0]["id"]
-            logger.info("Created new conversation %s for user %s", conversation_id, user_id)
-            nano_turn_count = 0
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error("Error creating conversation: %s", e)
-            raise HTTPException(status_code=500, detail=f"Database error during conversation creation: {e}")
+        # Generate conversation ID server-side if not provided by client
+        import uuid
+        conversation_id = str(uuid.uuid4())
+        logger.info("Generated new conversation ID %s for user %s", conversation_id, user_id)
+        nano_turn_count = 0
     else:
+        # Client provided conversation ID (optimistic generation)
+        # Validate UUID format
+        try:
+            import uuid
+            uuid.UUID(conversation_id)
+            logger.info("Using client-provided conversation ID %s", conversation_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid conversation ID format. Must be UUID v4.")
+    
+    # Fire-and-forget conversation creation in background
+    if is_new_conversation:
+        async def create_conversation_background():
+            try:
+                title = (last_user_msg[:30] + "...") if len(last_user_msg) > 30 else last_user_msg or "New Chat"
+                supabase.table("conversations").insert({
+                    "id": conversation_id,  # Use the ID we have (client or server generated)
+                    "user_id": user_id,
+                    "title": title,
+                    "mode": mode,
+                    "agent_type": "chat",
+                }).execute()
+                logger.info("Background conversation creation completed for %s", conversation_id)
+            except Exception as e:
+                logger.error("Background conversation creation failed for %s: %s", conversation_id, e)
+        
+        asyncio.create_task(create_conversation_background())
+    else:
+        # Existing conversation - fetch metadata
         try:
             conv_res = (
                 supabase.table("conversations")
@@ -1997,18 +2012,25 @@ async def stream_chat(
                 .execute()
             )
             if not conv_res.data:
-                raise HTTPException(status_code=404, detail="Conversation not found.")
-            if conv_res.data.get("user_id") != user_id:
-                raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
-            db_mode = conv_res.data.get("mode")
-            if db_mode:
-                mode = db_mode
-            nano_turn_count = conv_res.data.get("nano_turn_count", 0)
+                # Conversation doesn't exist yet (might be in background creation)
+                # Proceed with streaming anyway, will be created in background
+                logger.warning("Conversation %s not found, proceeding with streaming (may be in background creation)", conversation_id)
+                db_mode = mode
+                nano_turn_count = 0
+            else:
+                if conv_res.data.get("user_id") != user_id:
+                    raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
+                db_mode = conv_res.data.get("mode")
+                if db_mode:
+                    mode = db_mode
+                nano_turn_count = conv_res.data.get("nano_turn_count", 0)
         except HTTPException:
             raise
         except Exception as e:
             logger.error("Error fetching conversation %s: %s", conversation_id, e)
-            raise HTTPException(status_code=500, detail="Database error while fetching conversation details.")
+            # Proceed with streaming even if fetch fails
+            db_mode = mode
+            nano_turn_count = 0
 
     # ── Route through model router ────────────────────────────────────────
     decision = await model_router.route(
@@ -2028,16 +2050,18 @@ async def stream_chat(
         except Exception as e:
             logger.error("Failed to increment nano turn count: %s", e)
 
-    # ── Save user message ─────────────────────────────────────────────────
-    try:
-        supabase.table("messages").insert({
-            "conversation_id": conversation_id,
-            "role": "user",
-            "content": last_user_msg,
-        }).execute()
-    except Exception as e:
-        logger.error("Failed to save user message to database: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to save message history.")
+    # ── Save user message (fire-and-forget) ─────────────────────────────────
+    async def save_user_message_background():
+        try:
+            supabase.table("messages").insert({
+                "conversation_id": conversation_id,
+                "role": "user",
+                "content": last_user_msg,
+            }).execute()
+        except Exception as e:
+            logger.error("Failed to save user message to database: %s", e)
+    
+    asyncio.create_task(save_user_message_background())
 
     db_context_messages = await build_llm_context(conversation_id)
     estimated_tokens = getattr(request.state, "estimated_tokens", 0) or 0
@@ -2078,53 +2102,3 @@ async def stream_chat(
         ),
         media_type="text/event-stream",
     )
-
-
-@router.post("/responses/warmup")
-async def warmup_chat(
-    payload: Dict[str, Any],
-    request: Request,
-):
-    """
-    POST /v1/responses/warmup
-    Background warmup endpoint to eliminate cold start delays.
-    Sends a minimal "hello" message to wake up the model container.
-    This response is hidden from the frontend and doesn't create database records.
-    
-    Payload fields (all optional):
-      - None required - can be called with or without authentication
-    """
-    logger.info("Warmup request received - initiating background container warmup")
-    
-    # Use minimal messages for warmup - just a simple hello
-    warmup_messages = [
-        {"role": "user", "content": "hello"}
-    ]
-    
-    try:
-        # Get OpenAI client (reuse existing connection pool)
-        client = get_openai_client()
-        
-        # Use discuss mode for minimal token usage
-        deployment = await get_config("DISCUSS_DEPLOYMENT", "gpt-4o-mini")
-        
-        logger.info(f"Starting warmup request to deployment: {deployment}")
-        
-        # Fire and forget - just trigger the request, don't stream content
-        # This minimizes cost by not reading or returning the response
-        asyncio.create_task(
-            client.chat.completions.create(
-                model=deployment,
-                messages=warmup_messages,
-                max_tokens=5,  # Minimal tokens - just enough to wake up the container
-                temperature=0.7
-            )
-        )
-        
-        logger.info("Warmup request initiated successfully")
-        return {"status": "warmup_initiated"}
-        
-    except Exception as e:
-        logger.error(f"Warmup endpoint failed: {e}")
-        # Return success anyway - warmup failure shouldn't break the system
-        return {"status": "warmup_failed", "error": str(e)}
