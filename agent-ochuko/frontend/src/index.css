@@ -221,4 +221,55 @@ div[aria-live="polite"] > div {
   animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* ── Mermaid Diagram Enhanced Scrollbar ───────────────────────────────────── */
+.mermaid-diagram-container {
+  /* Enhanced scrollbar visibility for Mermaid diagrams */
+  scrollbar-width: auto;
+  scrollbar-color: rgba(197, 168, 128, 0.3) rgba(0, 0, 0, 0.2);
+}
+
+.mermaid-diagram-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.mermaid-diagram-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.mermaid-diagram-container::-webkit-scrollbar-thumb {
+  background: rgba(197, 168, 128, 0.3);
+  border-radius: 4px;
+  transition: background 0.2s ease, width 0.2s ease, height 0.2s ease;
+}
+
+.mermaid-diagram-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(197, 168, 128, 0.5);
+  width: 10px;
+  height: 10px;
+}
+
+/* Scroll indicator fade masks for Mermaid containers */
+.mermaid-diagram-container {
+  position: relative;
+}
+
+.mermaid-diagram-container::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(to top, rgba(13, 17, 23, 0.8), transparent);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.mermaid-diagram-container:hover::after {
+  opacity: 1;
+}
+
 
