@@ -515,6 +515,8 @@ function MermaidBlock({ code }: { code: string }) {
 
   const [isLoading, setIsLoading] = useState(false)
 
+  const [isExpanded, setIsExpanded] = useState(false)
+
   // Validate and clean code on mount
   const validation = useMemo(() => validateMermaidCode(code), [code])
 
@@ -791,14 +793,24 @@ function MermaidBlock({ code }: { code: string }) {
 
         {!showSource && (
           <>
-            {/* Maximize/Fullscreen */}
+            {/* Expand/Collapse */}
+            <button
+              type="button"
+              onClick={() => setIsExpanded(!isExpanded)}
+              title={isExpanded ? "Collapse Diagram" : "Expand Diagram"}
+              className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
+            >
+              {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            </button>
+
+            {/* Fullscreen */}
             <button
               type="button"
               onClick={handleFullscreen}
-              title="Expand Diagram"
+              title="Fullscreen"
               className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
             >
-              <Maximize2 className="w-3.5 h-3.5" />
+              <ExternalLink className="w-3.5 h-3.5" />
             </button>
 
             {/* Download */}
@@ -821,7 +833,14 @@ function MermaidBlock({ code }: { code: string }) {
 
         ? <pre className="p-4 pt-8 text-xs text-[#a5d6ff] overflow-x-auto font-mono leading-relaxed m-0">{code}</pre>
 
-        : <div ref={diagramRef} className="p-4 overflow-x-auto" />
+        : <div 
+            ref={diagramRef} 
+            className={`p-4 overflow-auto mermaid-diagram-container transition-all duration-300 ${
+              isExpanded 
+                ? 'min-h-[500px] max-h-[800px]' 
+                : 'min-h-[200px] max-h-[400px]'
+            }`}
+          />
 
       }
 
