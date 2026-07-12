@@ -4389,8 +4389,23 @@ export const Dashboard: React.FC = () => {
 
           if (!isTransient || attempt === MAX_STREAM_ATTEMPTS) throw attemptErr
 
-          // Reduced retry delay from 2000ms to 500ms for faster response
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          setMessages((prev) => {
+
+            const updated = [...prev]
+
+            updated[updated.length - 1] = {
+
+              ...updated[updated.length - 1],
+
+              content: 'Waking up the server, one moment...'
+
+            }
+
+            return updated
+
+          })
+
+          await new Promise((resolve) => setTimeout(resolve, 2000 * attempt))
 
         }
 

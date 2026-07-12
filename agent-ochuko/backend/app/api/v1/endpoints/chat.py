@@ -1307,15 +1307,6 @@ async def chat_stream_generator(
         stream_failed = False
         error_message = ""
         all_sources = []
-        
-        # Token cost calculation (USD per 1M tokens)
-        # Pricing estimates based on Azure OpenAI model tiers
-        TOKEN_PRICING = {
-            "think": {"input": 15.0, "output": 60.0},      # o-series reasoning models
-            "solve": {"input": 15.0, "output": 60.0},      # o-series reasoning models
-            "discuss": {"input": 2.5, "output": 10.0},    # GPT-4o class
-            "nano": {"input": 0.15, "output": 0.60},      # GPT-4o-mini class
-        }
 
         current_input = stream_kwargs["input"]
         current_previous_response_id = previous_response_id
@@ -1914,12 +1905,6 @@ async def chat_stream_generator(
 
         # ── Persist assistant message ──────────────────────────────────────
         try:
-            # Calculate token cost for this message
-            pricing = TOKEN_PRICING.get(routing_mode.lower(), {"input": 2.5, "output": 10.0})
-            input_cost_usd = (prompt_tokens / 1_000_000) * pricing["input"]
-            output_cost_usd = (completion_tokens / 1_000_000) * pricing["output"]
-            total_cost_usd = input_cost_usd + output_cost_usd
-            
             assistant_msg_insert = {
                 "conversation_id": conversation_id,
                 "role": "assistant",
@@ -1930,7 +1915,6 @@ async def chat_stream_generator(
                 "model": deployment,
                 "tokens_input": prompt_tokens,
                 "tokens_output": completion_tokens,
-                "cost_usd": round(total_cost_usd, 6),
             }
             content_parts = {}
             if all_sources:
