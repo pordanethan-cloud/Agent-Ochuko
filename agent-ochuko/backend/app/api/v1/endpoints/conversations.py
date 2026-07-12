@@ -82,7 +82,7 @@ async def search_conversations(
         conversations = {c["id"]: c for c in (title_res.data or [])}
 
         # 2. Search message content matching query (filtered by user's conversations)
-        # First get user's conversation IDs
+        # Get user's conversation IDs first
         user_conv_res = (
             supabase.table("conversations")
             .select("id")
@@ -93,14 +93,14 @@ async def search_conversations(
         user_conv_ids = [c["id"] for c in (user_conv_res.data or [])]
         
         if not user_conv_ids:
-            return []
+            return list(conversations.values())
         
-        # Then search messages within user's conversations
+        # Search messages within user's conversations using ILIKE (case-insensitive search)
         msg_res = (
             supabase.table("messages")
             .select("conversation_id")
             .in_("conversation_id", user_conv_ids)
-            .text_search("content", q, options={"config": "english", "type": "web_search"})
+            .ilike("content", f"%{q}%")
             .limit(100)
             .execute()
         )
