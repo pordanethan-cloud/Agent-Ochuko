@@ -1323,9 +1323,10 @@ async def chat_stream_generator(
         agent_step = 0
 
         loop_active = True
-        while loop_active and not stream_failed and agent_step < max_iterations:
+        while loop_active and agent_step < max_iterations:
             agent_step += 1
             loop_active = False
+            stream_failed = False  # Reset stream_failed for each iteration
             tool_calls_to_execute = []
 
             # Determine loop step label to display action status
@@ -1398,7 +1399,7 @@ async def chat_stream_generator(
                     except Exception as iter_err:
                         stream_failed = True
                         error_message = str(iter_err)
-                        logger.error("Error during stream iteration: %s", iter_err)
+                        logger.error("Error during stream iteration: %s", iter_err, exc_info=True)
 
                     step_duration = (datetime.now(timezone.utc) - step_start_time).total_seconds()
                     logger.info("Agent step %d completed in %.2fs (stream_failed: %s)", agent_step, step_duration, stream_failed)
