@@ -1785,23 +1785,28 @@ async def chat_stream_generator(
 
                                             sandbox_output = ""
                                             generated_files_info = []
-                                            async for event in execute_code_in_sandbox(
-                                                code=code_to_run,
-                                                language=lang,
-                                                conversation_id=conversation_id,
-                                                user_id=user_id
-                                            ):
-                                                if event["type"] == "sandbox_line":
-                                                    yield (
-                                                        "data: " + json.dumps({
-                                                            "type": "sandbox_progress",
-                                                            "stream": event["stream"],
-                                                            "line": event["line"],
-                                                        }) + "\n\n"
-                                                    )
-                                                elif event["type"] == "sandbox_result":
-                                                    sandbox_output = event["stdout"]
-                                                    generated_files_info = event["files"]
+                                            try:
+                                                async for event in execute_code_in_sandbox(
+                                                    code=code_to_run,
+                                                    language=lang,
+                                                    conversation_id=conversation_id,
+                                                    user_id=user_id
+                                                ):
+                                                    if event["type"] == "sandbox_line":
+                                                        yield (
+                                                            "data: " + json.dumps({
+                                                                "type": "sandbox_progress",
+                                                                "stream": event["stream"],
+                                                                "line": event["line"],
+                                                            }) + "\n\n"
+                                                        )
+                                                    elif event["type"] == "sandbox_result":
+                                                        sandbox_output = event["stdout"]
+                                                        generated_files_info = event["files"]
+                                            except Exception as sandbox_err:
+                                                logger.error("Code sandbox execution failed: %s", sandbox_err, exc_info=True)
+                                                sandbox_output = f"Code execution error: {str(sandbox_err)}"
+                                                generated_files_info = []
 
                                             # Emit download cards for each generated file
                                             for gf in generated_files_info:
