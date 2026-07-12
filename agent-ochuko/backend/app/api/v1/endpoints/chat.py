@@ -827,14 +827,17 @@ async def _perform_gemini_search(
             # mutating os.environ across coroutines causes race conditions.
             g_client = genai.Client(api_key=key)
 
-            g_response = await g_client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=contents,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                    temperature=0.2,
+            g_response = await asyncio.wait_for(
+                g_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=contents,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                        temperature=0.2,
+                    ),
                 ),
+                timeout=20.0  # 20 second timeout for web search
             )
 
             # Extract grounded sources
@@ -1364,7 +1367,9 @@ async def chat_stream_generator(
             if max_comp_tokens:
                 iter_kwargs["max_completion_tokens"] = max_comp_tokens
 
-            step_timeout = await get_step_timeout()
+            step_timeout = await get_step_timeout(routing_mode)
+            logger.info("Starting agent step %d/%d with timeout %ds (mode: %s)", agent_step, max_iterations, step_timeout, routing_mode)
+            step_start_time = datetime.now(timezone.utc)
 
             try:
                 async with client.responses.stream(**iter_kwargs, timeout=step_timeout) as stream:
@@ -1394,6 +1399,9 @@ async def chat_stream_generator(
                         stream_failed = True
                         error_message = str(iter_err)
                         logger.error("Error during stream iteration: %s", iter_err)
+
+                    step_duration = (datetime.now(timezone.utc) - step_start_time).total_seconds()
+                    logger.info("Agent step %d completed in %.2fs (stream_failed: %s)", agent_step, step_duration, stream_failed)
 
                     if not stream_failed:
                         try:
