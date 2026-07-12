@@ -1267,10 +1267,11 @@ async def chat_stream_generator(
             user_context = f"\nUser Name: {preferred_name}. Address naturally, sparingly.\n"
 
         # ── System prompt: unified persona for all modes, with capability sections for think/solve ──
+        # FIX: Ensure system prompt is always included to prevent context loss
         if routing_mode in ("discuss", "nano"):
-            full_system = _OCHUKO_PERSONA + "\n\n" + user_context + time_context + system_prompt
+            full_system = _OCHUKO_PERSONA + "\n\n" + user_context + time_context + (system_prompt or "")
         else:
-            full_system = _OCHUKO_PERSONA + "\n\n" + build_capability_section() + "\n\n" + user_context + time_context + system_prompt
+            full_system = _OCHUKO_PERSONA + "\n\n" + build_capability_section() + "\n\n" + user_context + time_context + (system_prompt or "")
 
         # ── Latest user message for intent detection ──
         _latest_user_msg = next(

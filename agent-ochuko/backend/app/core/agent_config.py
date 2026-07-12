@@ -97,13 +97,18 @@ async def get_max_completion_tokens(mode: str = "think", deployment: Optional[st
     """
     Returns the maximum completion tokens limit for a given mode.
     Only applicable for o-series reasoning models — always returns None for GPT models.
+    
+    FIX: Increased default limits to prevent premature token capping on first responses.
+    - THINK mode: 16000 tokens (was 8000)
+    - SOLVE mode: 8000 tokens (was 4000)
+    This ensures the first response has sufficient space to complete without being cut off.
     """
     if not await is_reasoning_model(deployment):
         return None
     if mode.lower() == "think":
-        val = await get_config("MAX_COMPLETION_TOKENS_THINK", "8000")
+        val = await get_config("MAX_COMPLETION_TOKENS_THINK", "16000")
     elif mode.lower() == "solve":
-        val = await get_config("MAX_COMPLETION_TOKENS_SOLVE", "4000")
+        val = await get_config("MAX_COMPLETION_TOKENS_SOLVE", "8000")
     else:
         return None
     try:

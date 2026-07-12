@@ -3606,19 +3606,33 @@ export const Dashboard: React.FC = () => {
   }
 
   const handleNewSession = () => {
+    // Abort any active stream before starting new session
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
 
+    // Reset all streaming and search states
+    setIsStreaming(false)
+    setWebSearchStatus('idle')
+    setActivityLabel('')
+    
+    // Clear messages and reset conversation ID
     setMessages([])
-
     setActiveConversationId('00000000-0000-0000-0000-000000000000')
-
     localStorage.setItem('active_conversation_id', '00000000-0000-0000-0000-000000000000')
-
+    
+    // Reset mode to discuss
     setMode('discuss')
-
+    
+    // Close sidebar
     setIsSidebarOpen(false)
-
-    setTimeout(() => inputRef.current?.focus(), 0)
-
+    
+    // Clear any preview state
+    setPreviewingFile(null)
+    
+    // Focus input after state updates
+    setTimeout(() => inputRef.current?.focus(), 100)
   }
 
   const handleConfirmDelete = async () => {

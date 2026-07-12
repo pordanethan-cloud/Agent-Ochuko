@@ -130,7 +130,7 @@ app.include_router(conversations_router, prefix="/v1/conversations", tags=["conv
 app.include_router(files_router, prefix="/v1/files", tags=["files"])
 app.include_router(agents_router, prefix="/v1/agents", tags=["agents"])
 app.include_router(search_router, prefix="/v1/search", tags=["search"])
-app.include_router(audio_router, prefix="/v1/audio", tags=["audio"])
+# REMOVED: audio router - text-to-audio feature removed per user request
 app.include_router(shared_router, prefix="/v1/shared", tags=["shared"])
 
 

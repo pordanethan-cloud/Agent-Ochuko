@@ -10,7 +10,7 @@ export const Capabilities: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf8f5] text-black flex flex-col font-sans selection:bg-[#e8e4df] scroll-smooth">
+    <div className="min-h-screen bg-white text-black flex flex-col font-['Comic_Sans_MS','Verdana','Arial',sans-serif] selection:bg-[#e8e4df] scroll-smooth" style={{ fontFamily: 'Comic Sans MS, Verdana, Arial, sans-serif' }}>
       
       {/* Authentic Top Navigation Bar */}
       <nav className="h-14 border-b border-gray-300 bg-white/90 backdrop-blur-md sticky top-0 z-50 flex items-center justify-between px-6 select-none">
