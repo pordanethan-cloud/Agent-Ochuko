@@ -527,8 +527,6 @@ function MermaidBlock({ code }: { code: string }) {
 
   const [copied, setCopied] = useState(false)
 
-  const [renderError, setRenderError] = useState<string | null>(null)
-
   const [isLoading, setIsLoading] = useState(false)
 
   const [isExpanded, setIsExpanded] = useState(false)
@@ -547,8 +545,6 @@ function MermaidBlock({ code }: { code: string }) {
       if (!diagramRef.current) return
 
       setIsLoading(true)
-
-      setRenderError(null)
 
       try {
 
@@ -582,8 +578,6 @@ function MermaidBlock({ code }: { code: string }) {
         console.error('Mermaid rendering error:', err)
 
         if (!cancelled) {
-
-          setRenderError(err?.message || 'Failed to render diagram')
 
           if (diagramRef.current) {
 
@@ -3182,47 +3176,6 @@ export const Dashboard: React.FC = () => {
     return () => document.removeEventListener('mousedown', handler)
   }, [isHeaderSettingsOpen])
 
-  // Background warmup function to eliminate cold start delays
-  const triggerWarmup = useCallback(() => {
-    try {
-      const session = supabase.auth.getSession()
-      session.then(({ data: { session } }) => {
-        const token = session?.access_token
-
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-        }
-        
-        // Add auth token if available (user-specific warmup)
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`
-        }
-
-        // Fire and forget - don't await the response
-        fetch(`${API_BASE}/v1/responses/warmup`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({}),
-        }).then(response => {
-          if (response.ok) {
-            console.log('Background warmup initiated successfully')
-          } else {
-            console.warn('Background warmup failed, but chat will still work')
-          }
-        }).catch(err => {
-          console.warn('Background warmup request failed:', err)
-        })
-      })
-    } catch (err) {
-      console.warn('Failed to trigger background warmup:', err)
-    }
-  }, [])
-
-  // Warm up the backend on mount so the first message doesn't hit a cold server
-  useEffect(() => {
-    fetch(`${API_BASE}/ready`).catch(() => {})
-  }, [])
-
   useEffect(() => {
     if (!isArtifactCopyOpen) return
     const handler = (e: MouseEvent) => {
@@ -3630,26 +3583,6 @@ export const Dashboard: React.FC = () => {
 
   const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
 
-  // ── TTS per-message playback state ─────────────────────────────────────────
-
-  const [activeTtsJobId, setActiveTtsJobId] = useState<string | null>(null)
-
-  const [ttsState, setTtsState] = useState<Record<number, {
-
-    status: 'idle' | 'loading' | 'playing' | 'done' | 'failed'
-
-    blobUrl: string | null
-
-    progress: number
-
-  }>>({})
-
-  const activeTtsAudioRef = useRef<HTMLAudioElement | null>(null)
-
-  const activeTtsIndexRef = useRef<number | null>(null)
-
-  const activeTtsJob = useJob(activeTtsJobId)
-
   // ── Toast notifications ────────────────────────────────────────────────────
 
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'info' | 'error' }[]>([])
@@ -3663,163 +3596,6 @@ export const Dashboard: React.FC = () => {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
 
   }, [])
-
-  // TTS job completion: play audio or fall back to browser speechSynthesis
-
-  useEffect(() => {
-
-    const idx = activeTtsIndexRef.current
-
-    // Guard: if user stopped playback while job was loading, idx is already null — do nothing
-    if (idx === null) return
-
-    if (activeTtsJob.status === 'done' && activeTtsJob.resultBlobUrl) {
-
-      if (activeTtsAudioRef.current) {
-
-        activeTtsAudioRef.current.pause()
-
-        activeTtsAudioRef.current = null
-
-      }
-
-      // Re-check: user may have stopped between job resolution and this point
-      if (activeTtsIndexRef.current === null) return
-
-      const audio = new Audio(activeTtsJob.resultBlobUrl)
-
-      activeTtsAudioRef.current = audio
-
-      audio.ontimeupdate = () => {
-
-        if (audio.duration > 0) {
-
-          setTtsState(prev => ({
-
-            ...prev,
-
-            [idx]: { ...prev[idx], progress: Math.round((audio.currentTime / audio.duration) * 100) }
-
-          }))
-
-        }
-
-      }
-
-      audio.onended = () => {
-
-        setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
-
-        activeTtsAudioRef.current = null
-
-        activeTtsIndexRef.current = null
-
-      }
-
-      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'playing', blobUrl: activeTtsJob.resultBlobUrl } }))
-
-      audio.play().catch(() => { /* autoplay policy: requires user gesture on some browsers */ })
-
-      setActiveTtsJobId(null)
-
-    } else if (activeTtsJob.status === 'failed') {
-
-      // Azure Speech unavailable — fall back to browser speechSynthesis
-
-      const msgContent = messages[idx]?.content || ''
-
-      if (msgContent) {
-
-        window.speechSynthesis.cancel()
-
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance(msgContent))
-
-      }
-
-      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
-
-      activeTtsIndexRef.current = null
-
-      setActiveTtsJobId(null)
-
-    }
-
-  }, [activeTtsJob.status, activeTtsJob.resultBlobUrl, messages])
-
-  const handleTTSPlay = useCallback(async (idx: number, content: string) => {
-
-    // Stop any active audio
-
-    if (activeTtsAudioRef.current) {
-
-      activeTtsAudioRef.current.pause()
-
-      activeTtsAudioRef.current = null
-
-    }
-
-    window.speechSynthesis.cancel()
-
-    setActiveTtsJobId(null)
-
-    // Toggle off: if this message is already playing or loading, stop it
-
-    if (ttsState[idx]?.status === 'playing' || ttsState[idx]?.status === 'loading') {
-
-      // Null the index FIRST so the useEffect guard bails out immediately
-      activeTtsIndexRef.current = null
-
-      setActiveTtsJobId(null)
-
-      window.speechSynthesis.cancel()
-
-      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
-
-      return
-
-    }
-
-    activeTtsIndexRef.current = idx
-
-    setTtsState(prev => ({ ...prev, [idx]: { status: 'loading', blobUrl: null, progress: 0 } }))
-
-    try {
-
-      const session = await supabase.auth.getSession()
-
-      const token = session.data.session?.access_token
-
-      if (!token) throw new Error('Not authenticated')
-
-      const res = await fetch(`${API_BASE}/v1/agents/speech/tts`, {
-
-        method: 'POST',
-
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-
-        body: JSON.stringify({ text: content, voice: 'auto', conversation_id: activeConversationId }),
-
-      })
-
-      if (!res.ok) throw new Error(`TTS enqueue failed: ${res.status}`)
-
-      const data = await res.json()
-
-      setActiveTtsJobId(data.job_id)
-
-    } catch {
-
-      // Immediate browser fallback on network or quota error
-
-      window.speechSynthesis.speak(new SpeechSynthesisUtterance(content))
-
-      setTtsState(prev => ({ ...prev, [idx]: { status: 'done', blobUrl: null, progress: 0 } }))
-
-      activeTtsIndexRef.current = null
-
-    }
-
-  }, [ttsState, activeConversationId])
 
   const fetchConversations = async () => {
 
@@ -3859,25 +3635,34 @@ export const Dashboard: React.FC = () => {
 
   }
 
-  const handleNewSession = (shouldWarmup: boolean = false) => {
-
-    setMessages([])
-
-    setActiveConversationId('00000000-0000-0000-0000-000000000000')
-
-    localStorage.setItem('active_conversation_id', '00000000-0000-0000-0000-000000000000')
-
-    setMode('discuss')
-
-    setIsSidebarOpen(false)
-
-    setTimeout(() => inputRef.current?.focus(), 0)
-
-    // Only trigger warmup when explicitly starting a new session (not when deleting/navigating)
-    if (shouldWarmup) {
-      triggerWarmup()
+  const handleNewSession = () => {
+    // Abort any active stream before starting new session
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
     }
 
+    // Reset all streaming and search states
+    setIsStreaming(false)
+    setWebSearchStatus('idle')
+    setActivityLabel('')
+    
+    // Clear messages and reset conversation ID
+    setMessages([])
+    setActiveConversationId('00000000-0000-0000-0000-000000000000')
+    localStorage.setItem('active_conversation_id', '00000000-0000-0000-0000-000000000000')
+    
+    // Reset mode to discuss
+    setMode('discuss')
+    
+    // Close sidebar
+    setIsSidebarOpen(false)
+    
+    // Clear any preview state
+    setPreviewingFile(null)
+    
+    // Focus input after state updates
+    setTimeout(() => inputRef.current?.focus(), 100)
   }
 
   const handleConfirmDelete = async () => {
@@ -3912,7 +3697,7 @@ export const Dashboard: React.FC = () => {
 
         if (id === activeConversationId) {
 
-          handleNewSession(false)  // Don't warmup when deleting current conversation
+          handleNewSession()
 
         }
 
@@ -4295,7 +4080,7 @@ export const Dashboard: React.FC = () => {
 
         e.preventDefault()
 
-        handleNewSession(true)  // Warmup when user explicitly starts new session
+        handleNewSession()
 
         return
 
@@ -4347,8 +4132,6 @@ export const Dashboard: React.FC = () => {
 
   // Check scroll position to determine if we should stay locked to the bottom
 
-  const [showScrollBottomButton, setShowScrollBottomButton] = useState(false)
-
   const handleScroll = () => {
 
     const container = scrollContainerRef.current
@@ -4358,8 +4141,6 @@ export const Dashboard: React.FC = () => {
       const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150
 
       isAutoScrollEnabledRef.current = isAtBottom
-
-      setShowScrollBottomButton(!isAtBottom)
 
     }
 
@@ -4382,8 +4163,6 @@ export const Dashboard: React.FC = () => {
       })
 
       isAutoScrollEnabledRef.current = true
-
-      setShowScrollBottomButton(false)
 
     }
 
@@ -5957,7 +5736,7 @@ export const Dashboard: React.FC = () => {
 
           <button
 
-            onClick={() => handleNewSession(true)}  // Warmup when user clicks New Session
+            onClick={() => handleNewSession()}
 
             className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
 
@@ -7283,64 +7062,6 @@ export const Dashboard: React.FC = () => {
                             )}
 
                           </button>
-
-                        )}
-
-                        {/* TTS Listen/Stop button — assistant messages only */}
-
-                        {msg.role === 'assistant' && msg.content.length > 0 && (
-
-                          <>
-
-                            <button
-
-                              id={`tts-play-${i}`}
-
-                              type="button"
-
-                              onClick={() => handleTTSPlay(i, msg.content)}
-
-                              title={ttsState[i]?.status === 'playing' ? 'Stop audio' : 'Listen to response'}
-
-                              className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
-
-                            >
-
-                              {ttsState[i]?.status === 'loading' ? (
-
-                                <><Loader2 className="w-3.5 h-3.5 animate-spin" /><span>Loading</span></>
-
-                              ) : ttsState[i]?.status === 'playing' ? (
-
-                                <><Square className="w-3.5 h-3.5 fill-current" /><span>Stop</span></>
-
-                              ) : (
-
-                                <span>Listen</span>
-
-                              )}
-
-                            </button>
-
-                            {/* Audio progress bar — visible only while playing */}
-
-                            {ttsState[i]?.status === 'playing' && (
-
-                              <div className="w-16 h-[2px] bg-[#1a1d20] rounded-full overflow-hidden">
-
-                                <div
-
-                                  className="h-full bg-[#ffffff]/70 transition-all duration-500"
-
-                                  style={{ width: `${ttsState[i]?.progress ?? 0}%` }}
-
-                                />
-
-                              </div>
-
-                            )}
-
-                          </>
 
                         )}
 

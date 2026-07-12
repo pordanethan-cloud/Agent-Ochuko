@@ -34,15 +34,22 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # ── 5. Publish functions (remote build — compiles deps server-side) ─
+      # ── 5. Build dependencies locally ─────────────────────────────────────
+      - name: Install dependencies
+        working-directory: ./agent-ochuko/functions
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt --target .python_packages/lib/site-packages
+
+      # ── 6. Publish functions (local build) ────────────────────────────────
       - name: Publish to Azure Functions
         working-directory: ./agent-ochuko/functions
         run: |
           func azure functionapp publish agent-ochuko-functions \
             --python \
-            --build remote
+            --build local
 
-      # ── 6. Verify all 6 functions are registered ──────────────────────
+      # ── 7. Verify all 6 functions are registered ──────────────────────
       - name: Verify function registration
         run: |
           echo "Checking deployed functions..."
