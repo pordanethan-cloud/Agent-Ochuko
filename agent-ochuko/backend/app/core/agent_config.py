@@ -68,15 +68,15 @@ async def get_max_iterations(mode: str = "think") -> int:
 async def get_step_timeout(mode: str = "think") -> int:
     """
     Returns the per-iteration step timeout in seconds.
-    Per-mode defaults: discuss/nano: 15s, think/solve: 30s
+    Per-mode defaults: discuss/nano: 30s, think/solve: 60s
     Falls back to global AGENT_STEP_TIMEOUT_SECS if set.
     """
     # Per-mode defaults
     mode_defaults = {
-        "think": "30",
-        "solve": "30",
-        "discuss": "15",
-        "nano": "15",
+        "think": "60",
+        "solve": "60",
+        "discuss": "30",
+        "nano": "30",
     }
     
     # Try mode-specific config first
@@ -88,7 +88,7 @@ async def get_step_timeout(mode: str = "think") -> int:
     }
     
     mode_key = mode_key_map.get(mode.lower())
-    default = mode_defaults.get(mode.lower(), "30")
+    default = mode_defaults.get(mode.lower(), "60")
     
     if mode_key:
         raw = await get_config(mode_key, default)
@@ -97,9 +97,9 @@ async def get_step_timeout(mode: str = "think") -> int:
         raw = await get_config("AGENT_STEP_TIMEOUT_SECS", default)
     
     try:
-        return max(10, int(raw))
+        return max(15, int(raw))
     except (ValueError, TypeError):
-        return 30
+        return 60
 
 
 async def get_reasoning_effort(mode: str = "think", deployment: Optional[str] = None) -> Optional[str]:
