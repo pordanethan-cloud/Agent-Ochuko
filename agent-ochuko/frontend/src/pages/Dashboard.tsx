@@ -3336,11 +3336,19 @@ export const Dashboard: React.FC = () => {
 
           setSearchResults(data)
 
+        } else {
+
+          console.error('Search failed with status:', res.status, await res.text())
+
+          setSearchResults([])
+
         }
 
       } catch (err) {
 
         console.error('Failed to search conversations:', err)
+
+        setSearchResults([])
 
       }
 
