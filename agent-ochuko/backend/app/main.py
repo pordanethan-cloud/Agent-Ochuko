@@ -191,12 +191,14 @@ async def health_check():
 @app.get("/ready")
 async def readiness_check():
     """
-    Readiness probe — returns 200 when app is ready.
-    Config loads in background, so we don't block on it.
+    Readiness probe — returns 200 only when config is loaded and app is ready.
     Azure Container Apps won't route traffic until this returns 200.
     """
     if not _app_ready:
         return {"status": "not_ready"}, 503
+
+    if len(_CONFIG_CACHE) < 3:
+        return {"status": "config_not_loaded"}, 503
 
     return {"status": "ready"}
 

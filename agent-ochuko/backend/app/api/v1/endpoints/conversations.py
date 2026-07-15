@@ -81,11 +81,26 @@ async def search_conversations(
         )
         conversations = {c["id"]: c for c in (title_res.data or [])}
 
-        # 2. Search message content matching query
+        # 2. Search message content matching query (filtered by user's conversations)
+        # Get user's conversation IDs first to scope the search
+        user_conv_res = (
+            supabase.table("conversations")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("is_archived", False)
+            .execute()
+        )
+        user_conv_ids = [c["id"] for c in (user_conv_res.data or [])]
+
+        if not user_conv_ids:
+            return list(conversations.values())
+
+        # Search messages within user's conversations using ILIKE (case-insensitive)
         msg_res = (
             supabase.table("messages")
             .select("conversation_id")
-            .text_search("content", q, options={"config": "english", "type": "web_search"})
+            .in_("conversation_id", user_conv_ids)
+            .ilike("content", f"%{q}%")
             .limit(100)
             .execute()
         )
