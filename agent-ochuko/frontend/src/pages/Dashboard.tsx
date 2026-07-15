@@ -6478,16 +6478,6 @@ export const Dashboard: React.FC = () => {
 
                 <div className="flex items-center gap-2 justify-center">
                   <h2 className="text-[21px] font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
-                  <button
-                    onClick={() => {
-                      setIsEditingNickname(true)
-                      setNicknameInput(preferredName || extractFirstName(userEmail || '') || '')
-                    }}
-                    className="p-1 rounded hover:bg-white/10 text-brand-muted hover:text-brand-text transition"
-                    title="Edit nickname"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
                 </div>
 
                 {isEditingNickname && (
@@ -6527,17 +6517,7 @@ export const Dashboard: React.FC = () => {
                   </div>
                 )}
 
-                <p className="text-[13px] text-brand-muted leading-relaxed max-w-[280px] mx-auto">
 
-                  Calm. Competent. Precise. Across law, finance, psychology, systems, and strategy.
-
-                </p>
-
-                <p className="text-[9px] text-[#ffffff]/70 font-bold tracking-widest uppercase">
-
-                  All responses within strict legal parameters
-
-                </p>
 
               </div>
 
