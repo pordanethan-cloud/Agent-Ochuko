@@ -4434,6 +4434,7 @@ export const Dashboard: React.FC = () => {
       if (!reader) throw new Error('No body reader available')
 
       let accumulatedText = ''
+      let sseBuffer = ''  // Accumulates partial lines across chunk boundaries
 
       while (true) {
 
@@ -4441,9 +4442,17 @@ export const Dashboard: React.FC = () => {
 
         if (done) break
 
-        const chunk = decoder.decode(value, { stream: true })
+        sseBuffer += decoder.decode(value, { stream: true })
 
-        for (const line of chunk.split('\n')) {
+        // Process only complete lines (terminated by \n).
+        // The last segment after the final \n is an incomplete line — keep it in the buffer.
+        const lastNewline = sseBuffer.lastIndexOf('\n')
+        if (lastNewline === -1) continue  // no complete line yet, wait for more data
+
+        const completePart = sseBuffer.slice(0, lastNewline)
+        sseBuffer = sseBuffer.slice(lastNewline + 1)  // carry forward the unterminated tail
+
+        for (const line of completePart.split('\n')) {
 
           if (!line.startsWith('data: ')) continue
 
