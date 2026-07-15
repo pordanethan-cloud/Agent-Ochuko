@@ -1,4 +1,4 @@
-/**
+﻿/**
  * useVoice.ts
  *
  * Self-contained voice dictation hook. Manages:
@@ -139,17 +139,10 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
     }
 
     if (result.text) {
-      const prevText = transcriptRef.current
       transcriptRef.current = result.text
       setTranscribedText(result.text)
-      // Compute delta: only send what's genuinely new since last chunk
-      // If backend provides delta use it, otherwise diff against previous transcript
-      const delta = result.delta
-        ? result.delta
-        : result.text.startsWith(prevText)
-          ? result.text.slice(prevText.length).trimStart()
-          : result.text
-      if (delta) onTextUpdate(delta)
+      // Use delta for incremental update if available, otherwise fall back to full text
+      onTextUpdate(result.delta)
     }
   }, [onTextUpdate])
 

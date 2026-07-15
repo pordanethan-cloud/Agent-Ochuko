@@ -1985,7 +1985,16 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
               <span className="text-[10.5px] font-medium text-[#8e95a2] group-hover/badge:text-[#f0ece4] truncate tracking-tight transition-colors duration-150">
 
-                {src.title || src.url}
+                {(() => {
+                  const t = src.title || ''
+                  // If title looks like a real title (not a URL), use it
+                  if (t && !t.startsWith('http') && !t.startsWith('vertexai')) return t
+                  // Otherwise extract clean domain from URL
+                  try {
+                    const host = new URL(src.url).hostname.replace('www.', '')
+                    return host === 'vertexaisearch.cloud.google.com' ? 'Google Search' : host
+                  } catch { return 'Source' }
+                })()}
 
               </span>
 
@@ -3417,6 +3426,9 @@ export const Dashboard: React.FC = () => {
   // ── Voice-to-text hook ─────────────────────────────────────────────────────
   const voice = useVoice((text: string) => setInput(prev => prev + text))
 
+  // toggleVoiceRef — stable ref so keyboard handler can call toggleVoice before it is declared
+  const toggleVoiceRef = useRef<(() => Promise<void>) | null>(null)
+
   // ── Inline rename state ─────────────────────────────────────────────────────
 
   const [renamingConvoId, setRenamingConvoId] = useState<string | null>(null)
@@ -3613,6 +3625,18 @@ export const Dashboard: React.FC = () => {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
 
   }, [])
+
+  // Surface voice hook errors as toasts (placed after showToast declaration)
+  useEffect(() => {
+    if (voice.error === 'permission_denied') {
+      showToast('Microphone access required for voice input', 'error')
+    } else if (voice.error === 'transcription_failed') {
+      showToast('Transcription failed — please try again', 'error')
+    } else if (voice.error === 'browser_incompatible') {
+      showToast('Voice input is not supported in this browser', 'info')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice.error])
 
   const fetchConversations = async () => {
 
@@ -4098,6 +4122,18 @@ export const Dashboard: React.FC = () => {
         e.preventDefault()
 
         handleNewSession()
+
+        return
+
+      }
+
+      // Ctrl/Cmd + Shift + V → toggle voice dictation
+
+      if (mod && e.shiftKey && e.key === 'V') {
+
+        e.preventDefault()
+
+        toggleVoiceRef.current?.()
 
         return
 
@@ -4974,6 +5010,15 @@ export const Dashboard: React.FC = () => {
 
         abortControllerRef.current = null
 
+        // Persist conversation to localStorage after each response
+        const convId = activeConversationId
+        if (convId && convId !== '00000000-0000-0000-0000-000000000000') {
+          setMessages(prev => {
+            saveConvoCache(convId, prev, mode)
+            return prev
+          })
+        }
+
         // Return focus to input so user can type the next message immediately
 
         setTimeout(() => inputRef.current?.focus(), 0)
@@ -5050,7 +5095,10 @@ export const Dashboard: React.FC = () => {
       await voice.startRecording()
     }
 
-  }, [voice])
+  }, [voice, showToast])
+
+  // Keep ref in sync so keyboard shortcut can call toggleVoice without forward-reference issues
+  toggleVoiceRef.current = toggleVoice
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -6444,7 +6492,7 @@ export const Dashboard: React.FC = () => {
 
               onScroll={handleScroll}
 
-              className="flex-1 overflow-y-auto pt-8 pb-24 px-5 md:px-10 relative z-10"
+              className="flex-1 overflow-y-auto overflow-x-hidden pt-8 pb-24 px-5 md:px-10 relative z-10"
 
             >
 
