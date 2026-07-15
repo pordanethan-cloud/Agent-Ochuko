@@ -96,7 +96,10 @@ async def ask_hybrid_engine(
             logger.warning("Failed to load conversation history for search: %s", db_err)
 
     try:
-        result = await _perform_google_search(query.prompt)
+        result = await _perform_google_search(
+            query.prompt,
+            history=conversation_history,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=f"Grounded search failed: {exc}")
 

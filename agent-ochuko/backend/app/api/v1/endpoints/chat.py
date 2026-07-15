@@ -65,7 +65,11 @@ def get_openai_client() -> AsyncAzureOpenAI:
     return _openai_client
 
 
-async def _perform_google_search(query: str, synthesis_deployment: str = "") -> Dict[str, Any]:
+async def _perform_google_search(
+    query: str,
+    synthesis_deployment: str = "",
+    history: List[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Two-phase multi-cloud hybrid search (reference architecture):
 
@@ -97,13 +101,30 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
         if not keys:
             raise RuntimeError("No Google/Gemini API keys configured in environment.")
 
+        # Contextualize query with conversation history so search is aware of previous turns (e.g. "who won")
+        gemini_query = query
+        if history:
+            history_context = "Recent conversation context:\n"
+            for msg in history[-5:]:
+                role = "User" if msg.get("role") == "user" else "Assistant"
+                content = msg.get("content", "")
+                if "[Google Search Result for:" in content:
+                    parts = content.split("[Google Search Result for:")
+                    content = parts[0].strip()
+                history_context += f"{role}: {content}\n"
+            gemini_query = (
+                f"{history_context}\n"
+                f"Current Query: {query}\n\n"
+                "Please search Google and answer the Current Query using the conversation context above."
+            )
+
         last_exc = None
         for idx, key in enumerate(keys):
             try:
                 g_client = genai.Client(api_key=key)
                 g_response = g_client.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=query,
+                    contents=gemini_query,
                     config=genai_types.GenerateContentConfig(
                         tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
                         temperature=0.1,  # near-zero: we want faithful retrieval, not creativity
@@ -180,12 +201,22 @@ async def _perform_google_search(query: str, synthesis_deployment: str = "") -> 
 
     try:
         az_client = get_openai_client()
+        
+        # Build input messages: system prompt + history + current query
+        input_messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            for msg in history:
+                role = msg.get("role")
+                content = msg.get("content", "")
+                if role == "assistant" and "[Google Search Result for:" in content:
+                    parts = content.split("[Google Search Result for:")
+                    content = parts[0].strip()
+                input_messages.append({"role": role, "content": content})
+        input_messages.append({"role": "user", "content": query})
+
         az_response = await az_client.responses.create(
             model=deploy,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
+            input=input_messages,
         )
 
         answer: str = az_response.output_text or ""
@@ -426,7 +457,11 @@ async def chat_stream_generator(
                                             })
                                             + "\n\n"
                                         )
-                                        search_result = await _perform_google_search(query, synthesis_deployment=deployment)
+                                        search_result = await _perform_google_search(
+                                            query,
+                                            synthesis_deployment=deployment,
+                                            history=messages,
+                                        )
                                         sources = search_result.get("sources", [])
                                         snippet = search_result.get("answer", "")[:1200]
 
