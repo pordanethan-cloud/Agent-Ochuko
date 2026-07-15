@@ -69,7 +69,6 @@ function updateVisitData(): VisitData {
 function extractFirstName(email: string): string {
   if (!email) return ''
   const localPart = email.split('@')[0]
-  // Remove numbers, dots, underscores, and capitalize first letter
   const cleaned = localPart.replace(/[0-9._-]/g, ' ').trim()
   const parts = cleaned.split(/\s+/).filter(p => p.length > 0)
   if (parts.length > 0) {
@@ -78,80 +77,134 @@ function extractFirstName(email: string): string {
   return ''
 }
 
+/**
+ * Returns FIRST NAME ONLY.
+ * Priority: preferredName first word → email local-part first word → honorific.
+ */
 function getDisplayName(preferredName: string | null, userEmail: string | null): string {
   if (preferredName && preferredName.trim()) {
-    return preferredName.trim()
+    // Always use only the first word of the preferred name
+    const firstName = preferredName.trim().split(/\s+/)[0]
+    return firstName.charAt(0).toUpperCase() + firstName.slice(1)
   }
   if (userEmail) {
     const firstName = extractFirstName(userEmail)
     if (firstName) return firstName
   }
-  // Honorific fallback
   const honorifics = ['Scholar', 'Strategist', 'Counselor', 'Advisor']
-  const index = Math.floor(Math.random() * honorifics.length)
-  return honorifics[index]
+  return honorifics[Math.floor(Math.random() * honorifics.length)]
 }
 
-// ─── Time-Based Greetings ─────────────────────────────────────────────────────────
+// ─── Time-Based Greetings & Context ──────────────────────────────────────────
 
 function getTimeGreeting(hour: number): string {
-  if (hour >= 5 && hour < 12) return 'Good morning'
+  if (hour >= 5  && hour < 12) return 'Good morning'
   if (hour >= 12 && hour < 17) return 'Good afternoon'
   if (hour >= 17 && hour < 21) return 'Good evening'
-  // Late night (21:00 - 5:00)
-  const lateNightGreetings = ['Working late', 'Burning the midnight oil', 'Still at it']
-  return lateNightGreetings[Math.floor(Math.random() * lateNightGreetings.length)]
+  return 'Still up'
 }
 
-function getVisitModifier(visitData: VisitData): string {
-  const now = Date.now()
-  const oneDay = 24 * 60 * 60 * 1000
+/** Suffix appended after the name — encodes visit context, streak, and time cues. */
+function getVisitContext(visitData: VisitData, hour: number): string {
+  const now      = Date.now()
+  const oneDay   = 24 * 60 * 60 * 1000
   const daysSinceLast = Math.floor((now - visitData.lastVisit) / oneDay)
-  
-  if (visitData.visitCount === 1) {
-    // First visit ever
-    const firstVisitGreetings = ['Welcome', 'Good to have you', 'Let\'s get started']
-    return firstVisitGreetings[Math.floor(Math.random() * firstVisitGreetings.length)]
+  const { visitCount, consecutiveDays } = visitData
+
+  // ── First ever visit ─────────────────────────────────────────────────────
+  if (visitCount === 1) {
+    const opts = ['Good to have you.', "Let's get started.", 'Ready when you are.']
+    return opts[Math.floor(Math.random() * opts.length)]
   }
-  
-  if (daysSinceLast === 0 && visitData.visitCount > 1) {
-    // Same day return
-    const sameDayGreetings = ['Back again', 'Round two', 'Still here']
-    return sameDayGreetings[Math.floor(Math.random() * sameDayGreetings.length)]
+
+  // ── Long absence (7+ days) ───────────────────────────────────────────────
+  if (daysSinceLast >= 14) return "It's been a while — welcome back."
+  if (daysSinceLast >= 7)  return "Good to see you again."
+
+  // ── Same-day return (multiple sessions today) ────────────────────────────
+  if (daysSinceLast === 0 && visitCount > 1) {
+    const opts = [
+      'Back for more.',
+      'Round two.',
+      'Still at it.',
+      'Picking up where we left off.',
+    ]
+    return opts[Math.floor(Math.random() * opts.length)]
   }
-  
-  if (daysSinceLast >= 7) {
-    // Long absence
-    return 'It\'s been a while'
-  }
-  
-  if (visitData.consecutiveDays >= 5) {
-    // Frequent user
-    return 'Welcome back'
-  }
-  
-  // Regular return
-  return 'Welcome back'
+
+  // ── High streak (daily consistency) ─────────────────────────────────────
+  if (consecutiveDays >= 14) return `${consecutiveDays} days straight. Impressive.`
+  if (consecutiveDays >= 7)  return `${consecutiveDays}-day streak. Keep going.`
+  if (consecutiveDays >= 3)  return `${consecutiveDays} days in a row.`
+
+  // ── Time-of-day cues ─────────────────────────────────────────────────────
+  if (hour >= 5  && hour < 9)  return 'Early start.'
+  if (hour >= 9  && hour < 12) return 'Ready to work.'
+  if (hour >= 12 && hour < 14) return 'Midday check-in.'
+  if (hour >= 14 && hour < 17) return 'Afternoon focus.'
+  if (hour >= 17 && hour < 20) return 'Evening session.'
+  if (hour >= 20 && hour < 22) return 'Late push.'
+  if (hour >= 22 || hour < 5)  return 'Burning the midnight oil.'
+
+  return 'Welcome back.'
 }
 
 function getDynamicGreeting(preferredName: string | null, userEmail: string | null): string {
-  const visitData = updateVisitData()
-  const hour = new Date().getHours()
-  const displayName = getDisplayName(preferredName, userEmail)
-  const timeGreeting = getTimeGreeting(hour)
-  const visitModifier = getVisitModifier(visitData)
-  
-  // Late night has different structure
-  if (hour >= 21 || hour < 5) {
-    return `${timeGreeting}, ${displayName}?`
+  const visitData  = updateVisitData()
+  const hour       = new Date().getHours()
+  const firstName  = getDisplayName(preferredName, userEmail)
+  const timeGreet  = getTimeGreeting(hour)
+  const context    = getVisitContext(visitData, hour)
+
+  // Late night: collapsed single-line variant
+  if (hour >= 22 || hour < 5) {
+    return `${timeGreet}, ${firstName}. ${context}`
   }
-  
-  // Regular time-based greetings
+
+  // First ever visit: skip time greeting, lead with welcome
   if (visitData.visitCount === 1) {
-    return `${visitModifier}, ${displayName}.`
+    return `${context.replace('.', ',')} ${firstName}.`
   }
-  
-  return `${timeGreeting}, ${displayName}. ${visitModifier}.`
+
+  return `${timeGreet}, ${firstName}. ${context}`
+}
+
+// ─── Chat Auto-Title (client-side, no server call) ───────────────────────────
+
+/**
+ * Generates a short human-readable title from the first user message.
+ * Strips markdown/code fences, takes the first 6 meaningful words,
+ * truncates to 50 chars. Runs entirely in memory — no network call.
+ */
+function generateAutoTitle(firstUserMessage: string): string {
+  if (!firstUserMessage?.trim()) return 'Untitled Session'
+
+  // Strip markdown artifacts, URLs, code fences
+  let text = firstUserMessage
+    .replace(/```[\s\S]*?```/g, '')      // code blocks
+    .replace(/`[^`]+`/g, '')             // inline code
+    .replace(/https?:\/\/\S+/g, '')      // URLs
+    .replace(/[#*_~>|\[\]]/g, '')        // markdown symbols
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  // Split into words, filter stopwords for a cleaner title
+  const STOP = new Set(['a','an','the','is','are','was','were','be','been',
+    'i','me','my','we','our','you','your','it','its','and','or','but',
+    'so','if','in','on','at','to','of','for','by','with','from','that',
+    'this','how','what','why','when','where','who','can','could','should',
+    'would','will','do','does','did','have','has','had'])
+
+  const words = text.split(' ').filter(w => w.length > 0)
+  const meaningful = words.filter(w => !STOP.has(w.toLowerCase()))
+
+  // Use meaningful words if enough, else fall back to raw words
+  const chosen = meaningful.length >= 3 ? meaningful : words
+  const title  = chosen.slice(0, 6).join(' ')
+
+  // Capitalise first letter, truncate
+  const capped = title.charAt(0).toUpperCase() + title.slice(1)
+  return capped.length > 52 ? capped.slice(0, 50) + '…' : capped
 }
 
 // ─── KaTeX lazy-loader ────────────────────────────────────────────────────────
@@ -3288,51 +3341,8 @@ export const Dashboard: React.FC = () => {
 
   }, [])
 
-  // Debounced search logic for sidebar chats
-
-  useEffect(() => {
-
-    if (!searchQuery.trim()) {
-
-      setSearchResults(null)
-
-      return
-
-    }
-
-    const delayDebounceFn = setTimeout(async () => {
-
-      try {
-
-        const token = localStorage.getItem('supabase_token') || (await supabase.auth.getSession()).data.session?.access_token
-
-        if (!token) return
-
-        const res = await fetch(`${API_BASE}/v1/conversations/search?q=${encodeURIComponent(searchQuery)}`, {
-
-          headers: { Authorization: `Bearer ${token}` }
-
-        })
-
-        if (res.ok) {
-
-          const data = await res.json()
-
-          setSearchResults(data)
-
-        }
-
-      } catch (err) {
-
-        console.error('Failed to search conversations:', err)
-
-      }
-
-    }, 300)
-
-    return () => clearTimeout(delayDebounceFn)
-
-  }, [searchQuery])
+  // Client-side search effect is placed after conversations state declaration (see below)
+  // to avoid TypeScript TDZ error. searchQuery drives it via conversationsRef.
 
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
 
@@ -3567,6 +3577,26 @@ export const Dashboard: React.FC = () => {
       return []
     }
   })
+
+  // ── Client-side conversation search (offline-capable, instant) ──────────────
+  // Filters the already-loaded `conversations` array in memory — no network call,
+  // works offline, results appear in ~120ms as you type.
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null)
+      return
+    }
+    const q = searchQuery.trim().toLowerCase()
+    const timer = setTimeout(() => {
+      const matched = conversations.filter(c => {
+        const title = (c.title || '').toLowerCase()
+        const mode  = (c.mode  || '').toLowerCase()
+        return title.includes(q) || mode.includes(q) || c.id?.toLowerCase().startsWith(q)
+      })
+      setSearchResults(matched.length > 0 ? matched : [])
+    }, 120)
+    return () => clearTimeout(timer)
+  }, [searchQuery, conversations])
 
   const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
 
@@ -4472,6 +4502,43 @@ export const Dashboard: React.FC = () => {
               setActiveConversationId(data.conversation_id)
 
               localStorage.setItem('active_conversation_id', data.conversation_id)
+
+              // ── Auto-title: generate from first user message client-side ─────
+              // Find the first user message in the current history to build the title.
+              // Update the sidebar immediately (optimistic), then patch server in background.
+              const convId = data.conversation_id as string
+              setConversations(prev => {
+                const existing = prev.find(c => c.id === convId)
+                // Only auto-title if this is genuinely a new/untitled conversation
+                if (existing && existing.title) return prev
+                const firstUserMsg = userMessageObj.content
+                const autoTitle = generateAutoTitle(firstUserMsg)
+                // Optimistic update in sidebar
+                if (existing) {
+                  return prev.map(c => c.id === convId ? { ...c, title: autoTitle } : c)
+                }
+                // New convo not yet in list — will appear after fetchConversations
+                return prev
+              })
+
+              // Patch title on server in the background (non-blocking)
+              setTimeout(async () => {
+                try {
+                  const existing = conversations.find(c => c.id === convId)
+                  if (existing?.title) return // already has a real title
+                  const firstUserMsg = userMessageObj.content
+                  const autoTitle = generateAutoTitle(firstUserMsg)
+                  const token = (await supabase.auth.getSession()).data.session?.access_token
+                  if (!token) return
+                  await fetch(`${API_BASE}/v1/conversations/${convId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({ title: autoTitle }),
+                  })
+                } catch {
+                  // Non-fatal: title will be set next time conversations load
+                }
+              }, 800)
 
               // Fire-and-forget: don't block streaming for conversation list sync
               setTimeout(() => {
