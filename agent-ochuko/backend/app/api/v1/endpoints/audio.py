@@ -1,14 +1,14 @@
-# app/api/v1/endpoints/audio.py
+﻿# app/api/v1/endpoints/audio.py
 """
-Audio API routes — /v1/audio/*
+Audio API routes ΓÇö /v1/audio/*
 
 Provides a SYNCHRONOUS real-time dictation endpoint (POST /v1/audio/transcriptions).
 This is distinct from the async speech_stt_worker queue path, which handles full
 audio file transcription jobs.
 
 The dictation path is optimised for low-latency: the caller submits short audio
-chunks produced by the browser's MediaRecorder (≤30 s each), receives a
-transcript within 1–2 s, and may supply already-transcribed text so the Nano
+chunks produced by the browser's MediaRecorder (Γëñ30 s each), receives a
+transcript within 1ΓÇô2 s, and may supply already-transcribed text so the Nano
 model can stitch + grammar-correct the running transcript.
 """
 import os
@@ -27,7 +27,7 @@ logger = logging.getLogger("app.api.v1.endpoints.audio")
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Groq client — round-robin across multiple API keys (same pattern as chat.py)
+# Groq client ΓÇö round-robin across multiple API keys (same pattern as chat.py)
 # ---------------------------------------------------------------------------
 
 _groq_key_index = 0
@@ -52,7 +52,7 @@ def _get_groq_client() -> Groq:
 
 
 # ---------------------------------------------------------------------------
-# Azure OpenAI — Nano model for grammar / capitalisation stitching
+# Azure OpenAI ΓÇö Nano model for grammar / capitalisation stitching
 # ---------------------------------------------------------------------------
 
 def _get_nano_deployment() -> str:
@@ -70,7 +70,7 @@ async def _stitch_text(existing_text: str, new_transcript: str) -> tuple[str, st
     Returns a tuple: (full_stitched_text, incremental_delta)
 
     If *existing_text* is empty we skip the stitching call and return
-    *new_transcript* directly — avoids a round-trip for the first chunk.
+    *new_transcript* directly ΓÇö avoids a round-trip for the first chunk.
     """
     if not existing_text.strip():
         return new_transcript.strip(), new_transcript.strip()
@@ -81,7 +81,7 @@ async def _stitch_text(existing_text: str, new_transcript: str) -> tuple[str, st
     deployment = _get_nano_deployment()
 
     if not endpoint or not api_key:
-        # If OpenAI is unavailable, degrade gracefully — just concatenate
+        # If OpenAI is unavailable, degrade gracefully ΓÇö just concatenate
         logger.warning("Azure OpenAI not configured; skipping stitching, concatenating instead.")
         separator = " " if existing_text.endswith((" ", "\n")) else " "
         stitched = (existing_text + separator + new_transcript).strip()
@@ -94,7 +94,7 @@ async def _stitch_text(existing_text: str, new_transcript: str) -> tuple[str, st
         "You are a transcription editor. The user will provide two pieces of text: "
         "an existing transcript fragment and a newly transcribed chunk. "
         "Merge them into a single grammatically-correct, properly-capitalised paragraph. "
-        "Do NOT add any commentary — output only the merged text."
+        "Do NOT add any commentary ΓÇö output only the merged text."
     )
     user_message = (
         f"Existing transcript:\n{existing_text}\n\n"
@@ -138,23 +138,23 @@ async def _stitch_text(existing_text: str, new_transcript: str) -> tuple[str, st
     "/transcriptions",
     summary="Synchronous dictation transcription",
     description=(
-        "Accepts a short audio chunk (≤30 s, audio/webm or audio/mp4) produced by the "
+        "Accepts a short audio chunk (Γëñ30 s, audio/webm or audio/mp4) produced by the "
         "browser's MediaRecorder. Transcribes via Groq Whisper Large v3 Turbo and "
         "optionally stitches the result into *existing_text* using the Nano model for "
         "grammar and capitalisation correction. Returns the unified transcript immediately."
     ),
 )
 async def transcribe_audio(
-    file: UploadFile = File(..., description="Audio chunk — audio/webm or audio/mp4"),
+    file: UploadFile = File(..., description="Audio chunk ΓÇö audio/webm or audio/mp4"),
     existing_text: str = Form(default="", description="Already-transcribed text from previous chunks"),
     user: Dict[str, Any] = Depends(verify_jwt),
 ) -> dict:
     """
-    Synchronous dictation path — used by useVoice.ts on every VAD-triggered chunk.
+    Synchronous dictation path ΓÇö used by useVoice.ts on every VAD-triggered chunk.
 
     NOT the async queue path (speech_stt_worker) which handles full file uploads.
     """
-    # ── Validate input ────────────────────────────────────────────────────────
+    # ΓöÇΓöÇ Validate input ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No audio file provided.")
 
@@ -162,7 +162,7 @@ async def transcribe_audio(
     if len(audio_bytes) == 0:
         raise HTTPException(status_code=400, detail="Audio file is empty.")
 
-    # Clamp to 25 MB — Groq Whisper limit is 25 MB
+    # Clamp to 25 MB ΓÇö Groq Whisper limit is 25 MB
     if len(audio_bytes) > 25 * 1024 * 1024:
         raise HTTPException(
             status_code=413,
@@ -176,7 +176,7 @@ async def transcribe_audio(
         len(existing_text),
     )
 
-    # ── Transcribe via Groq Whisper ───────────────────────────────────────────
+    # ΓöÇΓöÇ Transcribe via Groq Whisper ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     try:
         groq_client = _get_groq_client()
 
@@ -207,7 +207,7 @@ async def transcribe_audio(
         raw_transcript = raw_transcript.strip()
 
         if not raw_transcript:
-            # Silent chunk — return existing text unchanged
+            # Silent chunk ΓÇö return existing text unchanged
             return {"text": existing_text}
 
     except Exception as exc:
@@ -217,7 +217,7 @@ async def transcribe_audio(
             detail="Transcription service temporarily unavailable. Please try again.",
         )
 
-    # ── Stitch with existing text via Nano model ──────────────────────────────
+    # ΓöÇΓöÇ Stitch with existing text via Nano model ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     try:
         stitched, delta = await _stitch_text(existing_text, raw_transcript)
     except Exception as exc:

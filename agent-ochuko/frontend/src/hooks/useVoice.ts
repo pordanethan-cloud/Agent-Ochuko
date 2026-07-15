@@ -5,9 +5,9 @@
  *   - Microphone permission request
  *   - MediaRecorder (audio/webm with audio/mp4 fallback for Safari iOS)
  *   - Web Audio API AnalyserNode for real-time volume measurement (VAD waveform)
- *   - Voice Activity Detection: silence at < -50 dB for 1500 ms → chunk upload
+ *   - Voice Activity Detection: silence at < -50 dB for 1500 ms ΓåÆ chunk upload
  *   - Chunk upload to POST /v1/audio/transcriptions with retry-once on network error
- *   - Groq Whisper + Nano stitching is server-side — we just receive final text
+ *   - Groq Whisper + Nano stitching is server-side ΓÇö we just receive final text
  *   - Browser compatibility detection (hides mic button if MediaRecorder absent)
  */
 
@@ -58,12 +58,12 @@ export type VoiceError =
 export interface VoiceState {
   isRecording: boolean
   isTranscribing: boolean
-  /** 0–1 normalised volume, updated ~20 fps. Drives the waveform overlay. */
+  /** 0ΓÇô1 normalised volume, updated ~20 fps. Drives the waveform overlay. */
   currentVolume: number
   /** Accumulated grammar-corrected transcript from all chunks so far */
   transcribedText: string
   error: VoiceError
-  /** Feature detection result — if false, hide the mic button entirely */
+  /** Feature detection result ΓÇö if false, hide the mic button entirely */
   isSupported: boolean
   startRecording: () => Promise<void>
   stopRecording: () => void
@@ -72,20 +72,20 @@ export interface VoiceState {
 }
 
 export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
-  // ── Feature detection (run once, stable) ─────────────────────────────────
+  // ΓöÇΓöÇ Feature detection (run once, stable) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const isSupported =
     typeof window !== 'undefined' &&
     typeof window.MediaRecorder !== 'undefined' &&
     typeof navigator.mediaDevices?.getUserMedia === 'function'
 
-  // ── State ─────────────────────────────────────────────────────────────────
+  // ΓöÇΓöÇ State ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [currentVolume, setCurrentVolume] = useState(0)
   const [transcribedText, setTranscribedText] = useState('')
   const [error, setError] = useState<VoiceError>(null)
 
-  // Internal refs — no re-render needed
+  // Internal refs ΓÇö no re-render needed
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -96,7 +96,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
   const transcriptRef = useRef<string>('')          // mirrors transcribedText for stable closure
   const isRecordingActiveRef = useRef<boolean>(false)
 
-  // ── Upload a chunk to the backend ─────────────────────────────────────────
+  // ΓöÇΓöÇ Upload a chunk to the backend ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const uploadChunk = useCallback(async (blob: Blob): Promise<void> => {
     if (blob.size < 100) return  // ignore near-empty blobs
 
@@ -139,14 +139,21 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
     }
 
     if (result.text) {
+      const prevText = transcriptRef.current
       transcriptRef.current = result.text
       setTranscribedText(result.text)
-      // Use delta for incremental update if available, otherwise fall back to full text
-      onTextUpdate(result.delta)
+      // Compute delta: only send what's genuinely new since last chunk
+      // If backend provides delta use it, otherwise diff against previous transcript
+      const delta = result.delta
+        ? result.delta
+        : result.text.startsWith(prevText)
+          ? result.text.slice(prevText.length).trimStart()
+          : result.text
+      if (delta) onTextUpdate(delta)
     }
   }, [onTextUpdate])
 
-  // ── Start a fresh MediaRecorder instance (ensures valid container headers) ──
+  // ΓöÇΓöÇ Start a fresh MediaRecorder instance (ensures valid container headers) ΓöÇΓöÇ
   const startRecorderInstance = useCallback(() => {
     const stream = streamRef.current
     if (!stream) return
@@ -178,7 +185,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
     recorder.start()
   }, [uploadChunk])
 
-  // ── Cut and upload the current accumulated audio segment ──────────────────
+  // ΓöÇΓöÇ Cut and upload the current accumulated audio segment ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const cutChunk = useCallback(() => {
     const recorder = recorderRef.current
     if (!recorder || recorder.state !== 'recording') return
@@ -187,7 +194,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
     recorder.stop()
   }, [])
 
-  // ── VAD loop ──────────────────────────────────────────────────────────────
+  // ΓöÇΓöÇ VAD loop ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const startVad = useCallback(() => {
     if (!analyserRef.current) return
 
@@ -195,7 +202,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
       if (!analyserRef.current) return
 
       const db = readRmsDb(analyserRef.current)
-      // Normalise to 0–1 for the waveform (clamp between -80 and -10 dB)
+      // Normalise to 0ΓÇô1 for the waveform (clamp between -80 and -10 dB)
       const vol = Math.max(0, Math.min(1, (db - (-80)) / (-10 - (-80))))
       setCurrentVolume(vol)
 
@@ -210,7 +217,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
           }, SILENCE_DURATION_MS)
         }
       } else {
-        // Voice detected — cancel silence timer
+        // Voice detected ΓÇö cancel silence timer
         if (silenceTimerRef.current !== null) {
           clearTimeout(silenceTimerRef.current)
           silenceTimerRef.current = null
@@ -236,7 +243,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
     setCurrentVolume(0)
   }, [])
 
-  // ── Start recording ───────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Start recording ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const startRecording = useCallback(async () => {
     if (!isSupported) {
       setError('browser_incompatible')
@@ -275,7 +282,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
     startVad()
   }, [isSupported, startRecorderInstance, startVad])
 
-  // ── Stop recording ────────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Stop recording ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const stopRecording = useCallback(() => {
     isRecordingActiveRef.current = false
     stopVad()
@@ -301,7 +308,7 @@ export function useVoice(onTextUpdate: (text: string) => void): VoiceState {
     transcriptRef.current = ''
   }, [])
 
-  // ── Cleanup on unmount ────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Cleanup on unmount ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   useEffect(() => {
     return () => {
       isRecordingActiveRef.current = false

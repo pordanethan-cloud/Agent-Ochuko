@@ -106,14 +106,15 @@ for po in prod_origins:
         origins.append(po)
 
 # ── Middleware Stack ──────────────────────────────────────────────────────
-# Registration order: last registered = first to execute.
+# Registration order: last registered = first to execute (Starlette LIFO).
 # Execution order: CORS → Maintenance → Block → TokenBudget → Quota → Audit → Handler
+# CRITICAL: AuditLog/Guards registered first (run last), CORS registered last (runs first).
+# If CORS runs after a guard, preflight OPTIONS requests get rejected without CORS headers.
 app.add_middleware(AuditLogMiddleware)
 app.add_middleware(QuotaGuardMiddleware)
 app.add_middleware(TokenBudgetMiddleware)
 app.add_middleware(BlockGuardMiddleware)
 app.add_middleware(MaintenanceGuardMiddleware)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -130,7 +131,7 @@ app.include_router(conversations_router, prefix="/v1/conversations", tags=["conv
 app.include_router(files_router, prefix="/v1/files", tags=["files"])
 app.include_router(agents_router, prefix="/v1/agents", tags=["agents"])
 app.include_router(search_router, prefix="/v1/search", tags=["search"])
-app.include_router(audio_router, prefix="/v1/audio", tags=["audio"])
+app.include_router(audio_router, prefix="/v1/audio", tags=["audio"])  # voice-to-text transcriptions
 app.include_router(shared_router, prefix="/v1/shared", tags=["shared"])
 
 
@@ -190,14 +191,12 @@ async def health_check():
 @app.get("/ready")
 async def readiness_check():
     """
-    Readiness probe — returns 200 only when config is loaded and app is ready.
+    Readiness probe — returns 200 when app is ready.
+    Config loads in background, so we don't block on it.
     Azure Container Apps won't route traffic until this returns 200.
     """
     if not _app_ready:
         return {"status": "not_ready"}, 503
-
-    if len(_CONFIG_CACHE) < 3:
-        return {"status": "config_not_loaded"}, 503
 
     return {"status": "ready"}
 

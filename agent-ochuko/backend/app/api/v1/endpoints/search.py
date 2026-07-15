@@ -22,13 +22,12 @@ from pydantic import BaseModel
 
 from app.core.jwt_validator import verify_jwt
 
-# Re-use the shared Gemini search engine from the chat module.
+# Re-use the shared Google search engine from the chat module.
 # Both the chat tool-call path and the dedicated search endpoint
-# go through the same _perform_gemini_search function so key
+# go through the same _perform_google_search function so key
 # rotation logic, sanitization, and grounding config stay in one place.
 from app.api.v1.endpoints.chat import (
-    _perform_gemini_search,
-    _collect_gemini_keys,
+    _perform_google_search,
     build_llm_context,
 )
 
@@ -78,21 +77,14 @@ async def ask_hybrid_engine(
     user: Dict[str, Any] = Depends(verify_jwt),
 ) -> HybridSearchResponse:
     """
-    Grounded search via Gemini 2.5 Flash + Google Search.
+    Grounded search via Google Search + Azure OpenAI synthesis.
 
     Steps:
-    1. Validate that at least one Gemini API key is available.
-    2. Load conversation history from Supabase (if conversation_id provided)
-       so Gemini can resolve references to prior context.
-    3. Call _perform_gemini_search — the single, shared search implementation.
-    4. Return the grounded answer with cited sources.
+    1. Load conversation history from Supabase (if conversation_id provided)
+       so the model can resolve references to prior context.
+    2. Call _perform_google_search — the single, shared search implementation.
+    3. Return the grounded answer with cited sources.
     """
-    # Guard: fail fast if no Gemini keys are present
-    if not _collect_gemini_keys():
-        raise HTTPException(
-            status_code=500,
-            detail="No Gemini API keys configured. Set GEMINI_API_KEY in environment.",
-        )
 
     # Load conversation history so Gemini has full context
     conversation_history = []
@@ -104,12 +96,7 @@ async def ask_hybrid_engine(
             logger.warning("Failed to load conversation history for search: %s", db_err)
 
     try:
-        result = await _perform_gemini_search(
-            query=query.prompt,
-            conversation_history=conversation_history,
-            local_time=query.local_time,
-            tz=query.timezone,
-        )
+        result = await _perform_google_search(query.prompt)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=f"Grounded search failed: {exc}")
 
@@ -127,5 +114,5 @@ async def ask_hybrid_engine(
         status="success",
         answer=answer,
         sources=sources,
-        search_engine="gemini-2.5-flash+google-search",
+        search_engine="google-search+azure-openai",
     )

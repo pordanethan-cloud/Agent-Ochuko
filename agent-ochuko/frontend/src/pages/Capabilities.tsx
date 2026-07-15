@@ -10,10 +10,10 @@ export const Capabilities: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf8f5] text-black flex flex-col font-sans selection:bg-[#e8e4df] scroll-smooth">
+    <div className="min-h-screen bg-white text-black flex flex-col font-accessible selection:bg-blue-100 scroll-smooth">
       
       {/* Authentic Top Navigation Bar */}
-      <nav className="h-14 border-b border-gray-300 bg-white/90 backdrop-blur-md sticky top-0 z-50 flex items-center justify-between px-6 select-none">
+      <nav className="h-14 border-b border-gray-300 bg-white/95 backdrop-blur-md sticky top-0 z-50 flex items-center justify-between px-6 select-none">
         <div className="flex items-center gap-3">
           <span className="my-1 text-[13px] font-bold tracking-wider text-black uppercase">Develop AI Agents in Azure</span>
           <span className="text-gray-400">|</span>
@@ -51,7 +51,7 @@ export const Capabilities: React.FC = () => {
               </ul>
             </div>
             
-            <div className="p-3 rounded-lg border border-gray-300 bg-white/60 space-y-2">
+            <div className="p-3 rounded-lg border border-gray-300 bg-white space-y-2">
               <div className="flex items-center gap-1.5 text-[10px] text-blue-600 font-bold uppercase tracking-wider">
                 <Cpu className="w-3.5 h-3.5" />
                 <span>Agent Status</span>
@@ -71,7 +71,7 @@ export const Capabilities: React.FC = () => {
             <h1 className="text-3xl font-semibold tracking-tight text-black">
               Build AI agents with Ochuko
             </h1>
-            <p className="text-[14px] text-gray-700 leading-relaxed">
+            <p className="text-base text-gray-700 leading-7">
               In this guide, you will learn what Agent Ochuko can do and how to use its tools. Ochuko makes it easy to run calculations, read and analyze documents, generate designs, and retrieve live information from the web.
             </p>
             <div className="flex items-center gap-2 text-[11px] text-gray-600 font-medium bg-white border border-gray-300 px-3 py-1.5 rounded-lg w-fit">
@@ -82,8 +82,7 @@ export const Capabilities: React.FC = () => {
 
           {/* Warning Note */}
           <blockquote className="p-4 rounded-xl border-l-4 border-blue-600 bg-blue-50 space-y-1.5">
-            <p className="text-[12px] font-bold text-black uppercase tracking-wider">System Note</p>
-            <p className="text-[12px] text-gray-700 leading-relaxed">
+            <p className="text-sm text-gray-700 leading-6">
               Ochuko processes data and executes actions in a secure, isolated workspace. All uploaded files and calculation logs are kept private to your session.
             </p>
           </blockquote>
@@ -94,7 +93,7 @@ export const Capabilities: React.FC = () => {
               <Terminal className="w-5 h-5 text-blue-600" />
               <span>Calculations & Data Processing</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               Ochuko can write and run custom scripts to solve math problems, perform complex logic, and create visual data charts. Use this whenever you need precision calculations.
             </p>
             <div className="p-4 rounded-lg bg-white border border-gray-300 space-y-3">
@@ -121,7 +120,7 @@ export const Capabilities: React.FC = () => {
               <FileText className="w-5 h-5 text-blue-600" />
               <span>File & Image Reading</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               Upload spreadsheets, PDF reports, or Word documents. Ochuko automatically reads their contents, extracts key tables, and answers questions about them. You can also upload screenshots or images for OCR scanning.
             </p>
             <div className="p-4 rounded-lg bg-white border border-gray-300 space-y-3">
@@ -148,7 +147,7 @@ export const Capabilities: React.FC = () => {
               <BarChart className="w-5 h-5 text-blue-600" />
               <span>Data Analysis & Visualization</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               Upload datasets and let Ochuko analyze patterns, create visualizations, and generate insights. From CSV files to complex data structures, get comprehensive analysis with charts and summaries.
             </p>
             <div className="p-4 rounded-lg bg-white border border-gray-300 space-y-3">
@@ -175,7 +174,7 @@ export const Capabilities: React.FC = () => {
               <Bug className="w-5 h-5 text-blue-600" />
               <span>Code Generation & Debugging</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               Generate production-ready code in multiple programming languages, debug existing code, explain complex algorithms, and refactor for better performance and readability.
             </p>
             <div className="p-4 rounded-lg bg-white border border-gray-300 space-y-3">
@@ -202,7 +201,7 @@ export const Capabilities: React.FC = () => {
               <FileEdit className="w-5 h-5 text-blue-600" />
               <span>Document Writing & Formatting</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               Create professional documents, reports, summaries, and formatted content. From technical documentation to business reports, get well-structured output in various formats.
             </p>
             <div className="p-4 rounded-lg bg-white border border-gray-300 space-y-3">
@@ -229,7 +228,7 @@ export const Capabilities: React.FC = () => {
               <Code className="w-5 h-5 text-blue-600" />
               <span>Image & Design Generation</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               Ochuko can create high-resolution designs, user interface layouts, icons, and illustrations. Tell Ochuko what style and contents you want, and it will draw it for you.
             </p>
             <div className="p-4 rounded-lg bg-white border border-gray-300 space-y-3">
@@ -256,7 +255,7 @@ export const Capabilities: React.FC = () => {
               <Globe className="w-5 h-5 text-blue-600" />
               <span>Live Web Search</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               When answering questions, Ochuko can lookup real-time resources online, such as academic publications, arXiv preprints, clinical trials, and public databases.
             </p>
             <div className="p-4 rounded-lg bg-white border border-gray-300 space-y-3">
@@ -283,10 +282,10 @@ export const Capabilities: React.FC = () => {
               <HelpCircle className="w-5 h-5 text-blue-600" />
               <span>Quick Start Guide</span>
             </h2>
-            <p className="text-xs text-gray-700 leading-relaxed">
+            <p className="text-[15px] text-gray-700 leading-7">
               To interact with your agent:
             </p>
-            <ol className="list-decimal list-inside text-xs text-gray-700 space-y-2 pl-2">
+            <ol className="list-decimal list-inside text-[15px] text-gray-700 space-y-2 pl-2">
               <li>Navigate to the main chat page using the navigation bar.</li>
               <li>Select your desired mode (<strong>Think</strong> for structured logic, <strong>Solve</strong> for actions, or <strong>Discuss</strong> for basic conversation).</li>
               <li>Type your query in the floating input bar and click <strong>Send</strong>.</li>

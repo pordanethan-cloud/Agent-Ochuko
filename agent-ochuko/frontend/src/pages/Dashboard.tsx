@@ -3,12 +3,12 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
+import { useVoice } from '../hooks/useVoice'
 
-import { useJob } from '../hooks/useJob'
 
 import DOMPurify from 'dompurify'
 
@@ -106,8 +106,6 @@ function getTimeGreeting(hour: number): string {
 function getVisitModifier(visitData: VisitData): string {
   const now = Date.now()
   const oneDay = 24 * 60 * 60 * 1000
-  const oneWeek = 7 * oneDay
-  const daysSinceFirst = Math.floor((now - visitData.firstVisit) / oneDay)
   const daysSinceLast = Math.floor((now - visitData.lastVisit) / oneDay)
   
   if (visitData.visitCount === 1) {
@@ -501,6 +499,22 @@ function validateMermaidCode(code: string): { valid: boolean, cleanedCode: strin
   return { valid: true, cleanedCode: cleaned }
 }
 
+// ── VoiceWaveform — 5-bar volume-driven equaliser ─────────────────────────────
+const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
+  const bars = [0.35, 0.65, 1.0, 0.65, 0.35]
+  return (
+    <div className="flex items-end gap-[2px] h-4">
+      {bars.map((scale, i) => (
+        <div
+          key={i}
+          className="w-[3px] rounded-full bg-brand-text transition-all duration-75"
+          style={{ height: `${Math.max(3, volume * scale * 16)}px` }}
+        />
+      ))}
+    </div>
+  )
+}
+
 function MermaidBlock({ code }: { code: string }) {
 
   const diagramRef = useRef<HTMLDivElement>(null)
@@ -510,8 +524,6 @@ function MermaidBlock({ code }: { code: string }) {
   const [showSource, setShowSource] = useState(false)
 
   const [copied, setCopied] = useState(false)
-
-  const [renderError, setRenderError] = useState<string | null>(null)
 
   const [isLoading, setIsLoading] = useState(false)
 
@@ -531,8 +543,6 @@ function MermaidBlock({ code }: { code: string }) {
       if (!diagramRef.current) return
 
       setIsLoading(true)
-
-      setRenderError(null)
 
       try {
 
@@ -566,8 +576,6 @@ function MermaidBlock({ code }: { code: string }) {
         console.error('Mermaid rendering error:', err)
 
         if (!cancelled) {
-
-          setRenderError(err?.message || 'Failed to render diagram')
 
           if (diagramRef.current) {
 
@@ -3152,47 +3160,6 @@ export const Dashboard: React.FC = () => {
     return () => document.removeEventListener('mousedown', handler)
   }, [isHeaderSettingsOpen])
 
-  // Background warmup function to eliminate cold start delays
-  const triggerWarmup = useCallback(() => {
-    try {
-      const session = supabase.auth.getSession()
-      session.then(({ data: { session } }) => {
-        const token = session?.access_token
-
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-        }
-        
-        // Add auth token if available (user-specific warmup)
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`
-        }
-
-        // Fire and forget - don't await the response
-        fetch(`${API_BASE}/v1/responses/warmup`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({}),
-        }).then(response => {
-          if (response.ok) {
-            console.log('Background warmup initiated successfully')
-          } else {
-            console.warn('Background warmup failed, but chat will still work')
-          }
-        }).catch(err => {
-          console.warn('Background warmup request failed:', err)
-        })
-      })
-    } catch (err) {
-      console.warn('Failed to trigger background warmup:', err)
-    }
-  }, [])
-
-  // Warm up the backend on mount so the first message doesn't hit a cold server
-  useEffect(() => {
-    fetch(`${API_BASE}/ready`).catch(() => {})
-  }, [])
-
   useEffect(() => {
     if (!isArtifactCopyOpen) return
     const handler = (e: MouseEvent) => {
@@ -3437,6 +3404,9 @@ export const Dashboard: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // ── Voice-to-text hook ─────────────────────────────────────────────────────
+  const voice = useVoice((text: string) => setInput(prev => prev + text))
+
   // ── Inline rename state ─────────────────────────────────────────────────────
 
   const [renamingConvoId, setRenamingConvoId] = useState<string | null>(null)
@@ -3600,26 +3570,6 @@ export const Dashboard: React.FC = () => {
 
   const [convoToDelete, setConvoToDelete] = useState<string | null>(null)
 
-  // ── TTS per-message playback state ─────────────────────────────────────────
-
-  const [activeTtsJobId, setActiveTtsJobId] = useState<string | null>(null)
-
-  const [ttsState, setTtsState] = useState<Record<number, {
-
-    status: 'idle' | 'loading' | 'playing' | 'done' | 'failed'
-
-    blobUrl: string | null
-
-    progress: number
-
-  }>>({})
-
-  const activeTtsAudioRef = useRef<HTMLAudioElement | null>(null)
-
-  const activeTtsIndexRef = useRef<number | null>(null)
-
-  const activeTtsJob = useJob(activeTtsJobId)
-
   // ── Toast notifications ────────────────────────────────────────────────────
 
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'info' | 'error' }[]>([])
@@ -3633,163 +3583,6 @@ export const Dashboard: React.FC = () => {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
 
   }, [])
-
-  // TTS job completion: play audio or fall back to browser speechSynthesis
-
-  useEffect(() => {
-
-    const idx = activeTtsIndexRef.current
-
-    // Guard: if user stopped playback while job was loading, idx is already null — do nothing
-    if (idx === null) return
-
-    if (activeTtsJob.status === 'done' && activeTtsJob.resultBlobUrl) {
-
-      if (activeTtsAudioRef.current) {
-
-        activeTtsAudioRef.current.pause()
-
-        activeTtsAudioRef.current = null
-
-      }
-
-      // Re-check: user may have stopped between job resolution and this point
-      if (activeTtsIndexRef.current === null) return
-
-      const audio = new Audio(activeTtsJob.resultBlobUrl)
-
-      activeTtsAudioRef.current = audio
-
-      audio.ontimeupdate = () => {
-
-        if (audio.duration > 0) {
-
-          setTtsState(prev => ({
-
-            ...prev,
-
-            [idx]: { ...prev[idx], progress: Math.round((audio.currentTime / audio.duration) * 100) }
-
-          }))
-
-        }
-
-      }
-
-      audio.onended = () => {
-
-        setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
-
-        activeTtsAudioRef.current = null
-
-        activeTtsIndexRef.current = null
-
-      }
-
-      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'playing', blobUrl: activeTtsJob.resultBlobUrl } }))
-
-      audio.play().catch(() => { /* autoplay policy: requires user gesture on some browsers */ })
-
-      setActiveTtsJobId(null)
-
-    } else if (activeTtsJob.status === 'failed') {
-
-      // Azure Speech unavailable — fall back to browser speechSynthesis
-
-      const msgContent = messages[idx]?.content || ''
-
-      if (msgContent) {
-
-        window.speechSynthesis.cancel()
-
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance(msgContent))
-
-      }
-
-      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
-
-      activeTtsIndexRef.current = null
-
-      setActiveTtsJobId(null)
-
-    }
-
-  }, [activeTtsJob.status, activeTtsJob.resultBlobUrl, messages])
-
-  const handleTTSPlay = useCallback(async (idx: number, content: string) => {
-
-    // Stop any active audio
-
-    if (activeTtsAudioRef.current) {
-
-      activeTtsAudioRef.current.pause()
-
-      activeTtsAudioRef.current = null
-
-    }
-
-    window.speechSynthesis.cancel()
-
-    setActiveTtsJobId(null)
-
-    // Toggle off: if this message is already playing or loading, stop it
-
-    if (ttsState[idx]?.status === 'playing' || ttsState[idx]?.status === 'loading') {
-
-      // Null the index FIRST so the useEffect guard bails out immediately
-      activeTtsIndexRef.current = null
-
-      setActiveTtsJobId(null)
-
-      window.speechSynthesis.cancel()
-
-      setTtsState(prev => ({ ...prev, [idx]: { ...prev[idx], status: 'done', progress: 0 } }))
-
-      return
-
-    }
-
-    activeTtsIndexRef.current = idx
-
-    setTtsState(prev => ({ ...prev, [idx]: { status: 'loading', blobUrl: null, progress: 0 } }))
-
-    try {
-
-      const session = await supabase.auth.getSession()
-
-      const token = session.data.session?.access_token
-
-      if (!token) throw new Error('Not authenticated')
-
-      const res = await fetch(`${API_BASE}/v1/agents/speech/tts`, {
-
-        method: 'POST',
-
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-
-        body: JSON.stringify({ text: content, voice: 'auto', conversation_id: activeConversationId }),
-
-      })
-
-      if (!res.ok) throw new Error(`TTS enqueue failed: ${res.status}`)
-
-      const data = await res.json()
-
-      setActiveTtsJobId(data.job_id)
-
-    } catch {
-
-      // Immediate browser fallback on network or quota error
-
-      window.speechSynthesis.speak(new SpeechSynthesisUtterance(content))
-
-      setTtsState(prev => ({ ...prev, [idx]: { status: 'done', blobUrl: null, progress: 0 } }))
-
-      activeTtsIndexRef.current = null
-
-    }
-
-  }, [ttsState, activeConversationId])
 
   const fetchConversations = async () => {
 
@@ -3829,25 +3622,34 @@ export const Dashboard: React.FC = () => {
 
   }
 
-  const handleNewSession = (shouldWarmup: boolean = false) => {
-
-    setMessages([])
-
-    setActiveConversationId('00000000-0000-0000-0000-000000000000')
-
-    localStorage.setItem('active_conversation_id', '00000000-0000-0000-0000-000000000000')
-
-    setMode('discuss')
-
-    setIsSidebarOpen(false)
-
-    setTimeout(() => inputRef.current?.focus(), 0)
-
-    // Only trigger warmup when explicitly starting a new session (not when deleting/navigating)
-    if (shouldWarmup) {
-      triggerWarmup()
+  const handleNewSession = () => {
+    // Abort any active stream before starting new session
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
     }
 
+    // Reset all streaming and search states
+    setIsStreaming(false)
+    setWebSearchStatus('idle')
+    setActivityLabel('')
+    
+    // Clear messages and reset conversation ID
+    setMessages([])
+    setActiveConversationId('00000000-0000-0000-0000-000000000000')
+    localStorage.setItem('active_conversation_id', '00000000-0000-0000-0000-000000000000')
+    
+    // Reset mode to discuss
+    setMode('discuss')
+    
+    // Close sidebar
+    setIsSidebarOpen(false)
+    
+    // Clear any preview state
+    setPreviewingFile(null)
+    
+    // Focus input after state updates
+    setTimeout(() => inputRef.current?.focus(), 100)
   }
 
   const handleConfirmDelete = async () => {
@@ -3882,7 +3684,7 @@ export const Dashboard: React.FC = () => {
 
         if (id === activeConversationId) {
 
-          handleNewSession(false)  // Don't warmup when deleting current conversation
+          handleNewSession()
 
         }
 
@@ -4265,7 +4067,7 @@ export const Dashboard: React.FC = () => {
 
         e.preventDefault()
 
-        handleNewSession(true)  // Warmup when user explicitly starts new session
+        handleNewSession()
 
         return
 
@@ -4317,8 +4119,6 @@ export const Dashboard: React.FC = () => {
 
   // Check scroll position to determine if we should stay locked to the bottom
 
-  const [showScrollBottomButton, setShowScrollBottomButton] = useState(false)
-
   const handleScroll = () => {
 
     const container = scrollContainerRef.current
@@ -4329,35 +4129,10 @@ export const Dashboard: React.FC = () => {
 
       isAutoScrollEnabledRef.current = isAtBottom
 
-      setShowScrollBottomButton(!isAtBottom)
-
     }
 
   }
 
-  // Smooth scroll to the bottom of the chat list
-
-  const scrollToBottom = () => {
-
-    const container = scrollContainerRef.current
-
-    if (container) {
-
-      container.scrollTo({
-
-        top: container.scrollHeight,
-
-        behavior: 'smooth'
-
-      })
-
-      isAutoScrollEnabledRef.current = true
-
-      setShowScrollBottomButton(false)
-
-    }
-
-  }
 
   // Auto-scroll on new content only if user is already at the bottom
 
@@ -4492,14 +4267,6 @@ export const Dashboard: React.FC = () => {
       ? { role: 'user', content: newUserMessage }
 
       : newUserMessage
-
-    // Check if this is a new conversation and trigger warmup
-    const currentConvoId = overrideConvoId || activeConversationId
-    const isNewConvo = !currentConvoId || currentConvoId === '00000000-0000-0000-0000-000000000000'
-    
-    if (isNewConvo) {
-      triggerWarmup()
-    }
 
     // Append the new user message and an assistant placeholder
 
@@ -5194,6 +4961,20 @@ export const Dashboard: React.FC = () => {
     fileInputRef.current?.click()
 
   }
+
+  const toggleVoice = useCallback(async () => {
+
+    if (voice.error === 'permission_denied') {
+      showToast('Microphone access required for voice input', 'error')
+      return
+    }
+    if (voice.isRecording) {
+      voice.stopRecording()
+    } else {
+      await voice.startRecording()
+    }
+
+  }, [voice])
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -5914,7 +5695,7 @@ export const Dashboard: React.FC = () => {
 
           <button
 
-            onClick={() => handleNewSession(true)}  // Warmup when user clicks New Session
+            onClick={() => handleNewSession()}
 
             className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
 
@@ -7178,64 +6959,6 @@ export const Dashboard: React.FC = () => {
 
                         )}
 
-                        {/* TTS Listen/Stop button — assistant messages only */}
-
-                        {msg.role === 'assistant' && msg.content.length > 0 && (
-
-                          <>
-
-                            <button
-
-                              id={`tts-play-${i}`}
-
-                              type="button"
-
-                              onClick={() => handleTTSPlay(i, msg.content)}
-
-                              title={ttsState[i]?.status === 'playing' ? 'Stop audio' : 'Listen to response'}
-
-                              className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
-
-                            >
-
-                              {ttsState[i]?.status === 'loading' ? (
-
-                                <><Loader2 className="w-3.5 h-3.5 animate-spin" /><span>Loading</span></>
-
-                              ) : ttsState[i]?.status === 'playing' ? (
-
-                                <><Square className="w-3.5 h-3.5 fill-current" /><span>Stop</span></>
-
-                              ) : (
-
-                                <span>Listen</span>
-
-                              )}
-
-                            </button>
-
-                            {/* Audio progress bar — visible only while playing */}
-
-                            {ttsState[i]?.status === 'playing' && (
-
-                              <div className="w-16 h-[2px] bg-[#1a1d20] rounded-full overflow-hidden">
-
-                                <div
-
-                                  className="h-full bg-[#ffffff]/70 transition-all duration-500"
-
-                                  style={{ width: `${ttsState[i]?.progress ?? 0}%` }}
-
-                                />
-
-                              </div>
-
-                            )}
-
-                          </>
-
-                        )}
-
                         {msg.role === 'user' && editingMessageIndex !== i && (
 
                           <button
@@ -7307,6 +7030,24 @@ export const Dashboard: React.FC = () => {
               </div>
             )}
 
+            {/* Voice recording status strip */}
+            {voice.isRecording && (
+              <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
+                <div className="flex items-center gap-2.5">
+                  <VoiceWaveform volume={voice.currentVolume} />
+                  <span className="text-[10px] font-bold text-brand-text tracking-widest uppercase">Listening...</span>
+                  {voice.isTranscribing && <Loader2 className="w-3 h-3 text-brand-muted animate-spin" />}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => voice.stopRecording()}
+                  className="text-[9px] text-brand-muted hover:text-red-400 font-bold tracking-widest uppercase transition"
+                >
+                  Stop
+                </button>
+              </div>
+            )}
+
             {/* Middle Row: Textarea input */}
             <div className="relative flex-1">
               <textarea
@@ -7322,11 +7063,13 @@ export const Dashboard: React.FC = () => {
                 }}
                 onChange={(e) => {
                   setInput(e.target.value)
+                  if (voice.isRecording) voice.clearTranscript()
                 }}
                 disabled={uploading}
                 placeholder={
+                  voice.isRecording ? 'Listening...' :
                   attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
-                  pastedText ? 'Add prompt details for the pasted text...' : 'Submit an inquiry...'
+                  pastedText ? 'Add prompt details for the pasted text...' : "Let's talk"
                 }
                 className="w-full h-[22px] bg-transparent text-[13.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5"
               />
@@ -7346,6 +7089,24 @@ export const Dashboard: React.FC = () => {
                 >
                   <Paperclip className="w-4 h-4" />
                 </button>
+
+                {/* Voice mic button */}
+                {voice.isSupported && (
+                  <button
+                    id="voice-mic-button"
+                    type="button"
+                    onClick={toggleVoice}
+                    disabled={isStreaming || uploading}
+                    className={`p-1.5 transition-all duration-150 active:scale-95 rounded disabled:opacity-20 ${
+                      voice.isRecording
+                        ? 'text-[#ffffff] voice-pulse-ring'
+                        : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
+                    }`}
+                    title={voice.isRecording ? 'Stop recording' : 'Voice input'}
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                )}
 
                 {/* Mode Selector Pill Group */}
                 <div className="flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 ml-1 select-none">

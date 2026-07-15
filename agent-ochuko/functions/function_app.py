@@ -229,7 +229,7 @@ def token_quota_reset(myTimer: func.TimerRequest) -> None:
 # CRON 2: Monthly Agent Quota Reset (0 0 1 * * UTC)
 # ---------------------------------------------------------------------------
 
-@app.timer_trigger(schedule="0 23 * * *", arg_name="myTimer", run_on_startup=False, use_monitor=False)
+@app.timer_trigger(schedule="0 23 1 * *", arg_name="myTimer", run_on_startup=False, use_monitor=False)
 def agent_quota_reset(myTimer: func.TimerRequest) -> None:
     wat = timezone(timedelta(hours=1))
     now_wat = datetime.now(wat)
@@ -1007,78 +1007,6 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
                 db.table("agent_quotas").upsert({"user_id": user_id, "period": period, "image_gen_used": 1}, on_conflict="user_id,period").execute()
 
             logger.info("Image generated and uploaded. job_id=%s url=%.80s", job_id, image_url)
-
-
-        elif job_type == "speech_tts":
-            # ─── Azure Speech TTS ───────────────────────────────────────────────────────
-            import urllib.request as _urlreq
-
-            text = input_metadata.get("text", "")
-            voice = input_metadata.get("voice", "en-GB-SoniaNeural")
-
-            if not text:
-                raise ValueError("Missing text in input_metadata for speech_tts job.")
-
-            speech_key = os.environ.get("AZURE_SPEECH_KEY")
-            speech_region = os.environ.get("AZURE_SPEECH_REGION", "southafricanorth")
-            if not speech_key:
-                raise RuntimeError("AZURE_SPEECH_KEY is not configured.")
-
-            logger.info("Running Azure Speech TTS. job_id=%s voice=%s text_len=%d", job_id, voice, len(text))
-
-            # Build SSML — always set xml:lang to en-US to satisfy Azure validation;
-            # the voice attribute controls the actual accent/dialect.
-            ssml = (
-                f'<speak version="1.0" xml:lang="en-US" '
-                f'xmlns="http://www.w3.org/2001/10/synthesis" '
-                f'xmlns:mstts="http://www.w3.org/2001/mstts">'
-                f'<voice name="{voice}">'
-                f'{text}'
-                f'</voice>'
-                f'</speak>'
-            )
-            ssml_bytes = ssml.encode("utf-8")
-
-            tts_url = f"https://{speech_region}.tts.speech.microsoft.com/cognitiveservices/v1"
-            tts_req = _urlreq.Request(
-                tts_url,
-                data=ssml_bytes,
-                headers={
-                    "Ocp-Apim-Subscription-Key": speech_key,
-                    "Content-Type": "application/ssml+xml",
-                    "X-Microsoft-OutputFormat": "audio-48khz-96kbitrate-mono-mp3",
-                    "User-Agent": "AgentOchuko/1.0",
-                },
-                method="POST",
-            )
-
-            try:
-                with _urlreq.urlopen(tts_req, timeout=30) as tts_resp:
-                    audio_bytes = tts_resp.read()
-            except Exception as speech_exc:
-                # Mark as failed so frontend falls back to window.speechSynthesis
-                raise RuntimeError(f"Azure Speech TTS request failed: {speech_exc}")
-
-            if not audio_bytes or len(audio_bytes) < 500:
-                raise RuntimeError("Azure Speech returned an empty or invalid audio response.")
-
-            # Upload audio to Cloudflare R2
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            filename = f"tts/{user_id}/{job_id}_{timestamp}.mp3"
-            sas_url = _upload_to_r2(audio_bytes, filename, "audio/mpeg")
-
-            result_data = {"blob_url": sas_url, "voice": voice}
-
-            # Increment monthly TTS quota
-            period = datetime.now(timezone.utc).strftime("%Y-%m")
-            quota_res = db.table("agent_quotas").select("tts_calls_used").eq("user_id", user_id).eq("period", period).maybe_single().execute()
-            if quota_res and hasattr(quota_res, "data") and quota_res.data:
-                current = quota_res.data.get("tts_calls_used", 0) or 0
-                db.table("agent_quotas").update({"tts_calls_used": current + 1}).eq("user_id", user_id).eq("period", period).execute()
-            else:
-                db.table("agent_quotas").upsert({"user_id": user_id, "period": period, "tts_calls_used": 1}, on_conflict="user_id,period").execute()
-
-            logger.info("TTS audio generated and uploaded. job_id=%s url=%.80s", job_id, sas_url)
 
         else:
             raise ValueError(f"Unsupported job type: '{job_type}'")
