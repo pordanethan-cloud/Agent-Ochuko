@@ -19,6 +19,7 @@ interface TopUser {
   user_id: string;
   email: string;
   total_tokens: number;
+  estimated_cost?: number;  // computed client-side in dollars
 }
 
 interface UsageResponse {
@@ -34,45 +35,80 @@ interface UsageResponse {
 const MODEL_NAME_MAP: Record<string, string> = {
   "gpt-5.4": "gpt-5.4 (Think)",
   "gpt-5.4-mini": "gpt-5.4-mini (Solve)",
-  "gpt-5.4-pro": "gpt-5.4-mini (Solve)", // Map pro to mini
+  "gpt-5.4-pro": "gpt-5.4-mini (Solve)",
   "gpt-5.4-nano": "gpt-5.4-nano (Discuss)",
   "unknown": "Other / Unknown"
 };
 
-// Colors for the specific models on the bar chart
+// Colors for the specific models
 const MODEL_COLORS: Record<string, string> = {
-  "gpt-5.4": "#6366f1",      // Think: Indigo
-  "gpt-5.4-mini": "#10b981", // Solve: Emerald
-  "gpt-5.4-pro": "#10b981",  // Solve (legacy pro): Emerald
-  "gpt-5.4-nano": "#f59e0b", // Discuss/Nano: Amber
-  "unknown": "#64748b"       // Slate
+  "gpt-5.4": "#6366f1",
+  "gpt-5.4-mini": "#10b981",
+  "gpt-5.4-pro": "#10b981",
+  "gpt-5.4-nano": "#f59e0b",
+  "unknown": "#64748b"
 };
 
+// ---------------------------------------------------------------------------
+// Azure OpenAI pricing (USD per 1K tokens, approximate public rates)
+// Input tokens are cheaper than output tokens.
+// ---------------------------------------------------------------------------
+const TOKEN_COST_PER_1K: Record<string, { input: number; output: number }> = {
+  "gpt-5.4":      { input: 0.010, output: 0.030 },  // Think — flagship
+  "gpt-5.4-mini": { input: 0.003, output: 0.012 },  // Solve — mini
+  "gpt-5.4-pro":  { input: 0.003, output: 0.012 },  // legacy pro → same as mini
+  "gpt-5.4-nano": { input: 0.001, output: 0.004 },  // Discuss/Nano — cheapest
+  "unknown":      { input: 0.003, output: 0.012 },  // fallback to mini rates
+};
+
+/** Estimate dollar cost for a single message row. */
+function estimateMsgCost(m: Message): number {
+  const rates = TOKEN_COST_PER_1K[m.model_used] ?? TOKEN_COST_PER_1K["unknown"];
+  const inputCost  = ((m.input_tokens  || 0) / 1000) * rates.input;
+  const outputCost = ((m.output_tokens || 0) / 1000) * rates.output;
+  return inputCost + outputCost;
+}
+
 function buildDailyData(messages: Message[]) {
-  const byDay: Record<string, number> = {};
+  const byDay: Record<string, { tokens: number; cost: number }> = {};
   messages.forEach(m => {
     const day = m.created_at.slice(0, 10);
-    byDay[day] = (byDay[day] ?? 0) + (m.input_tokens || 0) + (m.output_tokens || 0);
+    if (!byDay[day]) byDay[day] = { tokens: 0, cost: 0 };
+    byDay[day].tokens += (m.input_tokens || 0) + (m.output_tokens || 0);
+    byDay[day].cost   += estimateMsgCost(m);
   });
   return Object.entries(byDay)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, tokens]) => ({ date, tokens }));
+    .map(([date, { tokens, cost }]) => ({ date, tokens, cost: parseFloat(cost.toFixed(4)) }));
 }
 
 function buildModelData(messages: Message[]) {
-  const byModel: Record<string, number> = {};
+  const byModel: Record<string, { tokens: number; cost: number }> = {};
   messages.forEach(m => {
     const rawModel = m.model_used || "unknown";
-    const mappedModel = MODEL_NAME_MAP[rawModel] ? rawModel : "unknown";
-    byModel[mappedModel] = (byModel[mappedModel] ?? 0) + (m.input_tokens || 0) + (m.output_tokens || 0);
+    const key = MODEL_NAME_MAP[rawModel] ? rawModel : "unknown";
+    if (!byModel[key]) byModel[key] = { tokens: 0, cost: 0 };
+    byModel[key].tokens += (m.input_tokens || 0) + (m.output_tokens || 0);
+    byModel[key].cost   += estimateMsgCost(m);
   });
   return Object.entries(byModel)
-    .filter(([_, tokens]) => tokens > 0)
-    .map(([model, tokens]) => ({
+    .filter(([_, d]) => d.tokens > 0)
+    .map(([model, d]) => ({
       model,
-      tokens,
+      tokens: d.tokens,
+      cost: parseFloat(d.cost.toFixed(4)),
       fill: MODEL_COLORS[model] || "#64748b"
     }));
+}
+
+/** Aggregate estimated cost per user_id from raw messages. */
+function buildUserCosts(messages: Message[]): Record<string, number> {
+  const costs: Record<string, number> = {};
+  messages.forEach(m => {
+    if (!m.user_id) return;
+    costs[m.user_id] = (costs[m.user_id] ?? 0) + estimateMsgCost(m);
+  });
+  return costs;
 }
 
 export function Usage() {
@@ -133,6 +169,16 @@ export function Usage() {
 
   const dailyData = buildDailyData(data.messages);
   const modelData = buildModelData(data.messages);
+  const userCosts = buildUserCosts(data.messages);
+
+  // Enrich top_users with estimated_cost computed from raw messages
+  const enrichedTopUsers = data.top_users.map(u => ({
+    ...u,
+    estimated_cost: userCosts[u.user_id] ?? 0,
+  }));
+
+  // Total estimated cost from messages (used as fallback when azure_actual_cost is 0)
+  const totalEstimatedCost = Object.values(userCosts).reduce((s, c) => s + c, 0);
 
   const actualCost = data.azure_actual_cost ?? 0;
   const creditLimit = data.azure_credit_limit ?? 150.00;
@@ -280,6 +326,57 @@ export function Usage() {
         </div>
       </div>
 
+      {/* Daily Spend chart — estimated $ cost over time */}
+      <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5 shadow-lg backdrop-blur-sm">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            Daily Estimated Spend
+          </h2>
+          <span className="text-[10px] text-slate-500 font-medium bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-full">
+            Est. total: ${totalEstimatedCost.toFixed(4)}
+          </span>
+        </div>
+        <ResponsiveContainer width="100%" height={240}>
+          <AreaChart data={dailyData} margin={{ top: 10, left: 0, right: 10, bottom: 0 }}>
+            <defs>
+              <linearGradient id="colorCost" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#10b981" stopOpacity={0.35}/>
+                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }}
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#334155' }}
+            />
+            <YAxis
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }}
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#334155' }}
+              tickFormatter={(v) => `$${Number(v).toFixed(3)}`}
+            />
+            <Tooltip
+              contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 12, boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)' }}
+              labelStyle={{ color: "#94a3b8", fontWeight: 600, fontSize: 11 }}
+              itemStyle={{ color: "#34d399", fontSize: 12 }}
+              formatter={(value) => [`$${Number(value).toFixed(4)}`, "Est. Cost (USD)"]}
+            />
+            <Area
+              type="monotone"
+              dataKey="cost"
+              stroke="#10b981"
+              strokeWidth={2}
+              fillOpacity={1}
+              fill="url(#colorCost)"
+              name="Est. Cost"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
       {/* Daily token chart */}
       <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5 shadow-lg backdrop-blur-sm">
         <h2 className="text-sm font-semibold text-slate-200 mb-4 flex items-center gap-2">
@@ -295,14 +392,14 @@ export function Usage() {
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-            <XAxis 
-              dataKey="date" 
-              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }} 
+            <XAxis
+              dataKey="date"
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }}
               axisLine={{ stroke: '#334155' }}
               tickLine={{ stroke: '#334155' }}
             />
-            <YAxis 
-              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }} 
+            <YAxis
+              tick={{ fill: "#94a3b8", fontSize: 10, fontWeight: 500 }}
               axisLine={{ stroke: '#334155' }}
               tickLine={{ stroke: '#334155' }}
               tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}
@@ -313,14 +410,14 @@ export function Usage() {
               itemStyle={{ color: "#818cf8", fontSize: 12 }}
               formatter={(value) => [Number(value).toLocaleString(), "Tokens"]}
             />
-            <Area 
-              type="monotone" 
-              dataKey="tokens" 
-              stroke="#6366f1" 
-              strokeWidth={2} 
-              fillOpacity={1} 
-              fill="url(#colorTokens)" 
-              name="Tokens" 
+            <Area
+              type="monotone"
+              dataKey="tokens"
+              stroke="#6366f1"
+              strokeWidth={2}
+              fillOpacity={1}
+              fill="url(#colorTokens)"
+              name="Tokens"
             />
           </AreaChart>
         </ResponsiveContainer>
@@ -366,6 +463,9 @@ export function Usage() {
             <span className="w-2.5 h-2.5 rounded-full bg-indigo-400"></span>
             Top 5 Users by Token Consumption
           </h2>
+          <span className="text-[10px] text-slate-500">
+            Estimated cost computed from token × model pricing
+          </span>
         </div>
         <table className="w-full text-sm">
           <thead>
@@ -373,17 +473,18 @@ export function Usage() {
               <th className="px-5 py-3 text-left">#</th>
               <th className="px-5 py-3 text-left">Email</th>
               <th className="px-5 py-3 text-right">Total Tokens</th>
+              <th className="px-5 py-3 text-right">Est. Cost (USD)</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
-            {data.top_users.length === 0 ? (
+            {enrichedTopUsers.length === 0 ? (
               <tr>
-                <td colSpan={3} className="px-5 py-8 text-center text-slate-500 text-xs">
+                <td colSpan={4} className="px-5 py-8 text-center text-slate-500 text-xs">
                   No data yet — data will appear after usage accrues.
                 </td>
               </tr>
             ) : (
-              data.top_users.map((u, i) => (
+              enrichedTopUsers.map((u, i) => (
                 <tr key={u.user_id} className="hover:bg-slate-800/30 transition-colors">
                   <td className="px-5 py-3.5 text-slate-500 font-semibold">{i + 1}</td>
                   <td className="px-5 py-3.5">
@@ -391,6 +492,17 @@ export function Usage() {
                   </td>
                   <td className="px-5 py-3.5 text-right font-mono text-slate-300 font-semibold">
                     {u.total_tokens.toLocaleString()}
+                  </td>
+                  <td className="px-5 py-3.5 text-right">
+                    <span className={`font-mono font-bold text-sm ${
+                      (u.estimated_cost ?? 0) > 1
+                        ? 'text-rose-400'
+                        : (u.estimated_cost ?? 0) > 0.10
+                        ? 'text-amber-400'
+                        : 'text-emerald-400'
+                    }`}>
+                      ${(u.estimated_cost ?? 0).toFixed(4)}
+                    </span>
                   </td>
                 </tr>
               ))
