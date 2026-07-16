@@ -4226,6 +4226,10 @@ export const Dashboard: React.FC = () => {
 
     } finally {
 
+      // Clear all local storage so no stale session or cache lingers
+      localStorage.clear()
+      sessionStorage.clear()
+
       window.location.assign('/login')
 
     }
