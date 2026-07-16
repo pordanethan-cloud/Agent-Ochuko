@@ -220,7 +220,26 @@ async def _perform_google_search(
         )
 
         answer: str = az_response.output_text or ""
-        return {"answer": answer, "sources": sources}
+        
+        # Extract token usage or calculate fallback estimate if 0/None
+        prompt_tokens = 0
+        completion_tokens = 0
+        if az_response and hasattr(az_response, "usage") and az_response.usage:
+            prompt_tokens = getattr(az_response.usage, "prompt_tokens", 0) or 0
+            completion_tokens = getattr(az_response.usage, "completion_tokens", 0) or 0
+            
+        est_input = sum(len(m.get("content", "")) for m in input_messages) // 4
+        est_output = len(answer) // 4
+        prompt_tokens = prompt_tokens if prompt_tokens > 0 else max(50, est_input)
+        completion_tokens = completion_tokens if completion_tokens > 0 else max(10, est_output)
+
+        return {
+            "answer": answer,
+            "sources": sources,
+            "tokens_input": prompt_tokens,
+            "tokens_output": completion_tokens,
+            "model": deploy,
+        }
     except Exception as e:
         import traceback
         print("--- CHAT AZURE SYNTHESIS PHASE ERROR ---")
@@ -627,8 +646,13 @@ async def chat_stream_generator(
                 yield "data: [DONE]\n\n"
                 return
 
-        # Persist assistant message to the database (even if it was a partial/early stopped message)
         try:
+            # Fallback estimation if actual tokens are 0/None
+            est_input = sum(len(m.get("content", "")) for m in messages) // 4
+            est_output = len(assistant_content) // 4
+            actual_prompt_tokens = prompt_tokens if prompt_tokens > 0 else max(50, est_input)
+            actual_completion_tokens = completion_tokens if completion_tokens > 0 else max(10, est_output)
+
             assistant_msg_insert = {
                 "conversation_id": conversation_id,
                 "role": "assistant",
@@ -637,14 +661,14 @@ async def chat_stream_generator(
                 "routing_reason": routing_reason,
                 "response_id": response_id,
                 "model": deployment,
-                "tokens_input": prompt_tokens,
-                "tokens_output": completion_tokens,
+                "tokens_input": actual_prompt_tokens,
+                "tokens_output": actual_completion_tokens,
             }
             supabase = get_supabase_admin()
             supabase.table("messages").insert(assistant_msg_insert).execute()
 
             # Reconcile token budget
-            actual_total = prompt_tokens + completion_tokens
+            actual_total = actual_prompt_tokens + actual_completion_tokens
             diff = actual_total - estimated_tokens
             if diff != 0:
                 try:

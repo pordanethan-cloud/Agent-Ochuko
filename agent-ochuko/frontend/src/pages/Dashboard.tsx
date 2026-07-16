@@ -5599,6 +5599,12 @@ export const Dashboard: React.FC = () => {
 
               content_parts: sources.length > 0 ? { sources } : null,
 
+              model: data.model || 'gpt-5.4-mini',
+
+              tokens_input: data.tokens_input || 0,
+
+              tokens_output: data.tokens_output || 0,
+
             }
 
           ])

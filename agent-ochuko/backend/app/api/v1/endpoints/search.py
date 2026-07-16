@@ -56,6 +56,9 @@ class HybridSearchResponse(BaseModel):
     answer: str
     sources: list[Source]
     search_engine: str   # always "gemini-2.5-flash+google-search" — documents provider explicitly
+    model: Optional[str] = None
+    tokens_input: Optional[int] = 0
+    tokens_output: Optional[int] = 0
 
 
 # ---------------------------------------------------------------------------
@@ -118,4 +121,7 @@ async def ask_hybrid_engine(
         answer=answer,
         sources=sources,
         search_engine="google-search+azure-openai",
+        model=result.get("model", "gpt-5.4-mini"),
+        tokens_input=result.get("tokens_input", 0),
+        tokens_output=result.get("tokens_output", 0),
     )
