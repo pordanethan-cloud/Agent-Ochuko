@@ -596,11 +596,17 @@ async def chat_stream_generator(
                                             })
                                             + "\n\n"
                                         )
-                                        search_result = await _perform_google_search(
+                                        search_task = asyncio.create_task(_perform_google_search(
                                             query,
                                             synthesis_deployment=deployment,
                                             history=messages,
-                                        )
+                                        ))
+                                        while not search_task.done():
+                                            try:
+                                                await asyncio.wait_for(asyncio.shield(search_task), timeout=4.0)
+                                            except asyncio.TimeoutError:
+                                                yield ": keep-alive\n\n"
+                                        search_result = await search_task
                                         sources = search_result.get("sources", [])
                                         snippet = search_result.get("answer", "")[:1200]
 
@@ -709,13 +715,19 @@ async def chat_stream_generator(
                                             + "\n\n"
                                         )
 
-                                        exec_output, exec_files = await execute_code_in_sandbox(
+                                        exec_task = asyncio.create_task(execute_code_in_sandbox(
                                             code=code_str,
                                             language=lang_str,
                                             conversation_id=conversation_id,
                                             user_id=user_id,
                                             timeout_seconds=60,
-                                        )
+                                        ))
+                                        while not exec_task.done():
+                                            try:
+                                                await asyncio.wait_for(asyncio.shield(exec_task), timeout=4.0)
+                                            except asyncio.TimeoutError:
+                                                yield ": keep-alive\n\n"
+                                        exec_output, exec_files = await exec_task
 
                                         # Notify frontend: execution done
                                         yield (
