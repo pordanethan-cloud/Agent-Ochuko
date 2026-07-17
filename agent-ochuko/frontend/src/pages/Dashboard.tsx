@@ -300,6 +300,8 @@ interface Message {
 
   generatedFiles?: { filename: string; download_url: string; size_bytes: number }[]
 
+  thinkingContent?: string   // Reasoning text from <thinking> blocks (THINK/SOLVE modes)
+
 }
 
 const triggerDirectDownload = async (url: string, fallbackFilename: string) => {
@@ -1012,6 +1014,48 @@ function SvgBlock({ svg }: { svg: string }) {
           style={{ background: 'transparent' }}
         />
       </div>
+    </div>
+  )
+}
+
+// ─── Thinking block renderer ────────────────────────────────────────────────
+// Collapsible panel showing the model's live reasoning trace.
+// Only rendered for THINK/SOLVE modes. Streams in real-time, finalised after
+// the model emits </thinking>. Content is kept separate from the clean answer.
+
+function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (streaming && open && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [content, streaming, open])
+
+  return (
+    <div className="my-2 rounded-xl border border-purple-500/20 bg-purple-950/20 overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-purple-300/80 hover:text-purple-200 transition-colors"
+      >
+        <Brain className="w-3.5 h-3.5 shrink-0 text-purple-400" />
+        <span className="font-medium tracking-wide text-xs uppercase">Reasoning</span>
+        {streaming && (
+          <span className="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+        )}
+        <ChevronDown
+          className={`w-3.5 h-3.5 ml-auto transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <div
+          ref={scrollRef}
+          className="px-4 pb-4 pt-3 border-t border-purple-500/10 text-[11px] text-purple-200/60 font-mono whitespace-pre-wrap leading-relaxed max-h-80 overflow-y-auto"
+        >
+          {content || '…'}
+        </div>
+      )}
     </div>
   )
 }
@@ -5017,6 +5061,40 @@ export const Dashboard: React.FC = () => {
 
               showToast(`Remembered: ${data.key}`, 'info')
 
+            } else if (data.type === 'thinking_start') {
+
+              // Model started reasoning — open the thinking panel (initialise empty)
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = updated[updated.length - 1]
+                  updated[updated.length - 1] = { ...last, thinkingContent: '' }
+                }
+                return updated
+              })
+
+            } else if (data.type === 'thinking_delta') {
+
+              // Append streaming reasoning chunk to thinkingContent
+              const thoughtText: string = data.delta?.text ?? ''
+              if (thoughtText) {
+                setMessages((prev) => {
+                  const updated = [...prev]
+                  if (updated.length > 0) {
+                    const last = updated[updated.length - 1]
+                    updated[updated.length - 1] = {
+                      ...last,
+                      thinkingContent: (last.thinkingContent ?? '') + thoughtText,
+                    }
+                  }
+                  return updated
+                })
+              }
+
+            } else if (data.type === 'thinking_done') {
+
+              // Thinking block complete — no state change needed, panel stays visible
+
             } else if (data.type === 'agent_file') {
 
               // Code executor produced a file — append download card to current message
@@ -7052,6 +7130,14 @@ export const Dashboard: React.FC = () => {
 
                             />
 
+                          )}
+
+                          {/* Thinking panel — shown above answer in THINK/SOLVE modes */}
+                          {msg.thinkingContent && (
+                            <ThinkingBlock
+                              content={msg.thinkingContent}
+                              streaming={isStreaming && i === messages.length - 1}
+                            />
                           )}
 
                           {msg.content.length > 0 && renderRichContent(

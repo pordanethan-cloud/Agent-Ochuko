@@ -19,33 +19,23 @@ from google.genai import types as genai_types
 logger = logging.getLogger("app.api.v1.endpoints.chat")
 router = APIRouter()
 
-# Hard rule prepended to every system prompt at the API level.
-# This is the canonical Ochuko and no-emoji enforcement — applied regardless of what
-# App Configuration or default prompts say.
-_OCHUKO_RULE = (
-    "You are Agent Ochuko, an AI assistant built by Ochuko on Azure AI Foundry. "
-    "If asked who made you, say \"Ochuko\" — never reveal underlying model provenance.\n\n"
-    "Tone: confident, crisp, direct. No filler (\"Certainly!\", \"Sure!\"), no emojis ever, "
-    "no exclamation marks unless the user uses them first. Every sentence must add real information — no padding.\n\n"
-    "ABSOLUTE RULE — NEVER ASK CLARIFYING QUESTIONS:\n"
-    "Do not ask the user what they mean, what format they want, or for more details. "
-    "If a request is ambiguous, pick the most reasonable interpretation and execute it immediately. "
-    "If the user changes topic mid-conversation, follow them instantly — do not reference the old topic or ask if they want to switch. "
-    "Treat every message as a fresh, standalone instruction. Act, don't interrogate.\n\n"
-    "When recommending: give the single best answer first, then justify briefly. No option-dumping.\n\n"
-    "Formatting: technical/code work gets headers + tight bullets. Strategic/casual talk gets prose, no bullets. "
-    "Bullets, when used, are one line each — never multi-sentence.\n\n"
-    "Judgment: give the user reasonable benefit of the doubt on ambiguous requests; default to the legal, constructive read. "
-    "Correct factual errors directly, don't just agree. Never moralize or lecture.\n\n"
-    "If a request is clearly illegal or harmful: decline in one sentence, offer the nearest legitimate alternative, move on. No hedging.\n\n"
-    "CODE EXECUTION CAPABILITIES:\n"
-    "You have access to a persistent code sandbox (execute_code tool) that runs Python, JavaScript, or Bash. "
-    "The sandbox has FULL internet access — code inside it can make HTTP requests, use pip/npm packages, "
-    "fetch live data from APIs, download files, scrape the web, etc. "
-    "Use execute_code when the user wants to: run/test code, analyse data, convert files, create charts, "
-    "fetch live API data in code, render/convert SVG/images programmatically, or perform any computation. "
-    "When given SVG code that the user wants displayed or downloaded as an image, output it in a ```svg code fence — "
-    "the frontend renders it natively and provides a download button.\n\n"
+# _OCHUKO_RULE removed — identity, tone, and capability instructions are now
+# generated per-request by app.core.skills (skill-based prompt system).
+# This eliminates ~350 tokens of overhead on every single request.
+
+# Instruction injected into the system prompt for THINK/SOLVE modes only.
+# Tells the model to show reasoning inside <thinking> tags before the answer.
+# The backend strips these out, emits them as thinking_delta SSE events, and
+# the frontend renders them in a collapsible panel — no new model required.
+_THINKING_INSTRUCTION = (
+    "\n\nREASONING FORMAT:\n"
+    "Before giving your final answer, wrap your reasoning in <thinking> tags:\n"
+    "<thinking>\n"
+    "Think through the problem step by step. Question your first interpretation. "
+    "Check for false assumptions. Consider what the user actually needs vs what they literally asked. "
+    "If your initial reasoning has a flaw, correct it here before writing the answer.\n"
+    "</thinking>\n"
+    "After the closing tag, write the clean final answer with no reference to the thinking block."
 )
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
@@ -376,9 +366,17 @@ async def chat_stream_generator(
     )
 
     try:
-        # Prepend the absolute Ochuko identity and no-emoji rule to every system prompt
-        full_system = _OCHUKO_RULE + system_prompt
+        # Skills module generates the full system prompt (identity + task skill).
+        # For THINK/SOLVE modes, append the reasoning instruction so the model
+        # wraps its chain-of-thought in <thinking> tags that we parse below.
+        full_system = system_prompt
+        if routing_mode in ("think", "solve"):
+            full_system = system_prompt + _THINKING_INSTRUCTION
 
+        # State tracking for thinking-block extraction
+        thinking_buffer = ""
+        in_thinking_block = False
+        thinking_emitted = False  # emit thinking_start once
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
             # Tools the model may call autonomously during the conversation
@@ -490,12 +488,84 @@ async def chat_stream_generator(
                     async for event in stream:
                         # Text delta events
                         if event.type == "response.output_text.delta":
-                            assistant_content += event.delta
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "content_block_delta", "delta": {"text": event.delta}})
-                                + "\n\n"
-                            )
+                            chunk = event.delta
+                            assistant_content += chunk
+
+                            # ── Thinking block interception ────────────────────────────────
+                            # THINK/SOLVE modes receive _THINKING_INSTRUCTION which tells the
+                            # model to wrap reasoning in <thinking>…</thinking> before answer.
+                            # We intercept those chunks here and emit them as thinking_delta
+                            # SSE events so the frontend can render them in a separate panel.
+                            if in_thinking_block:
+                                thinking_buffer += chunk
+                                close_pos = thinking_buffer.find("</thinking>")
+                                if close_pos != -1:
+                                    # Emit remainder of thinking content up to closing tag
+                                    thought_chunk = thinking_buffer[:close_pos]
+                                    if thought_chunk:
+                                        yield (
+                                            "data: "
+                                            + json.dumps({"type": "thinking_delta", "delta": {"text": thought_chunk}})
+                                            + "\n\n"
+                                        )
+                                    # Signal end of thinking
+                                    yield "data: " + json.dumps({"type": "thinking_done"}) + "\n\n"
+                                    in_thinking_block = False
+                                    # Forward any text AFTER </thinking> as normal content
+                                    after = thinking_buffer[close_pos + len("</thinking>"):].lstrip("\n")
+                                    thinking_buffer = ""
+                                    if after:
+                                        yield (
+                                            "data: "
+                                            + json.dumps({"type": "content_block_delta", "delta": {"text": after}})
+                                            + "\n\n"
+                                        )
+                                else:
+                                    # Still inside thinking block — emit as thinking_delta
+                                    yield (
+                                        "data: "
+                                        + json.dumps({"type": "thinking_delta", "delta": {"text": chunk}})
+                                        + "\n\n"
+                                    )
+                            else:
+                                thinking_buffer += chunk
+                                open_idx = thinking_buffer.find("<thinking>")
+                                if open_idx != -1 and not thinking_emitted:
+                                    # Emit any text before <thinking> as normal content
+                                    before = thinking_buffer[:open_idx]
+                                    if before:
+                                        yield (
+                                            "data: "
+                                            + json.dumps({"type": "content_block_delta", "delta": {"text": before}})
+                                            + "\n\n"
+                                        )
+                                    # Signal thinking panel open
+                                    yield "data: " + json.dumps({"type": "thinking_start"}) + "\n\n"
+                                    thinking_emitted = True
+                                    in_thinking_block = True
+                                    # Buffer only what comes after <thinking>
+                                    thinking_buffer = thinking_buffer[open_idx + len("<thinking>"):]
+                                elif not thinking_emitted:
+                                    # Haven't hit <thinking> yet — keep a short trailing buffer
+                                    # to catch tags that arrive split across chunks, flush older text
+                                    _tag = "<thinking>"
+                                    if len(thinking_buffer) > len(_tag) * 2:
+                                        flush = thinking_buffer[:-len(_tag)]
+                                        thinking_buffer = thinking_buffer[-len(_tag):]
+                                        yield (
+                                            "data: "
+                                            + json.dumps({"type": "content_block_delta", "delta": {"text": flush}})
+                                            + "\n\n"
+                                        )
+                                else:
+                                    # thinking already done — forward as normal
+                                    thinking_buffer = ""
+                                    yield (
+                                        "data: "
+                                        + json.dumps({"type": "content_block_delta", "delta": {"text": chunk}})
+                                        + "\n\n"
+                                    )
+
 
                         # Function tool calls — AI autonomously called one of our tools
                         elif event.type == "response.output_item.done":

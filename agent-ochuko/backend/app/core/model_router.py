@@ -14,10 +14,11 @@ so they can be updated at runtime without redeploying.
 
 import re
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from app.core.config import get_config
+from app.core.skills import get_skill_prompt, get_skill_name, BASE_IDENTITY
 
 logger = logging.getLogger("app.core.model_router")
 
@@ -57,6 +58,7 @@ class RoutingDecision:
     routing_mode: str      # "think", "solve", "discuss", or "nano"
     routing_reason: str    # Human-readable explanation for audit/debug
     was_intercepted: bool  # True if Nano interceptor fired (silent redirect)
+    skill: str = "general" # Skill module injected for this request
 
 
 def _is_trivial(message_text: str) -> bool:
@@ -113,36 +115,19 @@ async def route(
         nano_turn_count: Current nano turn count for this conversation
 
     Returns:
-        RoutingDecision with deployment, prompt, mode, and reasoning
-    """
-    # Load deployment names from App Configuration (cached in memory)
+        RoutingDecision with deployment, prompt, mode, and reasonin    # Load deployment names from App Configuration (cached in memory)
     think_deployment = await get_config("THINK_MODEL_DEPLOYMENT", "gpt-5.4")
     solve_deployment = await get_config("SOLVE_MODEL_DEPLOYMENT", "gpt-5.4-mini")
-    nano_deployment = await get_config("NANO_MODEL_DEPLOYMENT", "gpt-5.4-nano")
+    nano_deployment  = await get_config("NANO_MODEL_DEPLOYMENT",  "gpt-5.4-nano")
 
-    # Load system prompts
-    think_prompt = await get_config("THINK_PROMPT", (
-        "You are Ochuko. You think before you speak. When given a problem, you analyze it from "
-        "multiple angles, examine root causes, and reason carefully before you respond. You are "
-        "knowledgeable across many domains — law, finance, psychology, strategy, technology, and beyond. "
-        "You teach everything that is legal. You do not moralize. You do not add unnecessary caveats. "
-        "Your answers are comprehensive and structured, delivered with quiet, unhurried authority. "
-        "Never use emojis."
-    ))
-    solve_prompt = await get_config("SOLVE_PROMPT", (
-        "You are Ochuko. You solve problems with clinical precision. Break every problem into clear, "
-        "logical steps. Show your work. Do not speculate — reason. You are broadly knowledgeable and "
-        "you teach everything that is legal, holding nothing back within those bounds. No moralizing. "
-        "No disclaimers that were not asked for. No emojis. Correctness first. Brevity second."
-    ))
-    discuss_prompt = await get_config("DISCUSS_PROMPT", (
-        "You are Ochuko. You speak plainly and directly. Unhurried. You know a great deal and you "
-        "share it when asked — nothing legal is off the table. Keep responses concise and grounded. "
-        "No performance, no filler, no emojis."
-    ))
+    # Nano override prompts (App Config only — skill system handles think/solve/discuss)
     nano_prompt = await get_config("NANO_PROMPT", (
         "You are Ochuko. Be direct and brief — 1 to 3 sentences only. No emojis. No filler."
     ))
+
+    # Classify skill from user message (zero cost, pure regex)
+    skill = get_skill_name(user_message)
+    skill_prompt = get_skill_prompt(user_message)
 
     # Load nano interceptor config
     nano_max_turns_str = await get_config("NANO_MAX_TURNS", "3")
@@ -151,20 +136,19 @@ async def route(
     except ValueError:
         nano_max_turns = 3
 
-    # ── Layer 0: DISCUSS mode → always nano ───────────────────────────────
+    # ── Layer 0: DISCUSS mode ────────────────────────────────────────────────
+    # Discuss uses nano. System prompt is skill-based (compact).
     if mode == "discuss":
         return RoutingDecision(
             deployment=nano_deployment,
-            system_prompt=discuss_prompt,
+            system_prompt=skill_prompt,
             routing_mode="discuss",
-            routing_reason="Mode is DISCUSS — routed to nano (cheapest)",
+            routing_reason=f"Mode is DISCUSS — routed to nano | skill={skill}",
             was_intercepted=False,
+            skill=skill,
         )
 
-    # ── Layer 1: Silent Nano Interceptor ──────────────────────────────────
-    # For THINK/SOLVE mode: if the message is trivial AND we haven't
-    # exceeded NANO_MAX_TURNS, silently route to nano instead of
-    # burning expensive tokens on "hi" or "thanks".
+    # ── Layer 1: Silent Nano Interceptor ──────────────────────────────────────
     if _is_trivial(user_message) and nano_turn_count < nano_max_turns:
         return RoutingDecision(
             deployment=nano_deployment,
@@ -175,38 +159,40 @@ async def route(
                 f"(turn {nano_turn_count + 1}/{nano_max_turns})"
             ),
             was_intercepted=True,
+            skill="general",
         )
 
-    # ── Layer 1b: Simple Query Interceptor ──────────────────────────────
-    # For THINK/SOLVE mode: if the message is explicitly a simple informational request
-    # and we haven't exceeded NANO_MAX_TURNS, route to nano using the discuss prompt ruleset.
+    # ── Layer 1b: Simple Query Interceptor ───────────────────────────────
     if _is_simple_request(user_message) and nano_turn_count < nano_max_turns:
         return RoutingDecision(
             deployment=nano_deployment,
-            system_prompt=discuss_prompt,
+            system_prompt=skill_prompt,  # skill-based even for simple queries
             routing_mode="nano",
             routing_reason=(
                 f"Nano intercepted: simple query "
-                f"(turn {nano_turn_count + 1}/{nano_max_turns})"
+                f"(turn {nano_turn_count + 1}/{nano_max_turns}) | skill={skill}"
             ),
             was_intercepted=True,
+            skill=skill,
         )
 
-    # ── Layer 2: Mode-based routing ───────────────────────────────────────
+    # ── Layer 2: Mode-based routing ──────────────────────────────────────
     if mode == "solve":
         return RoutingDecision(
             deployment=solve_deployment,
-            system_prompt=solve_prompt,
+            system_prompt=skill_prompt,
             routing_mode="solve",
-            routing_reason="Mode is SOLVE — routed to gpt-5.4-mini",
+            routing_reason=f"Mode is SOLVE — routed to gpt-5.4-mini | skill={skill}",
             was_intercepted=False,
+            skill=skill,
         )
 
     # Default: THINK mode
     return RoutingDecision(
         deployment=think_deployment,
-        system_prompt=think_prompt,
+        system_prompt=skill_prompt,
         routing_mode="think",
-        routing_reason="Mode is THINK — routed to gpt-5.4",
+        routing_reason=f"Mode is THINK — routed to gpt-5.4 | skill={skill}",
         was_intercepted=False,
+        skill=skill,
     )
