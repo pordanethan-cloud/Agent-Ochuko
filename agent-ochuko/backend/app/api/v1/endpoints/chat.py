@@ -496,11 +496,14 @@ async def chat_stream_generator(
                             # model to wrap reasoning in <thinking>…</thinking> before answer.
                             # We intercept those chunks here and emit them as thinking_delta
                             # SSE events so the frontend can render them in a separate panel.
-                            if in_thinking_block:
+                             if in_thinking_block:
                                 thinking_buffer += chunk
-                                close_pos = thinking_buffer.find("</thinking>")
+                                close_pos = thinking_buffer.lower().find("</thinking")
                                 if close_pos != -1:
-                                    # Emit remainder of thinking content up to closing tag
+                                    # Strip closing tag (resilient to missing closing bracket)
+                                    tag_len = 10  # len("</thinking")
+                                    if thinking_buffer[close_pos:].startswith("</thinking>"):
+                                        tag_len = 11
                                     thought_chunk = thinking_buffer[:close_pos]
                                     if thought_chunk:
                                         yield (
@@ -512,7 +515,7 @@ async def chat_stream_generator(
                                     yield "data: " + json.dumps({"type": "thinking_done"}) + "\n\n"
                                     in_thinking_block = False
                                     # Forward any text AFTER </thinking> as normal content
-                                    after = thinking_buffer[close_pos + len("</thinking>"):].lstrip("\n")
+                                    after = thinking_buffer[close_pos + tag_len:].lstrip("\n")
                                     thinking_buffer = ""
                                     if after:
                                         yield (
@@ -529,8 +532,12 @@ async def chat_stream_generator(
                                     )
                             else:
                                 thinking_buffer += chunk
-                                open_idx = thinking_buffer.find("<thinking>")
+                                open_idx = thinking_buffer.lower().find("<thinking")
                                 if open_idx != -1 and not thinking_emitted:
+                                    # Strip opening tag (resilient to missing closing bracket)
+                                    tag_len = 9  # len("<thinking")
+                                    if thinking_buffer[open_idx:].startswith("<thinking>"):
+                                        tag_len = 10
                                     # Emit any text before <thinking> as normal content
                                     before = thinking_buffer[:open_idx]
                                     if before:
@@ -544,7 +551,7 @@ async def chat_stream_generator(
                                     thinking_emitted = True
                                     in_thinking_block = True
                                     # Buffer only what comes after <thinking>
-                                    thinking_buffer = thinking_buffer[open_idx + len("<thinking>"):]
+                                    thinking_buffer = thinking_buffer[open_idx + tag_len:]
                                 elif not thinking_emitted:
                                     # Haven't hit <thinking> yet — keep a short trailing buffer
                                     # to catch tags that arrive split across chunks, flush older text

@@ -1024,8 +1024,14 @@ function SvgBlock({ svg }: { svg: string }) {
 // the model emits </thinking>. Content is kept separate from the clean answer.
 
 function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(streaming || false)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (streaming) {
+      setOpen(true)
+    }
+  }, [streaming])
 
   useEffect(() => {
     if (streaming && open && scrollRef.current) {
@@ -1034,24 +1040,27 @@ function ThinkingBlock({ content, streaming }: { content: string; streaming?: bo
   }, [content, streaming, open])
 
   return (
-    <div className="my-2 rounded-xl border border-purple-500/20 bg-purple-950/20 overflow-hidden">
+    <div className="my-2 rounded-xl border border-white/5 bg-[#16171a]/40 backdrop-blur-sm overflow-hidden transition-all duration-200">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-purple-300/80 hover:text-purple-200 transition-colors"
+        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs font-semibold text-[#ffffff]/60 hover:text-[#ffffff]/90 hover:bg-white/[0.02] transition-all duration-200"
       >
-        <Brain className="w-3.5 h-3.5 shrink-0 text-purple-400" />
-        <span className="font-medium tracking-wide text-xs uppercase">Reasoning</span>
+        <Brain className="w-3.5 h-3.5 shrink-0 text-[#a855f7]" />
+        <span className="tracking-widest uppercase text-[10px]">Thinking Process</span>
         {streaming && (
-          <span className="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+          <span className="flex h-1.5 w-1.5 relative">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-purple-500"></span>
+          </span>
         )}
         <ChevronDown
-          className={`w-3.5 h-3.5 ml-auto transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+          className={`w-3.5 h-3.5 ml-auto text-white/40 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
         />
       </button>
       {open && (
         <div
           ref={scrollRef}
-          className="px-4 pb-4 pt-3 border-t border-purple-500/10 text-[11px] text-purple-200/60 font-mono whitespace-pre-wrap leading-relaxed max-h-80 overflow-y-auto"
+          className="px-4 pb-4 pt-3 border-t border-white/[0.03] text-[11.5px] text-[#ffffff]/70 font-mono whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto custom-scrollbar bg-[#0f1012]/40"
         >
           {content || '…'}
         </div>
@@ -6874,6 +6883,20 @@ export const Dashboard: React.FC = () => {
 
                     >
 
+                      {/* Thinking panel — shown above answer in THINK/SOLVE modes */}
+
+                      {msg.role === 'assistant' && msg.thinkingContent && (
+
+                        <ThinkingBlock
+
+                          content={msg.thinkingContent}
+
+                          streaming={isStreaming && i === messages.length - 1 && !msg.content}
+
+                        />
+
+                      )}
+
                       {/* Content */}
 
                       {msg.role === 'user' ? (
@@ -7165,14 +7188,6 @@ export const Dashboard: React.FC = () => {
 
                             />
 
-                          )}
-
-                          {/* Thinking panel — shown above answer in THINK/SOLVE modes */}
-                          {msg.thinkingContent && (
-                            <ThinkingBlock
-                              content={msg.thinkingContent}
-                              streaming={isStreaming && i === messages.length - 1}
-                            />
                           )}
 
                           {msg.content.length > 0 && renderRichContent(
