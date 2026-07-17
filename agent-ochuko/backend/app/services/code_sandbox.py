@@ -61,6 +61,64 @@ NODE_LIBS_DIR = os.path.join(GLOBAL_LIBS_DIR, "node_modules")
 os.makedirs(PYTHON_LIBS_DIR, exist_ok=True)
 os.makedirs(NODE_LIBS_DIR, exist_ok=True)
 
+
+async def mount_conversation_files(user_id: str, conversation_id: str, work_dir: str) -> List[str]:
+    """
+    Lists files uploaded by the user under uploads/{user_id}/{conversation_id}/
+    in R2, downloads them, and saves them to the sandbox work_dir using
+    their original filenames (stripping the unique UUID prefix).
+    """
+    import boto3
+    from botocore.config import Config
+
+    access_key = os.environ.get("R2_ACCESS_KEY_ID")
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+    endpoint = os.environ.get("R2_ENDPOINT")
+    bucket = os.getenv("R2_BUCKET_NAME", "agent-ochuko-storage")
+
+    if not all([access_key, secret_key, endpoint]):
+        logger.warning("R2 credentials not configured; skipping conversation file mounting.")
+        return []
+
+    prefix = f"uploads/{user_id}/{conversation_id}/"
+    mounted_files = []
+
+    def _do_list_and_download():
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version="s3v4")
+        )
+        try:
+            res = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+            if "Contents" not in res:
+                return []
+
+            for obj in res["Contents"]:
+                key = obj["Key"]
+                filename_part = key.split("/")[-1]
+                if not filename_part:
+                    continue
+                # Extract original filename (skipping UUID prefix if structured as unique_id_name)
+                # Structure is uploads/user_id/convo_id/{32_hex_chars}_{original_name}
+                if len(filename_part) <= 33:
+                    original_name = filename_part
+                else:
+                    original_name = filename_part[33:]
+
+                target_path = os.path.join(work_dir, original_name)
+                logger.info(f"Mounting conversation file from R2: {key} -> {target_path}")
+                s3_client.download_file(bucket, key, target_path)
+                mounted_files.append(original_name)
+        except Exception as e:
+            logger.error(f"Error mounting conversation files from R2: {e}", exc_info=True)
+        return mounted_files
+
+    return await asyncio.to_thread(_do_list_and_download)
+
+
 async def execute_code_in_sandbox(
     code: str,
     language: str,
@@ -80,9 +138,15 @@ async def execute_code_in_sandbox(
     work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
     os.makedirs(work_dir, exist_ok=True)
 
+    # Mount user-uploaded conversation files from R2
+    mounted_files = []
+    if conversation_id and conversation_id != "00000000-0000-0000-0000-000000000000":
+        mounted_files = await mount_conversation_files(user_id, conversation_id, work_dir)
+
     # Record modification times of existing files before execution
     before_files = {}
     for root, dirs, files_in_dir in os.walk(work_dir):
+
         if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
             continue
         for file in files_in_dir:
@@ -332,5 +396,10 @@ async def execute_code_in_sandbox(
     full_output = stdout_str
     if stderr_str:
         full_output += f"\n\n--- Standard Error ---\n{stderr_str}"
+
+    if mounted_files:
+        files_list = ", ".join(mounted_files)
+        full_output = f"[Mounted conversation files: {files_list}]\n\n" + full_output
         
     return full_output, generated_files
+

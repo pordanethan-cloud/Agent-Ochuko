@@ -1131,3 +1131,55 @@ async def stream_chat(
         ),
         media_type="text/event-stream"
     )
+
+
+async def _upload_generated_file(
+    file_bytes: bytes,
+    filename: str,
+    mime_type: str,
+    conversation_id: str,
+    user_id: str,
+) -> str:
+    """Upload to R2, persist metadata. Returns public URL."""
+    import boto3
+    from botocore.config import Config
+
+    access_key = os.environ.get("R2_ACCESS_KEY_ID")
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+    endpoint = os.environ.get("R2_ENDPOINT")
+    bucket = os.getenv("R2_BUCKET_NAME", "agent-ochuko-storage")
+    public_domain = os.getenv("R2_PUBLIC_DOMAIN", "").rstrip("/")
+    r2_key = f"generated/{conversation_id}/{filename}"
+
+    if not all([access_key, secret_key, endpoint]):
+        raise RuntimeError("R2 credentials not configured.")
+
+    def _do_upload():
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version="s3v4")
+        )
+        s3_client.put_object(
+            Bucket=bucket, Key=r2_key, Body=file_bytes, ContentType=mime_type
+        )
+
+    await asyncio.to_thread(_do_upload)
+    r2_url = f"{public_domain}/{r2_key}"
+
+    try:
+        get_supabase_admin().table("generated_files").insert({
+            "conversation_id": conversation_id,
+            "user_id":         user_id,
+            "filename":        filename,
+            "r2_url":          r2_url,
+            "size_bytes":      len(file_bytes),
+            "mime_type":       mime_type,
+        }).execute()
+    except Exception as db_err:
+        logger.warning("Failed to save generated_file metadata: %s", db_err)
+
+    return r2_url
+

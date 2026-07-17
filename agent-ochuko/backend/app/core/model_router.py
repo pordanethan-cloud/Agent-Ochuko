@@ -115,8 +115,11 @@ async def route(
         nano_turn_count: Current nano turn count for this conversation
 
     Returns:
-        RoutingDecision with deployment, prompt, mode, and reasonin    # Load deployment names from App Configuration (cached in memory)
+        RoutingDecision with deployment, prompt, mode, and reasoning.
+    """
+    # Load deployment names from App Configuration (cached in memory)
     think_deployment = await get_config("THINK_MODEL_DEPLOYMENT", "gpt-5.4")
+
     solve_deployment = await get_config("SOLVE_MODEL_DEPLOYMENT", "gpt-5.4-mini")
     nano_deployment  = await get_config("NANO_MODEL_DEPLOYMENT",  "gpt-5.4-nano")
 
