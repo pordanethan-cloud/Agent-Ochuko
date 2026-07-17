@@ -72,3 +72,115 @@ When a user selects a past conversation from the sidebar:
    - File attachment cards are rendered in an **idle state** (0-byte footprint).
    - If the user clicks on a file card, the client first attempts to load it from the Origin Private File System (OPFS).
    - If not present in OPFS, the client calls the backend API `/download-proxy` or fetches it from R2, downloads it, and saves a local copy in OPFS.
+
+---
+
+## 5. Cloudflare R2 — Current State
+
+**R2 is the binary storage layer — Supabase carries zero file data.**
+
+Supabase PostgreSQL stores only metadata rows (file records, job rows, message references). All binary content — user uploads, generated files, AI images — lives in Cloudflare R2.
+
+| Component | File | Role |
+| :--- | :--- | :--- |
+| Presigned upload URL generator | `backend/app/services/cloudflare_r2.py` | Issues time-limited PUT URLs for direct client → R2 uploads |
+| Download URL construction | `backend/app/api/v1/endpoints/files.py` | Builds public CDN URLs using `R2_PUBLIC_DOMAIN` env var |
+| Sandbox output upload | `backend/app/services/code_sandbox.py` | Uploads generated files (charts, CSVs, ZIPs) after code execution |
+| AI image upload | `backend/app/api/v1/endpoints/agents.py` | Uploads FLUX-generated images after job completion |
+
+**Current bucket:** Single bucket `agent-ochuko-storage` on one Cloudflare account.
+
+**Current env vars:**
+
+```
+R2_ACCESS_KEY_ID=<key>
+R2_SECRET_ACCESS_KEY=<secret>
+R2_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
+R2_BUCKET_NAME=agent-ochuko-storage
+R2_PUBLIC_DOMAIN=https://pub-<hash>.r2.dev
+```
+
+---
+
+## 6. R2 Expansion Plan — 5 New Keys (Shard by Content Type)
+
+When the 5 additional Cloudflare API keys arrive, storage will be sharded by content type. Each content type gets its own R2 bucket on its own Cloudflare account, providing:
+
+- **Isolated quotas** — generated files don't eat into user upload free tier
+- **Independent CDN domains** — different cache TTLs per content type
+- **Cost visibility** — per-bucket billing breakdown by type
+
+### Bucket Map
+
+| # | Bucket Name | Content | Env Prefix |
+| :--- | :--- | :--- | :--- |
+| 1 | `ochuko-user-uploads` | User file uploads (PDFs, images, docs) | `R2_UPLOADS_*` ← **current key** |
+| 2 | `ochuko-generated` | Sandbox output (charts, CSVs, ZIPs, PNGs from code) | `R2_GENERATED_*` ← new key 1 |
+| 3 | `ochuko-images` | FLUX AI-generated images | `R2_IMAGES_*` ← new key 2 |
+| 4 | `ochuko-exports` | User-exported reports and documents | `R2_EXPORTS_*` ← new key 3 |
+| 5 | `ochuko-backups` | Conversation export backups | `R2_BACKUPS_*` ← new key 4 |
+
+> **Key 5** is held in reserve for future data type or geographic shard.
+
+### New Env Var Schema (per bucket)
+
+Each bucket follows this naming pattern (replace `{TYPE}` with `UPLOADS`, `GENERATED`, `IMAGES`, `EXPORTS`, `BACKUPS`):
+
+```
+R2_{TYPE}_ACCESS_KEY_ID
+R2_{TYPE}_SECRET_ACCESS_KEY
+R2_{TYPE}_ENDPOINT
+R2_{TYPE}_BUCKET_NAME
+R2_{TYPE}_PUBLIC_DOMAIN
+```
+
+Example for generated files bucket:
+```
+R2_GENERATED_ACCESS_KEY_ID=...
+R2_GENERATED_SECRET_ACCESS_KEY=...
+R2_GENERATED_ENDPOINT=https://<account2_id>.r2.cloudflarestorage.com
+R2_GENERATED_BUCKET_NAME=ochuko-generated
+R2_GENERATED_PUBLIC_DOMAIN=https://pub-<hash2>.r2.dev
+```
+
+### Cloudflare R2 Free Tier (per account)
+
+| Resource | Free Allowance | Overage |
+| :--- | :--- | :--- |
+| Storage | 10 GB/month | $0.015/GB |
+| Class A ops (writes, lists) | 1M/month | $4.50/M |
+| Class B ops (reads) | 10M/month | $0.36/M |
+| Egress | **Free** (no egress fees) | — |
+
+5 accounts = **50 GB free storage** + **5M free writes/month** + **50M free reads/month**.
+
+---
+
+## 7. Code Changes Required When Keys Arrive
+
+No code changes are needed now. The architecture is ready. When keys arrive, one developer pass (~1 hour) wires the shard config:
+
+### `backend/app/services/cloudflare_r2.py`
+- Add `get_r2_client(bucket_prefix: str)` that reads `R2_{prefix}_*` env vars
+- Keep `generate_r2_upload_url()` working with `R2_UPLOADS_*` (backward compatible)
+- Add `upload_bytes_to_bucket(bucket_prefix, key, data, content_type)` for server-side uploads
+
+### `backend/app/services/code_sandbox.py`
+- Change generated file upload to use `R2_GENERATED_*` bucket
+- Currently: uses primary bucket env vars
+
+### `backend/app/api/v1/endpoints/agents.py`
+- Change FLUX image upload to use `R2_IMAGES_*` bucket
+- Currently: uses `R2_ENDPOINT` / primary bucket
+
+### `backend/app/api/v1/endpoints/files.py`
+- Keep user uploads on `R2_UPLOADS_*` (no change needed here)
+- Update download URL construction to select the correct `R2_{TYPE}_PUBLIC_DOMAIN` based on file type
+
+### Azure App Configuration / `.env`
+- Add the 10 new env vars (5 buckets × access key + secret per bucket)
+- Remaining 3 vars per bucket (endpoint, bucket name, domain) can be hard-coded or in App Config
+
+---
+
+*Last updated: 2026-07-17 — R2 expansion architecture designed, awaiting 5 Cloudflare API keys to execute wire-up.*
