@@ -3019,7 +3019,7 @@ const FileAttachmentChip: React.FC<{
       <div
         onClick={handlePreview}
         title={attachment.url ? `Preview ${attachment.name}` : attachment.name}
-        className={`relative group/img w-28 h-28 rounded-xl overflow-hidden border border-[#ffffff]/15 bg-[#111316]/40 shrink-0 ${
+        className={`relative group/img w-full max-w-sm rounded-xl overflow-hidden border border-[#ffffff]/15 bg-[#111316]/40 shrink-0 ${
           attachment.url ? 'cursor-pointer hover:border-[#ffffff]/35' : 'cursor-default'
         } transition`}
       >
@@ -3027,17 +3027,17 @@ const FileAttachmentChip: React.FC<{
           <img
             src={attachment.url}
             alt={attachment.name}
-            className="w-full h-full object-cover"
+            className="w-full h-auto max-h-64 object-contain"
           />
         ) : (
           /* Placeholder skeleton while URL resolves */
-          <div className="w-full h-full flex items-center justify-center">
+          <div className="w-full h-40 flex items-center justify-center">
             <FileText className="w-6 h-6 text-[#ffffff]/30" />
           </div>
         )}
         {/* Hover overlay with file name */}
-        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-1.5">
-          <span className="text-[9px] text-white font-semibold leading-tight truncate w-full">{attachment.name}</span>
+        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2">
+          <span className="text-[11px] text-white font-semibold leading-tight truncate w-full">{attachment.name}</span>
         </div>
       </div>
     )
