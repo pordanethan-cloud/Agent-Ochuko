@@ -4194,11 +4194,17 @@ export const Dashboard: React.FC = () => {
           if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
             setActiveConversationId(cachedId)
             const raw = localStorage.getItem(userCacheKey(uid, `convo_cache_${cachedId}`))
+            let hydratedConvoMode: 'think' | 'solve' | 'discuss' = 'discuss'
             if (raw) {
               const parsed = JSON.parse(raw)
               if (Array.isArray(parsed.messages)) setMessages(parsed.messages)
-              if (parsed.mode) setMode(parsed.mode)
+              if (parsed.mode) {
+                setMode(parsed.mode)
+                hydratedConvoMode = parsed.mode
+              }
             }
+            // Trigger background sync to verify history matches database
+            handleSelectConversation(cachedId, hydratedConvoMode)
           } else {
             // Start fresh session by default on new login
             setActiveConversationId('00000000-0000-0000-0000-000000000000')
@@ -4219,20 +4225,6 @@ export const Dashboard: React.FC = () => {
     })
 
   }, [])
-
-  useEffect(() => {
-    if (hasRestoredRef.current || conversations.length === 0) return
-    const uid = userIdRef.current
-    const cachedIdKey = uid ? userCacheKey(uid, 'active_conversation_id') : null
-    const cachedId = cachedIdKey ? localStorage.getItem(cachedIdKey) : null
-    if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
-      const cachedConvo = conversations.find(c => c.id === cachedId)
-      if (cachedConvo) {
-        hasRestoredRef.current = true
-        handleSelectConversation(cachedConvo.id, cachedConvo.mode || 'discuss')
-      }
-    }
-  }, [conversations])
 
   // Auto-focus input on mount
 
