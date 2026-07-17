@@ -10,7 +10,7 @@ import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
 
 
-import DOMPurify from 'dompurify'
+
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -3902,26 +3902,9 @@ export const Dashboard: React.FC = () => {
 
     setIsFetchingHistory(true)
 
-    // --- SWR Cache Read ---
-    const uid = userIdRef.current
-    const cacheKey = uid ? userCacheKey(uid, `convo_cache_${id}`) : `convo_cache_${id}`
-    const cachedData = localStorage.getItem(cacheKey)
-    if (cachedData) {
-      try {
-        const parsed = JSON.parse(cachedData)
-        if (parsed && Array.isArray(parsed.messages)) {
-          setMessages(parsed.messages)
-          setMode(convoMode)
-          setActiveConversationId(id)
-          if (uid) localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), id)
-        }
-      } catch (e) {
-        console.warn("Failed to load cached conversation:", e)
-      }
-    } else {
-      // Clear if no cache to avoid flicker
-      setMessages([])
-    }
+    // Always start with clean slate when switching conversations in-session.
+    // Cache is only used on hard reload/tab open (handled in the auth useEffect).
+    setMessages([])
 
     try {
 
@@ -5987,8 +5970,28 @@ export const Dashboard: React.FC = () => {
 
     setEditingMessageText("")
 
-    // Truncate messages list up to the edited user message
+    const convoId = activeConversationId
+    if (convoId && convoId !== '00000000-0000-0000-0000-000000000000') {
+      try {
+        // Query the database for message IDs ordered by creation time
+        const { data: dbMsgs } = await supabase
+          .from('messages')
+          .select('id')
+          .eq('conversation_id', convoId)
+          .order('created_at', { ascending: true })
 
+        if (dbMsgs && dbMsgs.length > index) {
+          const idsToDelete = dbMsgs.slice(index).map(m => m.id)
+          if (idsToDelete.length > 0) {
+            await supabase.from('messages').delete().in('id', idsToDelete)
+          }
+        }
+      } catch (dbErr) {
+        console.error('Failed to delete truncated messages from DB:', dbErr)
+      }
+    }
+
+    // Truncate messages list up to the edited user message
     const truncatedHistory = messages.slice(0, index)
 
     await triggerStream(truncatedHistory, newText)
@@ -6621,13 +6624,22 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            {activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000' && (
+            {activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000' ? (
               <button
                 onClick={() => setIsShareModalOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1e2025] hover:border-[#ffffff]/20 bg-brand-surface/10 hover:bg-[#ffffff]/5 text-[11px] font-bold text-[#8e95a2] hover:text-brand-text transition duration-150 active:scale-95 mr-1"
                 title="Share Conversation"
               >
                 <Share2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Share</span>
+              </button>
+            ) : (
+              <button
+                disabled
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1e2025]/50 bg-brand-surface/5 text-[11px] font-bold text-[#8e95a2]/30 cursor-not-allowed mr-1 select-none"
+                title="Send a message first to share"
+              >
+                <Share2 className="w-3.5 h-3.5 opacity-30" />
                 <span className="hidden sm:inline">Share</span>
               </button>
             )}

@@ -8,6 +8,14 @@ export default defineConfig({
     port: 5173,
     strictPort: true
   },
+  build: {
+    // mermaid's bundled dist references es-toolkit/compat as an internal
+    // peer dep that rolldown cannot resolve at build time. Externalise it
+    // so the bundler treats it as already-available rather than failing.
+    rolldownOptions: {
+      external: ['es-toolkit/compat'],
+    },
+  },
   plugins: [
     react(),
     VitePWA({
