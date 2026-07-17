@@ -4204,6 +4204,13 @@ export const Dashboard: React.FC = () => {
         const name = metadata.preferred_name || metadata.full_name || metadata.name || user.email?.split('@')[0] || 'User'
         setPreferredName(name)
 
+        // Clear active conversation cache if this is a brand new login/tab session
+        const isFreshSession = !sessionStorage.getItem('session_started')
+        if (isFreshSession) {
+          sessionStorage.setItem('session_started', 'true')
+          localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), '00000000-0000-0000-0000-000000000000')
+        }
+
         // ── Hydrate from user-scoped cache (safe now that we know who this is) ──
         try {
           const cachedId = localStorage.getItem(userCacheKey(uid, 'active_conversation_id'))
@@ -4215,6 +4222,11 @@ export const Dashboard: React.FC = () => {
               if (Array.isArray(parsed.messages)) setMessages(parsed.messages)
               if (parsed.mode) setMode(parsed.mode)
             }
+          } else {
+            // Start fresh session by default on new login
+            setActiveConversationId('00000000-0000-0000-0000-000000000000')
+            setMessages([])
+            setMode('discuss')
           }
           // Also hydrate sidebar conversations from cache for instant load
           try {
@@ -4480,6 +4492,8 @@ export const Dashboard: React.FC = () => {
 
     setWebSearchStatus('idle')
 
+    let currentConvoId = overrideConvoId || activeConversationId
+
     const userMessageObj: Message = typeof newUserMessage === 'string'
 
       ? { role: 'user', content: newUserMessage }
@@ -4696,10 +4710,9 @@ export const Dashboard: React.FC = () => {
 
             } else if (data.type === 'conversation_id') {
 
+              currentConvoId = data.conversation_id
               setActiveConversationId(data.conversation_id)
 
-              const uidC = userIdRef.current
-              if (uidC) localStorage.setItem(userCacheKey(uidC, 'active_conversation_id'), data.conversation_id)
 
               // ── Auto-title: generate from first user message client-side ─────
               // Find the first user message in the current history to build the title.
@@ -5221,11 +5234,21 @@ export const Dashboard: React.FC = () => {
 
         abortControllerRef.current = null
 
-        // Persist conversation to localStorage after each response
-        const convId = activeConversationId
-        if (convId && convId !== '00000000-0000-0000-0000-000000000000') {
+        // Persist conversation to localStorage after the stream completes successfully (asynchronously)
+        if (currentConvoId && currentConvoId !== '00000000-0000-0000-0000-000000000000') {
+          const uid = userIdRef.current
           setMessages(prev => {
-            saveConvoCache(userIdRef.current, convId, prev, mode)
+            // Defer localStorage writes to the event loop so they never block React's render thread or cut message flow
+            setTimeout(() => {
+              try {
+                if (uid) {
+                  localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), currentConvoId)
+                }
+                saveConvoCache(uid, currentConvoId, prev, mode)
+              } catch (err) {
+                console.warn('Deferred cache write failed:', err)
+              }
+            }, 0)
             return prev
           })
         }
