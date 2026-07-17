@@ -129,9 +129,9 @@ export const Capabilities: React.FC = () => {
                 <span>Try In Chat</span>
               </div>
               <div className="flex justify-between items-center gap-4 bg-[#1a1a1a] p-3 rounded border border-gray-600">
-                <code className="text-xs text-white font-mono">"Analyze the uploaded financial report PDF, extract all revenue and expense figures, and present them in a structured markdown table with year-over-year growth calculations"</code>
+                <code className="text-xs text-white font-mono">"Here is a snapshot of our startup's quarterly data: Q1-2025: Rev $120k, Exp $95k; Q2-2025: Rev $145k, Exp $110k; Q3-2025: Rev $175k, Exp $115k; Q4-2025: Rev $210k, Exp $125k. Parse this data, extract all revenue/expense figures, and generate a markdown table calculating profit margins and quarter-over-quarter profit growth."</code>
                 <button 
-                  onClick={() => handleTryPrompt("Analyze the uploaded financial report PDF, extract all revenue and expense figures, and present them in a structured markdown table with year-over-year growth calculations")}
+                  onClick={() => handleTryPrompt("Here is a snapshot of our startup's quarterly data: Q1-2025: Rev $120k, Exp $95k; Q2-2025: Rev $145k, Exp $110k; Q3-2025: Rev $175k, Exp $115k; Q4-2025: Rev $210k, Exp $125k. Parse this data, extract all revenue/expense figures, and generate a markdown table calculating profit margins and quarter-over-quarter profit growth.")}
                   className="p-1 rounded bg-[#ffffff] text-black hover:bg-white/80 active:scale-95 transition focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2"
                   aria-label="Try this prompt in chat"
                 >
@@ -156,9 +156,9 @@ export const Capabilities: React.FC = () => {
                 <span>Try In Chat</span>
               </div>
               <div className="flex justify-between items-center gap-4 bg-[#1a1a1a] p-3 rounded border border-gray-600">
-                <code className="text-xs text-white font-mono">"Analyze the uploaded sales CSV data, identify trends over the past year, create visualizations for monthly revenue, and provide actionable insights for growth"</code>
+                <code className="text-xs text-white font-mono">"Write a Python script to simulate a monthly sales dataset for 2025 (with random fluctuations and seasonal peaks in summer/winter), plot the monthly revenue trend using matplotlib, and calculate the total annual revenue and monthly average."</code>
                 <button 
-                  onClick={() => handleTryPrompt("Analyze the uploaded sales CSV data, identify trends over the past year, create visualizations for monthly revenue, and provide actionable insights for growth")}
+                  onClick={() => handleTryPrompt("Write a Python script to simulate a monthly sales dataset for 2025 (with random fluctuations and seasonal peaks in summer/winter), plot the monthly revenue trend using matplotlib, and calculate the total annual revenue and monthly average.")}
                   className="p-1 rounded bg-[#ffffff] text-black hover:bg-white/80 active:scale-95 transition focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2"
                   aria-label="Try this prompt in chat"
                 >
