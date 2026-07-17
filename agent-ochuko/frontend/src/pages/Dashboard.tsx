@@ -912,25 +912,108 @@ function MermaidBlock({ code }: { code: string }) {
 }
 
 // ─── SVG inline renderer ──────────────────────────────────────────────────────
-
-// Sanitizes agent-generated SVG via DOMPurify before DOM injection.
+// Renders SVG via a base64 data-URI <img> so that ALL SVG attributes are
+// preserved faithfully (DOMPurify was stripping width/height/viewBox/transform
+// and causing scrambled output). Adds Copy / Download-as-PNG / Fullscreen controls.
 
 function SvgBlock({ svg }: { svg: string }) {
+  const [copied, setCopied] = useState(false)
 
-  const clean = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true } })
+  // Encode to a safe data URI — no DOMPurify stripping
+  const dataUri = useMemo(() => {
+    try {
+      return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
+    } catch {
+      return ''
+    }
+  }, [svg])
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(svg).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  const handleDownload = () => {
+    // Render to canvas and save as PNG
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth || 800
+      canvas.height = img.naturalHeight || 600
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.fillStyle = '#0d1117'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, 0, 0)
+        const a = document.createElement('a')
+        a.href = canvas.toDataURL('image/png')
+        a.download = `image_${Date.now()}.png`
+        a.click()
+      }
+    }
+    img.src = dataUri
+  }
+
+  const handleFullscreen = () => {
+    window.dispatchEvent(new CustomEvent('open-file-preview', {
+      detail: { name: 'SVG Image', type: 'image/svg+xml', url: dataUri }
+    }))
+  }
+
+  if (!dataUri) {
+    return (
+      <div className="my-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 text-amber-400 text-sm">
+        Could not render SVG (encoding error).
+      </div>
+    )
+  }
 
   return (
+    <div className="group my-3 relative rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
+      {/* Controls — top-right, revealed on hover */}
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        {/* Copy SVG source */}
+        <button
+          onClick={handleCopy}
+          title="Copy SVG source"
+          className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
+        >
+          {copied
+            ? <svg width="13" height="13" viewBox="0 0 16 16" fill="#3fb950"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>
+            : <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg>
+          }
+        </button>
+        {/* Fullscreen */}
+        <button
+          onClick={handleFullscreen}
+          title="Fullscreen"
+          className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+        {/* Download as PNG */}
+        <button
+          onClick={handleDownload}
+          title="Download as PNG"
+          className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
+        >
+          <Download className="w-3.5 h-3.5" />
+        </button>
+      </div>
 
-    <div
-
-      className="my-3 flex justify-center overflow-x-auto"
-
-      dangerouslySetInnerHTML={{ __html: clean }}
-
-    />
-
+      {/* SVG rendered as img — preserves all attributes */}
+      <div className="p-4 flex justify-center overflow-auto max-h-[500px]">
+        <img
+          src={dataUri}
+          alt="SVG image"
+          className="max-w-full object-contain"
+          style={{ background: 'transparent' }}
+        />
+      </div>
+    </div>
   )
-
 }
 
 // ─── Block parser ─────────────────────────────────────────────────────────────
@@ -975,9 +1058,17 @@ function parseBlocks(text: string): Block[] {
 
   while ((m = CODE.exec(text)) !== null) {
 
-    if (!matches.some(b => b.start <= m!.index && m!.index < b.end))
-
-      matches.push({ start: m.index, end: m.index + m[0].length, block: { type: 'code', content: m[2], lang: m[1] || 'text' } })
+    if (!matches.some(b => b.start <= m!.index && m!.index < b.end)) {
+      const lang = m[1] || 'text'
+      const content = m[2]
+      // Promote ```svg / ```xml fences whose content is SVG markup to a visual svg block
+      const isSvgFence = (lang === 'svg' || lang === 'xml') && /^\s*<svg[\s>]/i.test(content)
+      if (isSvgFence) {
+        matches.push({ start: m.index, end: m.index + m[0].length, block: { type: 'svg', content: content.trim() } })
+      } else {
+        matches.push({ start: m.index, end: m.index + m[0].length, block: { type: 'code', content, lang } })
+      }
+    }
 
   }
 
@@ -2968,14 +3059,24 @@ const LazyMessage: React.FC<{
 }
 
 
-const saveConvoCache = (id: string, messages: Message[], mode: string) => {
+// ── User-scoped cache helpers ─────────────────────────────────────────────────
+// All keys are prefixed with userId so different users on the same browser
+// never share cached conversations, IDs, or visit data.
+
+function userCacheKey(userId: string, suffix: string): string {
+  return `u_${userId}_${suffix}`
+}
+
+const saveConvoCache = (userId: string | null, id: string, messages: Message[], mode: string) => {
+  if (!userId) return
   try {
-    const cacheKey = `convo_cache_${id}`
+    const cacheKey = userCacheKey(userId, `convo_cache_${id}`)
     localStorage.setItem(cacheKey, JSON.stringify({ messages, mode }))
 
+    const idsKey = userCacheKey(userId, 'cached_convo_ids')
     let cachedIds: string[] = []
     try {
-      const rawIds = localStorage.getItem('cached_convo_ids')
+      const rawIds = localStorage.getItem(idsKey)
       cachedIds = rawIds ? JSON.parse(rawIds) : []
     } catch {}
 
@@ -2985,10 +3086,10 @@ const saveConvoCache = (id: string, messages: Message[], mode: string) => {
     if (cachedIds.length > 20) {
       const oldestId = cachedIds.shift()
       if (oldestId) {
-        localStorage.removeItem(`convo_cache_${oldestId}`)
+        localStorage.removeItem(userCacheKey(userId, `convo_cache_${oldestId}`))
       }
     }
-    localStorage.setItem('cached_convo_ids', JSON.stringify(cachedIds))
+    localStorage.setItem(idsKey, JSON.stringify(cachedIds))
   } catch (e) {
     console.warn("Failed to save conversation cache to localStorage:", e)
   }
@@ -3000,6 +3101,8 @@ export const Dashboard: React.FC = () => {
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [preferredName, setPreferredName] = useState<string | null>(null)
+  // Stable ref holding the Supabase userId — set once on auth, used for cache key scoping.
+  const userIdRef = useRef<string | null>(null)
   const [isFetchingHistory, setIsFetchingHistory] = useState(false)
   const [dynamicGreeting, setDynamicGreeting] = useState<string>('Agent Ochuko')
   const [isEditingNickname, setIsEditingNickname] = useState(false)
@@ -3093,19 +3196,9 @@ export const Dashboard: React.FC = () => {
     }
   }, [isLocked])
 
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const cachedId = localStorage.getItem('active_conversation_id')
-      if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
-        const raw = localStorage.getItem(`convo_cache_${cachedId}`)
-        if (raw) {
-          const parsed = JSON.parse(raw)
-          return parsed.messages || []
-        }
-      }
-    } catch {}
-    return []
-  })
+  // Messages start empty — hydrated from the user-scoped cache ONLY after
+  // getUser() resolves so we never accidentally show another user's data.
+  const [messages, setMessages] = useState<Message[]>([])
 
   const [input, setInput] = useState('')
 
@@ -3124,19 +3217,8 @@ export const Dashboard: React.FC = () => {
 
   const [isStreaming, setIsStreaming] = useState(false)
 
-  const [mode, setMode] = useState<'think' | 'solve' | 'discuss'>(() => {
-    try {
-      const cachedId = localStorage.getItem('active_conversation_id')
-      if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
-        const raw = localStorage.getItem(`convo_cache_${cachedId}`)
-        if (raw) {
-          const parsed = JSON.parse(raw)
-          return parsed.mode || 'discuss'
-        }
-      }
-    } catch {}
-    return 'discuss'
-  })
+  // Mode also deferred — will be restored in the getUser() useEffect below.
+  const [mode, setMode] = useState<'think' | 'solve' | 'discuss'>('discuss')
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
@@ -3465,9 +3547,8 @@ export const Dashboard: React.FC = () => {
     }
   }, [input])
 
-  const [activeConversationId, setActiveConversationId] = useState<string>(() => {
-    return localStorage.getItem('active_conversation_id') || '00000000-0000-0000-0000-000000000000'
-  })
+  // activeConversationId starts as null sentinel until auth resolves.
+  const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
 
   const uploadFile = async (file: File) => {
     const allowedExts = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
@@ -3581,14 +3662,8 @@ export const Dashboard: React.FC = () => {
     }
   }
 
-  const [conversations, setConversations] = useState<any[]>(() => {
-    try {
-      const cached = localStorage.getItem('local_conversations')
-      return cached ? JSON.parse(cached) : []
-    } catch {
-      return []
-    }
-  })
+  const [conversations, setConversations] = useState<any[]>([])
+  // Conversations are loaded from the user-scoped cache after auth resolves
 
   // ── Client-side conversation search (offline-capable, instant) ──────────────
   // Filters the already-loaded `conversations` array in memory — no network call,
@@ -3664,7 +3739,10 @@ export const Dashboard: React.FC = () => {
 
         setConversations(data)
 
-        localStorage.setItem('local_conversations', JSON.stringify(data))
+        const uid = userIdRef.current
+        if (uid) {
+          localStorage.setItem(userCacheKey(uid, 'local_conversations'), JSON.stringify(data))
+        }
 
       }
 
@@ -3691,7 +3769,8 @@ export const Dashboard: React.FC = () => {
     // Clear messages and reset conversation ID
     setMessages([])
     setActiveConversationId('00000000-0000-0000-0000-000000000000')
-    localStorage.setItem('active_conversation_id', '00000000-0000-0000-0000-000000000000')
+    const uid = userIdRef.current
+    if (uid) localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), '00000000-0000-0000-0000-000000000000')
     
     // Reset mode to discuss
     setMode('discuss')
@@ -3780,7 +3859,8 @@ export const Dashboard: React.FC = () => {
     setIsFetchingHistory(true)
 
     // --- SWR Cache Read ---
-    const cacheKey = `convo_cache_${id}`
+    const uid = userIdRef.current
+    const cacheKey = uid ? userCacheKey(uid, `convo_cache_${id}`) : `convo_cache_${id}`
     const cachedData = localStorage.getItem(cacheKey)
     if (cachedData) {
       try {
@@ -3789,7 +3869,7 @@ export const Dashboard: React.FC = () => {
           setMessages(parsed.messages)
           setMode(convoMode)
           setActiveConversationId(id)
-          localStorage.setItem('active_conversation_id', id)
+          if (uid) localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), id)
         }
       } catch (e) {
         console.warn("Failed to load cached conversation:", e)
@@ -3996,12 +4076,13 @@ export const Dashboard: React.FC = () => {
 
         setActiveConversationId(id)
 
-        localStorage.setItem('active_conversation_id', id)
+        const uid2 = userIdRef.current
+        if (uid2) localStorage.setItem(userCacheKey(uid2, 'active_conversation_id'), id)
 
         setMode(convoMode)
 
         // --- SWR Cache Write ---
-        saveConvoCache(id, mapped, convoMode)
+        saveConvoCache(userIdRef.current, id, mapped, convoMode)
 
         setIsSidebarOpen(false)
 
@@ -4071,11 +4152,32 @@ export const Dashboard: React.FC = () => {
 
       if (user) {
 
+        const uid = user.id
+        userIdRef.current = uid
         setUserEmail(user.email || 'User')
 
         const metadata = user.user_metadata || {}
         const name = metadata.preferred_name || metadata.full_name || metadata.name || user.email?.split('@')[0] || 'User'
         setPreferredName(name)
+
+        // ── Hydrate from user-scoped cache (safe now that we know who this is) ──
+        try {
+          const cachedId = localStorage.getItem(userCacheKey(uid, 'active_conversation_id'))
+          if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
+            setActiveConversationId(cachedId)
+            const raw = localStorage.getItem(userCacheKey(uid, `convo_cache_${cachedId}`))
+            if (raw) {
+              const parsed = JSON.parse(raw)
+              if (Array.isArray(parsed.messages)) setMessages(parsed.messages)
+              if (parsed.mode) setMode(parsed.mode)
+            }
+          }
+          // Also hydrate sidebar conversations from cache for instant load
+          try {
+            const cachedConvos = localStorage.getItem(userCacheKey(uid, 'local_conversations'))
+            if (cachedConvos) setConversations(JSON.parse(cachedConvos))
+          } catch {}
+        } catch {}
 
         fetchConversations()
 
@@ -4087,7 +4189,9 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     if (hasRestoredRef.current || conversations.length === 0) return
-    const cachedId = localStorage.getItem('active_conversation_id')
+    const uid = userIdRef.current
+    const cachedIdKey = uid ? userCacheKey(uid, 'active_conversation_id') : null
+    const cachedId = cachedIdKey ? localStorage.getItem(cachedIdKey) : null
     if (cachedId && cachedId !== '00000000-0000-0000-0000-000000000000') {
       const cachedConvo = conversations.find(c => c.id === cachedId)
       if (cachedConvo) {
@@ -4550,7 +4654,8 @@ export const Dashboard: React.FC = () => {
 
               setActiveConversationId(data.conversation_id)
 
-              localStorage.setItem('active_conversation_id', data.conversation_id)
+              const uidC = userIdRef.current
+              if (uidC) localStorage.setItem(userCacheKey(uidC, 'active_conversation_id'), data.conversation_id)
 
               // ── Auto-title: generate from first user message client-side ─────
               // Find the first user message in the current history to build the title.
@@ -4952,6 +5057,30 @@ export const Dashboard: React.FC = () => {
 
               })
 
+            } else if (data.type === 'generated_files') {
+
+              // execute_code sandbox produced one or more files — append all as download cards
+              const newFiles: { filename: string; download_url: string; size_bytes: number }[] = (data.files || []).map(
+                (f: any) => ({
+                  filename: f.filename,
+                  download_url: f.download_url,
+                  size_bytes: f.size_bytes || 0,
+                })
+              )
+              if (newFiles.length > 0) {
+                setMessages((prev) => {
+                  const updated = [...prev]
+                  if (updated.length > 0) {
+                    const last = updated[updated.length - 1]
+                    updated[updated.length - 1] = {
+                      ...last,
+                      generatedFiles: [...(last.generatedFiles || []), ...newFiles],
+                    }
+                  }
+                  return updated
+                })
+              }
+
             } else if (data.type === 'error') {
 
               throw new Error(`Agent error: ${data.error}`)
@@ -5018,7 +5147,7 @@ export const Dashboard: React.FC = () => {
         const convId = activeConversationId
         if (convId && convId !== '00000000-0000-0000-0000-000000000000') {
           setMessages(prev => {
-            saveConvoCache(convId, prev, mode)
+            saveConvoCache(userIdRef.current, convId, prev, mode)
             return prev
           })
         }
@@ -5131,7 +5260,8 @@ export const Dashboard: React.FC = () => {
 
       setActiveConversationId(convoId)
 
-      localStorage.setItem('active_conversation_id', convoId)
+      const uidA = userIdRef.current
+      if (uidA) localStorage.setItem(userCacheKey(uidA, 'active_conversation_id'), convoId)
 
     }
 
@@ -5433,7 +5563,8 @@ export const Dashboard: React.FC = () => {
 
       setActiveConversationId(convoId)
 
-      localStorage.setItem('active_conversation_id', convoId)
+      const uidB = userIdRef.current
+      if (uidB) localStorage.setItem(userCacheKey(uidB, 'active_conversation_id'), convoId)
 
     }
 

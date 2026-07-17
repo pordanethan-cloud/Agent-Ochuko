@@ -38,6 +38,14 @@ _OCHUKO_RULE = (
     "Judgment: give the user reasonable benefit of the doubt on ambiguous requests; default to the legal, constructive read. "
     "Correct factual errors directly, don't just agree. Never moralize or lecture.\n\n"
     "If a request is clearly illegal or harmful: decline in one sentence, offer the nearest legitimate alternative, move on. No hedging.\n\n"
+    "CODE EXECUTION CAPABILITIES:\n"
+    "You have access to a persistent code sandbox (execute_code tool) that runs Python, JavaScript, or Bash. "
+    "The sandbox has FULL internet access — code inside it can make HTTP requests, use pip/npm packages, "
+    "fetch live data from APIs, download files, scrape the web, etc. "
+    "Use execute_code when the user wants to: run/test code, analyse data, convert files, create charts, "
+    "fetch live API data in code, render/convert SVG/images programmatically, or perform any computation. "
+    "When given SVG code that the user wants displayed or downloaded as an image, output it in a ```svg code fence — "
+    "the frontend renders it natively and provides a download button.\n\n"
 )
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
@@ -375,7 +383,7 @@ async def chat_stream_generator(
             "model": deployment,
             # Tools the model may call autonomously during the conversation
             "tools": [
-                # Google-powered web search — AI calls this instead of Azure/Bing
+                # Web search
                 {
                     "type": "function",
                     "name": "search_web",
@@ -395,14 +403,49 @@ async def chat_stream_generator(
                         "required": ["query"],
                     },
                 },
-                # Image generation — AI calls this when the user wants a visual
+                # Code execution sandbox — Python / JavaScript / Bash with full internet access
+                {
+                    "type": "function",
+                    "name": "execute_code",
+                    "description": (
+                        "Execute Python, JavaScript (Node.js), or Bash code in a persistent sandbox "
+                        "that has FULL internet access. The sandbox can: install pip/npm packages automatically, "
+                        "make HTTP/API requests, scrape web pages, process data, generate files (CSV, PNG, PDF, DOCX, ZIP), "
+                        "create charts with matplotlib, perform numerical computation, convert file formats, "
+                        "and more. Files produced are automatically uploaded and returned as download links.\n"
+                        "Call this whenever the user wants to: run/test code, analyse data, plot charts, "
+                        "fetch live data in code, convert or process files, perform computation, or any task "
+                        "that benefits from actually executing code rather than describing it.\n"
+                        "Do NOT use this for SVG display — output SVG in a ```svg fence instead. "
+                        "Do NOT use this to generate AI images — use generate_image for that."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The complete code to execute. Must be self-contained and runnable.",
+                            },
+                            "language": {
+                                "type": "string",
+                                "enum": ["python", "javascript", "bash"],
+                                "description": "Programming language of the code snippet",
+                            },
+                        },
+                        "required": ["code", "language"],
+                    },
+                },
+                # AI image generation via FLUX — for new images from a text prompt only
                 {
                     "type": "function",
                     "name": "generate_image",
                     "description": (
-                        "Generate a high-quality image from a text description. "
-                        "Call this whenever the user asks to create, draw, paint, visualise, "
-                        "render, or generate any image, illustration, photo, or picture."
+                        "Generate a brand-new image using AI (FLUX) from a natural language text description. "
+                        "Use ONLY when the user wants an AI-synthesised picture from a text prompt — "
+                        "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'. "
+                        "Do NOT call this to render, convert, or execute code. "
+                        "Do NOT call this for SVG-to-image conversion (output a ```svg fence instead). "
+                        "Do NOT call this for data plots or charts (use execute_code with matplotlib instead)."
                     ),
                     "parameters": {
                         "type": "object",
@@ -565,6 +608,87 @@ async def chat_stream_generator(
                                             "type": "search_activity",
                                             "status": "error",
                                             "label": "Image generation could not be started.",
+                                        })
+                                        + "\n\n"
+                                    )
+
+                            elif getattr(item, "name", None) == "execute_code":
+                                # ── Code Sandbox Execution (internet-enabled) ──────────────
+                                try:
+                                    from app.services.code_sandbox import execute_code_in_sandbox
+                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
+                                    code_str  = args.get("code", "")
+                                    lang_str  = args.get("language", "python")
+
+                                    if code_str:
+                                        # Notify frontend that code is running
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "search_activity",
+                                                "status": "searching",
+                                                "label": f"Running {lang_str} code...",
+                                            })
+                                            + "\n\n"
+                                        )
+
+                                        exec_output, exec_files = await execute_code_in_sandbox(
+                                            code=code_str,
+                                            language=lang_str,
+                                            conversation_id=conversation_id,
+                                            user_id=user_id,
+                                            timeout_seconds=60,
+                                        )
+
+                                        # Notify frontend: execution done
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "search_activity",
+                                                "status": "done",
+                                                "label": "Code execution complete.",
+                                            })
+                                            + "\n\n"
+                                        )
+
+                                        # Inject the execution output into the assistant reply so
+                                        # the model can reason over it and narrate the result.
+                                        result_block = f"\n\n**Code output:**\n```\n{exec_output[:6000]}\n```"
+                                        if exec_files:
+                                            file_list = ", ".join(f["filename"] for f in exec_files)
+                                            result_block += f"\n\n**Generated files:** {file_list}"
+                                        assistant_content += result_block
+
+                                        # Stream the result block as a delta so it appears in the chat
+                                        yield (
+                                            "data: "
+                                            + json.dumps({
+                                                "type": "content_block_delta",
+                                                "delta": {"text": result_block},
+                                            })
+                                            + "\n\n"
+                                        )
+
+                                        # Forward generated file cards to the frontend
+                                        if exec_files:
+                                            yield (
+                                                "data: "
+                                                + json.dumps({
+                                                    "type": "generated_files",
+                                                    "files": exec_files,
+                                                })
+                                                + "\n\n"
+                                            )
+
+                                except Exception as exec_err:
+                                    logger.error("Code sandbox execution failed: %s", exec_err, exc_info=True)
+                                    err_text = f"\n\n**Code execution error:** {exec_err}"
+                                    assistant_content += err_text
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "content_block_delta",
+                                            "delta": {"text": err_text},
                                         })
                                         + "\n\n"
                                     )
