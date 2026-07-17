@@ -3563,8 +3563,11 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     const el = inputRef.current
     if (el && el.tagName === 'TEXTAREA') {
-      el.style.height = 'auto'
-      el.style.height = `${el.scrollHeight}px`
+      const handle = requestAnimationFrame(() => {
+        el.style.height = 'auto'
+        el.style.height = `${el.scrollHeight}px`
+      })
+      return () => cancelAnimationFrame(handle)
     }
   }, [input])
 
@@ -4337,7 +4340,13 @@ export const Dashboard: React.FC = () => {
 
     if (container && isAutoScrollEnabledRef.current) {
 
-      container.scrollTop = container.scrollHeight
+      const handle = requestAnimationFrame(() => {
+
+        container.scrollTop = container.scrollHeight
+
+      })
+
+      return () => cancelAnimationFrame(handle)
 
     }
 
