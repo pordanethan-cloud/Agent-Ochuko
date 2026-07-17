@@ -3540,7 +3540,7 @@ export const Dashboard: React.FC = () => {
 
   const renameInputRef = useRef<HTMLInputElement>(null)
 
-  const hasRestoredRef = useRef(false)
+
 
   // Focus the rename input when it appears
 
