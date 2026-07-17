@@ -575,7 +575,7 @@ def _upload_image_to_blob(image_bytes: bytes, blob_name: str) -> str:
     return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"
 
 
-def _upload_to_r2(data: bytes, filename: str, content_type: str) -> str:
+def _upload_to_r2(data: bytes, filename: str, content_type: str, bucket_type: str = "UPLOADS") -> str:
     """
     Uploads raw bytes to Cloudflare R2 bucket.
     Returns the public URL using R2_PUBLIC_DOMAIN.
@@ -583,11 +583,21 @@ def _upload_to_r2(data: bytes, filename: str, content_type: str) -> str:
     import boto3
     from botocore.config import Config
 
-    access_key = os.environ.get("R2_ACCESS_KEY_ID")
-    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
-    endpoint = os.environ.get("R2_ENDPOINT")
-    bucket_name = os.environ.get("R2_BUCKET_NAME", "octal-ehr-files")
-    public_domain = os.environ.get("R2_PUBLIC_DOMAIN", "https://pub-3aabaa1c09b9c0da240f1ae5ed8d8478.r2.dev")
+    prefix = f"R2_{bucket_type.upper()}_"
+
+    access_key = os.environ.get(f"{prefix}ACCESS_KEY_ID")
+    secret_key = os.environ.get(f"{prefix}SECRET_ACCESS_KEY")
+    endpoint = os.environ.get(f"{prefix}ENDPOINT")
+    bucket_name = os.environ.get(f"{prefix}BUCKET_NAME")
+    public_domain = os.environ.get(f"{prefix}PUBLIC_DOMAIN")
+
+    # Fallback to default credentials
+    if not all([access_key, secret_key, endpoint]):
+        access_key = os.environ.get("R2_ACCESS_KEY_ID")
+        secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+        endpoint = os.environ.get("R2_ENDPOINT")
+        bucket_name = os.environ.get("R2_BUCKET_NAME", "octal-ehr-files")
+        public_domain = os.environ.get("R2_PUBLIC_DOMAIN", "https://pub-3aabaa1c09b9c0da240f1ae5ed8d8478.r2.dev")
 
     if not access_key or not secret_key or not endpoint:
         raise RuntimeError("Cloudflare R2 configuration credentials are not configured.")
@@ -611,6 +621,7 @@ def _upload_to_r2(data: bytes, filename: str, content_type: str) -> str:
     domain = public_domain.rstrip("/")
     filename = filename.lstrip("/")
     return f"{domain}/{filename}"
+
 
 
 
@@ -956,7 +967,8 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             # Upload PNG to Cloudflare R2
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             filename = f"generated/{user_id}/{job_id}_{timestamp}.png"
-            image_url = _upload_to_r2(image_bytes, filename, "image/png")
+            image_url = _upload_to_r2(image_bytes, filename, "image/png", bucket_type="IMAGES")
+
 
 
             result_data = {

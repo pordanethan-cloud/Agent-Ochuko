@@ -1141,33 +1141,16 @@ async def _upload_generated_file(
     user_id: str,
 ) -> str:
     """Upload to R2, persist metadata. Returns public URL."""
-    import boto3
-    from botocore.config import Config
+    from app.services.cloudflare_r2 import upload_file_bytes
 
-    access_key = os.environ.get("R2_ACCESS_KEY_ID")
-    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
-    endpoint = os.environ.get("R2_ENDPOINT")
-    bucket = os.getenv("R2_BUCKET_NAME", "agent-ochuko-storage")
-    public_domain = os.getenv("R2_PUBLIC_DOMAIN", "").rstrip("/")
-    r2_key = f"generated/{conversation_id}/{filename}"
-
-    if not all([access_key, secret_key, endpoint]):
-        raise RuntimeError("R2 credentials not configured.")
-
-    def _do_upload():
-        s3_client = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=Config(signature_version="s3v4")
-        )
-        s3_client.put_object(
-            Bucket=bucket, Key=r2_key, Body=file_bytes, ContentType=mime_type
-        )
-
-    await asyncio.to_thread(_do_upload)
-    r2_url = f"{public_domain}/{r2_key}"
+    # Uploads to the sharded GENERATED bucket
+    r2_url = await upload_file_bytes(
+        file_bytes=file_bytes,
+        filename=filename,
+        mime_type=mime_type,
+        bucket_type="GENERATED",
+        key_prefix=f"generated/{conversation_id}/"
+    )
 
     try:
         get_supabase_admin().table("generated_files").insert({
@@ -1182,4 +1165,5 @@ async def _upload_generated_file(
         logger.warning("Failed to save generated_file metadata: %s", db_err)
 
     return r2_url
+
 
