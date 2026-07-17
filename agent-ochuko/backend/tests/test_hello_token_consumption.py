@@ -1,4 +1,4 @@
-﻿"""
+"""
 Test script to measure upfront token consumption for a simple "hello" message.
 This helps understand the baseline token cost before any actual response generation.
 """
@@ -57,11 +57,18 @@ async def test_hello_message_token_consumption(mock_get_config, mock_route, mock
     mock_get_config.side_effect = mock_config_get
     
     # Mock model routing
-    mock_route.return_value = ("discuss", "gpt-5.4-mini", "Simple query, use discuss mode")
+    from app.core.model_router import RoutingDecision
+    mock_route.return_value = RoutingDecision(
+        routing_mode="discuss",
+        deployment="gpt-5.4-mini",
+        routing_reason="Simple query, use discuss mode",
+        was_intercepted=False,
+        system_prompt="Custom system instructions."
+    )
     
     # Mock Supabase
     mock_supabase_instance = MagicMock()
-    mock_supabase_instance.table.return_value.insert.return_value.execute.return_value = MagicMock(data=None)
+    mock_supabase_instance.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[{"id": "test-conv-id"}])
     mock_supabase_instance.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data={"id": "test-conv-id"})
     mock_supabase_instance.table.return_value.update.return_value.execute.return_value = MagicMock(data=None)
     mock_supabase_instance.rpc.return_value.execute.return_value = MagicMock(data=None)
@@ -114,9 +121,9 @@ async def test_hello_message_token_consumption(mock_get_config, mock_route, mock
         
         # Send hello message
         response = client.post(
-            "/v1/chat",
+            "/v1/responses/stream",
             json={
-                "message": "hello",
+                "messages": [{"role": "user", "content": "hello"}],
                 "conversation_id": "00000000-0000-0000-0000-000000000000",
                 "mode": "discuss"
             }

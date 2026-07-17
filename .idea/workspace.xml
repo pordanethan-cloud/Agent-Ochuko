@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="319b6b0c-aaf0-4231-9fde-3a7060c4833b" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/agent-ochuko/backend/app/api/v1/endpoints/chat.py" beforeDir="false" afterPath="$PROJECT_DIR$/agent-ochuko/backend/app/api/v1/endpoints/chat.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/agent-ochuko/backend/app/api/v1/endpoints/search.py" beforeDir="false" afterPath="$PROJECT_DIR$/agent-ochuko/backend/app/api/v1/endpoints/search.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/agent-ochuko/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/agent-ochuko/backend/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/agent-ochuko/backend/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/agent-ochuko/backend/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/agent-ochuko/backend/tests/test_compaction.py" beforeDir="false" afterPath="$PROJECT_DIR$/agent-ochuko/backend/tests/test_compaction.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/agent-ochuko/backend/tests/test_docx_generation.py" beforeDir="false" afterPath="$PROJECT_DIR$/agent-ochuko/backend/tests/test_docx_generation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/agent-ochuko/frontend/src/pages/Dashboard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/agent-ochuko/frontend/src/pages/Dashboard.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/bringing-user.md" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="KubernetesApiPersistence">{}</component>
+  <component name="KubernetesApiProvider">{
+  &quot;isMigrated&quot;: true
+}</component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 5,
+  "fromUser": false
+}]]></component>
+  <component name="ProjectId" id="3GQMfLTc5FXSxUoo0sROuXxVvEJ" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "git-widget-placeholder": "ochuko",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/T14 GEN 5/Documents/WORK AND PLAN/AZURE SYSTEM-AUTH AT SCALE",
+    "nodejs_package_manager_path": "npm",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-37e91769500f-intellij.indexing.shared.core-IU-261.26222.65" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="319b6b0c-aaf0-4231-9fde-3a7060c4833b" name="Changes" comment="" />
+      <created>1783899441767</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1783899441767</updated>
+      <workItem from="1783899443038" duration="96000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>

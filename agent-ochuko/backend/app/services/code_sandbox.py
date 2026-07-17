@@ -176,8 +176,13 @@ async def execute_code_in_sandbox(
         if language in ("bash", "shell", "sh"):
             # Bash/Shell execution path
             script_path = os.path.join(work_dir, "command.sh")
-            # Normalize /mnt/data paths to current directory
-            normalized_code = code.replace("/mnt/data/", "./").replace("/mnt/data", "./")
+            # Normalize /mnt/data and /workspace paths to current directory
+            normalized_code = (
+                code.replace("/mnt/data/", "./")
+                .replace("/mnt/data", "./")
+                .replace("/workspace/", "./")
+                .replace("/workspace", "./")
+            )
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
 
@@ -202,8 +207,13 @@ async def execute_code_in_sandbox(
         elif language == "javascript" or language == "js" or language == "node":
             # JS execution path
             script_path = os.path.join(work_dir, "script.js")
-            # Normalize /mnt/data paths to current directory
-            normalized_code = code.replace("/mnt/data/", "./").replace("/mnt/data", "./")
+            # Normalize /mnt/data and /workspace paths to current directory
+            normalized_code = (
+                code.replace("/mnt/data/", "./")
+                .replace("/mnt/data", "./")
+                .replace("/workspace/", "./")
+                .replace("/workspace", "./")
+            )
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
 
@@ -247,8 +257,13 @@ async def execute_code_in_sandbox(
         else:
             # Python execution path
             script_path = os.path.join(work_dir, "script.py")
-            # Normalize /mnt/data paths to current directory
-            normalized_code = code.replace("/mnt/data/", "./").replace("/mnt/data", "./")
+            # Normalize /mnt/data and /workspace paths to current directory
+            normalized_code = (
+                code.replace("/mnt/data/", "./")
+                .replace("/mnt/data", "./")
+                .replace("/workspace/", "./")
+                .replace("/workspace", "./")
+            )
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
 

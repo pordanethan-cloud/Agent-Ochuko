@@ -893,7 +893,13 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
                 model_sequence = ["black-forest-labs/FLUX.1-dev"]
 
             # Additional fallback options specified in implementation plan
-            for fallback_model in ["black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-3.5-large", "stabilityai/stable-diffusion-3.5-medium"]:
+            for fallback_model in [
+                "black-forest-labs/FLUX.1-schnell",
+                "SG161222/RealVisXL_V4.0",
+                "stabilityai/sdxl-turbo",
+                "Lykon/dreamshaper-8",
+                "stabilityai/stable-diffusion-2-1"
+            ]:
                 if fallback_model not in model_sequence:
                     model_sequence.append(fallback_model)
 

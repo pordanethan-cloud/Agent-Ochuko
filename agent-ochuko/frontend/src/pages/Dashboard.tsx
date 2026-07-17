@@ -4105,7 +4105,40 @@ export const Dashboard: React.FC = () => {
 
         }
 
-        setMessages(mapped)
+        // Reconcile database messages with local cache to avoid overwriting complete streamed messages
+        let localMessages: Message[] = []
+        if (cachedData) {
+          try {
+            const parsed = JSON.parse(cachedData)
+            if (parsed && Array.isArray(parsed.messages)) {
+              localMessages = parsed.messages
+            }
+          } catch (_) {}
+        }
+
+        const reconciled = mapped.map((serverMsg, idx) => {
+          const localMsg = localMessages[idx]
+          if (localMsg && localMsg.role === serverMsg.role) {
+            const content = (localMsg.content?.length > serverMsg.content?.length)
+              ? localMsg.content
+              : serverMsg.content
+
+            return {
+              ...localMsg,
+              ...serverMsg,
+              content,
+              imageUrl: localMsg.imageUrl || serverMsg.imageUrl,
+              imagePrompt: localMsg.imagePrompt || serverMsg.imagePrompt,
+              generatedFiles: ((localMsg.generatedFiles?.length ?? 0) > (serverMsg.generatedFiles?.length ?? 0))
+                ? localMsg.generatedFiles
+                : serverMsg.generatedFiles,
+              sources: localMsg.sources || serverMsg.sources,
+            }
+          }
+          return serverMsg
+        })
+
+        setMessages(reconciled)
 
         setActiveConversationId(id)
 
@@ -4115,7 +4148,7 @@ export const Dashboard: React.FC = () => {
         setMode(convoMode)
 
         // --- SWR Cache Write ---
-        saveConvoCache(userIdRef.current, id, mapped, convoMode)
+        saveConvoCache(userIdRef.current, id, reconciled, convoMode)
 
         setIsSidebarOpen(false)
 

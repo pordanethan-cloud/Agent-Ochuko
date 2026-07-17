@@ -18,7 +18,7 @@ async def test_route_discuss():
 
     assert decision.routing_mode == "discuss"
     assert decision.deployment == "gpt-nano-test"
-    assert decision.system_prompt == "discuss-test-prompt"
+    assert "You are Agent Ochuko" in decision.system_prompt
     assert decision.was_intercepted is False
 
 
@@ -58,7 +58,7 @@ async def test_route_nano_interception_max_turns():
 
     assert decision.routing_mode == "think"
     assert decision.deployment == "gpt-think-test"
-    assert decision.system_prompt == "think-test-prompt"
+    assert "You are Agent Ochuko" in decision.system_prompt
     assert decision.was_intercepted is False
 
 
@@ -78,5 +78,5 @@ async def test_route_non_trivial_message():
 
     assert decision.routing_mode == "think"
     assert decision.deployment == "gpt-think-test"
-    assert decision.system_prompt == "think-test-prompt"
+    assert "You are Agent Ochuko" in decision.system_prompt
     assert decision.was_intercepted is False

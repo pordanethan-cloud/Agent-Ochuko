@@ -496,7 +496,7 @@ async def chat_stream_generator(
                             # model to wrap reasoning in <thinking>…</thinking> before answer.
                             # We intercept those chunks here and emit them as thinking_delta
                             # SSE events so the frontend can render them in a separate panel.
-                             if in_thinking_block:
+                            if in_thinking_block:
                                 thinking_buffer += chunk
                                 close_pos = thinking_buffer.lower().find("</thinking")
                                 if close_pos != -1:
