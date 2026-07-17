@@ -2999,107 +2999,84 @@ const ChatSkeleton: React.FC = () => (
 const FileAttachmentChip: React.FC<{
   attachment: { name: string; jobType: 'ocr' | 'vision'; url?: string }
 }> = ({ attachment }) => {
+  const isImage = attachment.jobType === 'vision'
+  const isPdf   = !isImage
+
   const handlePreview = () => {
     if (!attachment.url) return
-    const isPdf = attachment.jobType === 'ocr' || attachment.name.toLowerCase().endsWith('.pdf')
-    const event = new CustomEvent('open-file-preview', {
+    window.dispatchEvent(new CustomEvent('open-file-preview', {
       detail: {
         name: attachment.name,
-        type: isPdf ? 'application/pdf' : 'image/png',
-        url: attachment.url
+        type: isPdf ? 'application/pdf' : 'image/*',
+        url: attachment.url,
       }
-    })
-    window.dispatchEvent(event)
+    }))
   }
 
-  return attachment.jobType === 'vision' && attachment.url ? (
-    <div 
-      onClick={handlePreview}
-      className="w-full max-w-sm rounded-xl overflow-hidden border border-[#ffffff]/10 bg-[#111316]/20 cursor-pointer hover:border-[#ffffff]/25 transition"
-    >
-      <img
-        src={attachment.url}
-        alt={attachment.name}
-        className="w-full h-auto max-h-64 object-contain"
-      />
-    </div>
-  ) : (
-    <div 
-      onClick={handlePreview}
-      className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20 cursor-pointer hover:bg-[#ffffff]/15 transition"
-    >
-      <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest leading-none">
-          {attachment.jobType === 'ocr' ? 'Document Analysis' : 'Image Analysis'}
-        </p>
-        <p className="text-[13px] text-brand-text/90 font-medium truncate mt-1">
-          {attachment.name}
-        </p>
+  // ── Image thumbnail (vision jobs) ─────────────────────────────────────────
+  if (isImage) {
+    return (
+      <div
+        onClick={handlePreview}
+        title={attachment.url ? `Preview ${attachment.name}` : attachment.name}
+        className={`relative group/img w-28 h-28 rounded-xl overflow-hidden border border-[#ffffff]/15 bg-[#111316]/40 shrink-0 ${
+          attachment.url ? 'cursor-pointer hover:border-[#ffffff]/35' : 'cursor-default'
+        } transition`}
+      >
+        {attachment.url ? (
+          <img
+            src={attachment.url}
+            alt={attachment.name}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          /* Placeholder skeleton while URL resolves */
+          <div className="w-full h-full flex items-center justify-center">
+            <FileText className="w-6 h-6 text-[#ffffff]/30" />
+          </div>
+        )}
+        {/* Hover overlay with file name */}
+        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-1.5">
+          <span className="text-[9px] text-white font-semibold leading-tight truncate w-full">{attachment.name}</span>
+        </div>
       </div>
+    )
+  }
+
+  // ── Document chip (OCR / PDF) ──────────────────────────────────────────────
+  return (
+    <div
+      onClick={handlePreview}
+      title={attachment.url ? `Preview ${attachment.name}` : attachment.name}
+      className={`flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[#ffffff]/8 border border-[#ffffff]/20 max-w-[240px] ${
+        attachment.url ? 'cursor-pointer hover:bg-[#ffffff]/14 hover:border-[#ffffff]/30' : 'cursor-default'
+      } transition`}
+    >
+      <div className="w-8 h-8 rounded-lg bg-[#ffffff]/10 flex items-center justify-center shrink-0">
+        <FileText className="w-4 h-4 text-[#ffffff]/80" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[9px] font-bold text-[#ffffff]/50 uppercase tracking-widest leading-none mb-0.5">PDF · Document</p>
+        <p className="text-[12px] text-brand-text/90 font-semibold truncate">{attachment.name}</p>
+      </div>
+      {attachment.url && (
+        <div className="shrink-0 text-[#ffffff]/40">
+          <ExternalLink className="w-3 h-3" />
+        </div>
+      )}
     </div>
   )
 }
 
+// LazyMessage is kept as a thin passthrough — it no longer estimates heights.
+// Height guessing caused layout jumps when the real content differed from the
+// estimate. The IntersectionObserver's 800 px rootMargin already pre-renders
+// content well before it scrolls into view, so virtualisation is unnecessary.
 const LazyMessage: React.FC<{
   children: React.ReactNode
   estimatedHeight?: number
-}> = ({ children, estimatedHeight = 100 }) => {
-  const [isVisible, setIsVisible] = useState(false)
-  const [hasBeenVisible, setHasBeenVisible] = useState(false)
-  const [renderedHeight, setRenderedHeight] = useState<number | null>(null)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        setIsVisible(entry.isIntersecting)
-        if (entry.isIntersecting) {
-          setHasBeenVisible(true)
-        }
-      },
-      {
-        rootMargin: '800px 0px 800px 0px'
-      }
-    )
-    observer.observe(el)
-    return () => {
-      observer.unobserve(el)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (isVisible && ref.current) {
-      const observer = new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
-          if (height > 0) {
-            setRenderedHeight(height)
-          }
-        }
-      })
-      observer.observe(ref.current)
-      return () => {
-        observer.disconnect()
-      }
-    }
-  }, [isVisible])
-
-  const heightToUse = renderedHeight !== null ? `${renderedHeight}px` : `${estimatedHeight}px`
-
-  return (
-    <div 
-      ref={ref} 
-      style={{ 
-        minHeight: heightToUse,
-        height: hasBeenVisible ? undefined : heightToUse 
-      }}
-    >
-      {hasBeenVisible ? children : <div className="h-full w-full" />}
-    </div>
-  )
+}> = ({ children }) => {
+  return <>{children}</>
 }
 
 
@@ -3937,6 +3914,7 @@ export const Dashboard: React.FC = () => {
         const data = await msgRes.json()
 
         const mapped: Message[] = []
+        const systemUrls: string[] = []
 
         for (let idx = 0; idx < data.length; idx++) {
 
@@ -3947,45 +3925,11 @@ export const Dashboard: React.FC = () => {
             // Match R2 / Azure Blob URLs which may have query strings
             const match = m.content.match(/File URL:\s*(https?:\/\/\S+)/i)
 
-            if (match && mapped.length > 0) {
+            if (match) {
 
               // Strip trailing punctuation (not query strings)
               const url = match[1].replace(/[),.'"]+$/, '')
-
-              // Walk backwards to find the nearest user message to map this URL to
-              for (let mi = mapped.length - 1; mi >= 0; mi--) {
-
-                const candidate = mapped[mi]
-
-                if (candidate.role === 'user') {
-
-                  // 1. Single attachment compatibility
-                  if (candidate.fileAttachment && !candidate.fileAttachment.url) {
-                    candidate.fileAttachment.url = url
-                    break
-                  }
-
-                  // 2. Multiple attachments
-                  if (candidate.fileAttachments && candidate.fileAttachments.length > 0) {
-                    // Try to match by filename in URL
-                    const matchingAttachment = candidate.fileAttachments.find(
-                      att => !att.url && url.toLowerCase().includes(att.name.toLowerCase())
-                    )
-                    if (matchingAttachment) {
-                      matchingAttachment.url = url
-                      break
-                    }
-                    // Fallback to the first empty URL slot
-                    const emptyAttachment = candidate.fileAttachments.find(att => !att.url)
-                    if (emptyAttachment) {
-                      emptyAttachment.url = url
-                      break
-                    }
-                  }
-
-                }
-
-              }
+              systemUrls.push(url)
 
             }
 
@@ -4061,6 +4005,35 @@ export const Dashboard: React.FC = () => {
 
           mapped.push(msgObj)
 
+        }
+
+        // Map system URLs to user message attachments by matching filenames
+        for (const url of systemUrls) {
+          try {
+            // Extract filename from URL (stripping the 32-hex UUID prefix if present)
+            const rawFilename = url.split('/').pop() || ''
+            const cleanFilename = decodeURIComponent(rawFilename).replace(/^[a-f0-9]{32}_/i, '').toLowerCase().trim()
+
+            // Find the user message attachment matching this filename
+            for (let i = mapped.length - 1; i >= 0; i--) {
+              const msg = mapped[i]
+              if (msg.role === 'user') {
+                if (msg.fileAttachment && msg.fileAttachment.name.toLowerCase().trim() === cleanFilename) {
+                  msg.fileAttachment.url = url
+                  break
+                }
+                if (msg.fileAttachments) {
+                  const att = msg.fileAttachments.find(a => a.name.toLowerCase().trim() === cleanFilename)
+                  if (att) {
+                    att.url = url
+                    break
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            console.error('Error matching system file URL:', err)
+          }
         }
 
         // Attach generated files to the last assistant message (best-effort)
@@ -6867,13 +6840,13 @@ export const Dashboard: React.FC = () => {
 
                     <div
 
-                      className={`relative rounded-xl px-5 py-4 min-w-0 ${
+                      className={`relative rounded-xl min-w-0 ${
 
                         msg.role === 'user'
 
-                          ? 'bg-[#1c1e22]/50 border border-[#2b2e35] text-brand-text/90 rounded-tr-none'
+                          ? 'bg-[#1c1e22]/50 border border-[#2b2e35] text-brand-text/90 rounded-tr-none px-5 py-4'
 
-                          : 'bg-transparent border-transparent md:px-2'
+                          : 'bg-transparent border-transparent md:px-2 py-1'
 
                       }`}
 
@@ -6937,17 +6910,22 @@ export const Dashboard: React.FC = () => {
 
                           <div className="space-y-2">
 
-                            {msg.fileAttachment && (
+                            {/* Chips / thumbnails in a compact wrap row */}
+                            <div className="flex flex-wrap gap-2">
 
-                              <FileAttachmentChip attachment={msg.fileAttachment} />
+                              {msg.fileAttachment && (
 
-                            )}
+                                <FileAttachmentChip attachment={msg.fileAttachment} />
 
-                            {msg.fileAttachments && msg.fileAttachments.map((attachment, idx) => (
+                              )}
 
-                              <FileAttachmentChip key={idx} attachment={attachment} />
+                              {msg.fileAttachments && msg.fileAttachments.map((attachment, idx) => (
 
-                            ))}
+                                <FileAttachmentChip key={idx} attachment={attachment} />
+
+                              ))}
+
+                            </div>
 
                             {/* Show any prompt text the user typed alongside the file */}
 
@@ -6955,7 +6933,7 @@ export const Dashboard: React.FC = () => {
 
                               <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
 
-                                {msg.content.replace(/^\[.*?\] /, '')}
+                                {msg.content.replace(/^(\[.*?\]\s*)+/, '')}
 
                               </p>
 
