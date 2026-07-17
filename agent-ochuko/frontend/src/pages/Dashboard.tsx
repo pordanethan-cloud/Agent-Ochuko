@@ -3879,9 +3879,30 @@ export const Dashboard: React.FC = () => {
 
     setIsFetchingHistory(true)
 
-    // Always start with clean slate when switching conversations in-session.
-    // Cache is only used on hard reload/tab open (handled in the auth useEffect).
-    setMessages([])
+    // --- SWR Cache Read ---
+    // Load cached messages first to make switching instant and avoid skeleton/blank screen flash
+    const uid = userIdRef.current
+    const cacheKey = uid ? userCacheKey(uid, `convo_cache_${id}`) : `convo_cache_${id}`
+    const cachedData = localStorage.getItem(cacheKey)
+    let hasLoadedFromCache = false
+    if (cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData)
+        if (parsed && Array.isArray(parsed.messages)) {
+          setMessages(parsed.messages)
+          setMode(convoMode)
+          setActiveConversationId(id)
+          hasLoadedFromCache = true
+          if (uid) localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), id)
+        }
+      } catch (e) {
+        console.warn("Failed to load cached conversation:", e)
+      }
+    }
+
+    if (!hasLoadedFromCache) {
+      setMessages([])
+    }
 
     try {
 
