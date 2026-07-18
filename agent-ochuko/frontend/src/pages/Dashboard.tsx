@@ -276,9 +276,9 @@ interface Message {
 
   routing_reason?: string
 
-  fileAttachment?: { name: string; jobType: 'ocr' | 'vision'; url?: string }
+  fileAttachment?: { name: string; jobType: 'ocr' | 'vision' | 'code'; url?: string }
 
-  fileAttachments?: { name: string; jobType: 'ocr' | 'vision'; url?: string }[]
+  fileAttachments?: { name: string; jobType: 'ocr' | 'vision' | 'code'; url?: string }[]
 
   sources?: Source[]
 
@@ -3006,17 +3006,24 @@ const ChatSkeleton: React.FC = () => (
   )
 
 const FileAttachmentChip: React.FC<{
-  attachment: { name: string; jobType: 'ocr' | 'vision'; url?: string }
+  attachment: { name: string; jobType: 'ocr' | 'vision' | 'code'; url?: string }
 }> = ({ attachment }) => {
   const isImage = attachment.jobType === 'vision'
-  const isPdf   = !isImage
+  const isPdf   = attachment.jobType === 'ocr'
+  const isCode  = attachment.jobType === 'code'
 
   const handlePreview = () => {
     if (!attachment.url) return
+    let previewType = 'image/*'
+    if (isPdf) {
+      previewType = 'application/pdf'
+    } else if (isCode) {
+      previewType = 'text/plain'
+    }
     window.dispatchEvent(new CustomEvent('open-file-preview', {
       detail: {
         name: attachment.name,
-        type: isPdf ? 'application/pdf' : 'image/*',
+        type: previewType,
         url: attachment.url,
       }
     }))
@@ -3052,7 +3059,10 @@ const FileAttachmentChip: React.FC<{
     )
   }
 
-  // ── Document chip (OCR / PDF) ──────────────────────────────────────────────
+  const ext = attachment.name.split('.').pop()?.toUpperCase() || 'FILE'
+  const displayLabel = isCode ? `${ext} · Code` : (isPdf ? 'PDF · Document' : 'Document')
+
+  // ── Document chip (OCR / PDF / Code) ──────────────────────────────────────────────
   return (
     <div
       onClick={handlePreview}
@@ -3065,7 +3075,7 @@ const FileAttachmentChip: React.FC<{
         <FileText className="w-4 h-4 text-[#ffffff]/80" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[9px] font-bold text-[#ffffff]/50 uppercase tracking-widest leading-none mb-0.5">PDF · Document</p>
+        <p className="text-[9px] font-bold text-[#ffffff]/50 uppercase tracking-widest leading-none mb-0.5">{displayLabel}</p>
         <p className="text-[12px] text-brand-text/90 font-semibold truncate">{attachment.name}</p>
       </div>
       {attachment.url && (
@@ -3584,7 +3594,14 @@ export const Dashboard: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
 
   const uploadFile = async (file: File) => {
-    const allowedExts = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif']
+    const allowedExts = [
+      '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.docx',
+      '.txt', '.html', '.css', '.js', '.ts', '.tsx', '.jsx', '.java', 
+      '.py', '.c', '.cpp', '.h', '.cs', '.sh', '.json', '.md', 
+      '.yaml', '.yml', '.xml', '.sql', '.csv', '.rs', '.go', '.rb', 
+      '.php', '.kt', '.gradle', '.properties', '.ipynb', '.ini', '.cfg',
+      '.bat', '.cmd', '.ps1'
+    ]
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
     if (!allowedExts.includes(ext)) {
       alert(`Unsupported file type. Allowed extensions: ${allowedExts.join(', ')}`)
@@ -5520,6 +5537,10 @@ export const Dashboard: React.FC = () => {
         return { file, job_id, jobType }
 
       })
+
+      const queuedJobs = await Promise.all(jobPromises)
+
+      const results: { file: AttachedFile; text: string; success: boolean }[] = []
 
       if (queuedJobs.length > 0) {
 
@@ -7687,7 +7708,7 @@ export const Dashboard: React.FC = () => {
               type="file"
               multiple
               onChange={handleFileChange}
-              accept=".pdf,.png,.jpg,.jpeg,.webp,.gif"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.docx,.txt,.html,.css,.js,.ts,.tsx,.jsx,.java,.py,.c,.cpp,.h,.cs,.sh,.json,.md,.yaml,.yml,.xml,.sql,.csv,.rs,.go,.rb,.php,.kt,.gradle,.properties,.ipynb,.ini,.cfg,.bat,.cmd,.ps1"
               className="hidden"
             />
             {!voice.isRecording && voice.isTranscribing && (
