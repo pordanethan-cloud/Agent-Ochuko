@@ -133,20 +133,37 @@ async def execute_code_in_sandbox(
     """
     language = language.lower().strip()
     
-    # 1. Create a dedicated working directory for this execution
-    # Use conversation_id directly to persist file state across multiple turns
+    # 1. Create segregated directories inside the workspace
     work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
-    os.makedirs(work_dir, exist_ok=True)
+    src_dir = os.path.join(work_dir, "src")
+    data_dir = os.path.join(work_dir, "data")
+    
+    os.makedirs(src_dir, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
 
-    # Mount user-uploaded conversation files from R2
+    # Mount files: Download from Google Drive (primary), fall back to R2
     mounted_files = []
     if conversation_id and conversation_id != "00000000-0000-0000-0000-000000000000":
-        mounted_files = await mount_conversation_files(user_id, conversation_id, work_dir)
+        try:
+            from app.services.google_drive import download_google_drive_files
+            google_files = await download_google_drive_files(user_id, conversation_id, data_dir)
+            mounted_files.extend(google_files)
+        except Exception as gd_err:
+            logger.warning(f"Google Drive download failed: {gd_err}")
+            
+        # Mount from R2 as fallback / cache layer to data_dir
+        try:
+            r2_files = await mount_conversation_files(user_id, conversation_id, data_dir)
+            mounted_files.extend(r2_files)
+        except Exception as r2_err:
+            logger.warning(f"R2 mount failed: {r2_err}")
 
-    # Record modification times of existing files before execution
+    # Remove duplicates from mounted list
+    mounted_files = list(set(mounted_files))
+
+    # Record modification times of existing files inside data_dir before execution
     before_files = {}
-    for root, dirs, files_in_dir in os.walk(work_dir):
-
+    for root, dirs, files_in_dir in os.walk(data_dir):
         if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
             continue
         for file in files_in_dir:
@@ -155,6 +172,20 @@ async def execute_code_in_sandbox(
                 before_files[path] = os.path.getmtime(path)
             except OSError:
                 pass
+                
+    # Copy files from data_dir to src_dir for backward compatibility with local path references
+    for root, dirs, files_in_dir in os.walk(data_dir):
+        if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
+            continue
+        for file in files_in_dir:
+            data_file_path = os.path.join(root, file)
+            rel_path = os.path.relpath(data_file_path, data_dir)
+            src_file_path = os.path.join(src_dir, rel_path)
+            os.makedirs(os.path.dirname(src_file_path), exist_ok=True)
+            try:
+                shutil.copy2(data_file_path, src_file_path)
+            except Exception as copy_err:
+                logger.warning(f"Failed to copy file {file} to src_dir for execution compatibility: {copy_err}")
     
     # Prepare clean environment variables (excluding sensitive keys)
     env = os.environ.copy()
@@ -175,17 +206,13 @@ async def execute_code_in_sandbox(
     try:
         if language in ("bash", "shell", "sh"):
             # Bash/Shell execution path
-            script_path = os.path.join(work_dir, "command.sh")
-            # Normalize /mnt/data and /workspace paths to current directory
-            normalized_code = (
-                code.replace("/mnt/data/", "./")
-                .replace("/mnt/data", "./")
-                .replace("/workspace/", "./")
-                .replace("/workspace", "./")
-            )
+            script_path = os.path.join(src_dir, "command.sh")
+            # Normalize /mnt/data and /workspace paths to relative data directory (../data/)
+            # Use case-insensitive regex substitution to robustly handle capitalization variations
+            normalized_code = re.sub(r'(?i)/mnt/data/?', '../data/', code)
+            normalized_code = re.sub(r'(?i)/workspace/?', '../data/', normalized_code)
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
-
                 
             bash_executable = _find_bash_executable()
             proc = await asyncio.create_subprocess_exec(
@@ -193,7 +220,7 @@ async def execute_code_in_sandbox(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
-                cwd=work_dir
+                cwd=src_dir
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
@@ -206,17 +233,13 @@ async def execute_code_in_sandbox(
 
         elif language == "javascript" or language == "js" or language == "node":
             # JS execution path
-            script_path = os.path.join(work_dir, "script.js")
-            # Normalize /mnt/data and /workspace paths to current directory
-            normalized_code = (
-                code.replace("/mnt/data/", "./")
-                .replace("/mnt/data", "./")
-                .replace("/workspace/", "./")
-                .replace("/workspace", "./")
-            )
+            script_path = os.path.join(src_dir, "script.js")
+            # Normalize /mnt/data and /workspace paths to relative data directory (../data/)
+            # Use case-insensitive regex substitution to robustly handle capitalization variations
+            normalized_code = re.sub(r'(?i)/mnt/data/?', '../data/', code)
+            normalized_code = re.sub(r'(?i)/workspace/?', '../data/', normalized_code)
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
-
                 
             for attempt in range(3):
                 proc = await asyncio.create_subprocess_exec(
@@ -224,7 +247,7 @@ async def execute_code_in_sandbox(
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
-                    cwd=work_dir
+                    cwd=src_dir
                 )
                 try:
                     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
@@ -256,17 +279,13 @@ async def execute_code_in_sandbox(
                 break
         else:
             # Python execution path
-            script_path = os.path.join(work_dir, "script.py")
-            # Normalize /mnt/data and /workspace paths to current directory
-            normalized_code = (
-                code.replace("/mnt/data/", "./")
-                .replace("/mnt/data", "./")
-                .replace("/workspace/", "./")
-                .replace("/workspace", "./")
-            )
+            script_path = os.path.join(src_dir, "script.py")
+            # Normalize /mnt/data and /workspace paths to relative data directory (../data/)
+            # Use case-insensitive regex substitution to robustly handle capitalization variations
+            normalized_code = re.sub(r'(?i)/mnt/data/?', '../data/', code)
+            normalized_code = re.sub(r'(?i)/workspace/?', '../data/', normalized_code)
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
-
                 
             for attempt in range(3):
                 proc = await asyncio.create_subprocess_exec(
@@ -274,7 +293,7 @@ async def execute_code_in_sandbox(
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
-                    cwd=work_dir
+                    cwd=src_dir
                 )
                 try:
                     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
@@ -307,14 +326,48 @@ async def execute_code_in_sandbox(
                         continue
                 break
 
-        # 2. Upload any created/generated files in the working directory to R2
+        # Copy any newly created or modified files in src_dir back to data_dir for storage persistence
+        for root, dirs, files_in_dir in os.walk(src_dir):
+            if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
+                continue
+            for file in files_in_dir:
+                if file in ("script.py", "script.js", "command.sh"):
+                    continue
+                src_file_path = os.path.join(root, file)
+                rel_path = os.path.relpath(src_file_path, src_dir)
+                dest_file_path = os.path.join(data_dir, rel_path)
+                
+                # Check if it is a new file or modified
+                is_changed = False
+                if not os.path.exists(dest_file_path):
+                    is_changed = True
+                else:
+                    try:
+                        is_changed = os.path.getmtime(src_file_path) > os.path.getmtime(dest_file_path)
+                    except OSError:
+                        is_changed = True
+                        
+                if is_changed:
+                    os.makedirs(os.path.dirname(dest_file_path), exist_ok=True)
+                    try:
+                        shutil.copy2(src_file_path, dest_file_path)
+                        logger.info(f"Copied execution output file {file} from src/ to data/: {dest_file_path}")
+                    except Exception as copy_err:
+                        logger.warning(f"Failed to copy execution output file {file} to data_dir: {copy_err}")
+
+        # 2. Upload any created/generated files in the data directory to Google Drive and R2
         from app.api.v1.endpoints.chat import _upload_generated_file
         from app.services.supabase_admin import get_supabase_admin
+        from app.services.google_drive import upload_to_google_drive
         
-        # Get active user_id context from thread if possible (fallback to system/default)
-        user_id = "00000000-0000-0000-0000-000000000000"
+        # Sync generated files to Google Drive first
+        try:
+            google_uploaded = await upload_to_google_drive(user_id, conversation_id, data_dir)
+        except Exception as gd_err:
+            logger.error(f"Failed to sync generated files to Google Drive: {gd_err}")
+            google_uploaded = []
         
-        for root, dirs, files_in_dir in os.walk(work_dir):
+        for root, dirs, files_in_dir in os.walk(data_dir):
             # Skip scanning dependency and version control directories
             if any(ignored in root for ignored in (".git", "node_modules", ".venv", "__pycache__")):
                 continue
@@ -322,7 +375,7 @@ async def execute_code_in_sandbox(
             # Skip files from cloned git repos (check for .git in parent dirs)
             is_external_repo = False
             check_path = root
-            while check_path != work_dir:
+            while check_path != data_dir:
                 if os.path.exists(os.path.join(check_path, ".git")):
                     is_external_repo = True
                     break
@@ -346,6 +399,7 @@ async def execute_code_in_sandbox(
                         if not mime:
                             mime = "application/octet-stream"
                             
+                        # Upload to R2 for fast preview CDN
                         r2_url = await _upload_generated_file(
                             file_bytes=file_bytes,
                             filename=file,
@@ -353,9 +407,16 @@ async def execute_code_in_sandbox(
                             conversation_id=conversation_id,
                             user_id=user_id
                         )
+                        
+                        # Use Google Drive URL for client download / preview
+                        download_url = r2_url
+                        gd_match = next((gf for gf in google_uploaded if gf["filename"] == file), None)
+                        if gd_match:
+                            download_url = gd_match.get("download_url") or r2_url
+                            
                         generated_files.append({
                             "filename": file,
-                            "download_url": r2_url,
+                            "download_url": download_url,
                             "size_bytes": len(file_bytes)
                         })
                 except Exception as upload_err:
@@ -368,14 +429,14 @@ async def execute_code_in_sandbox(
 
             zip_buf = _io.BytesIO()
             with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-                for root, dirs, files_in_dir in os.walk(work_dir):
+                for root, dirs, files_in_dir in os.walk(data_dir):
                     dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "__pycache__")]
                     for file in files_in_dir:
                         if file in ("script.py", "script.js", "command.sh"):
                             continue
                         file_path = os.path.join(root, file)
-                        # arcname is relative to work_dir so the zip has a clean flat/nested structure
-                        arcname = os.path.relpath(file_path, work_dir)
+                        # arcname is relative to data_dir so the zip has a clean flat/nested structure
+                        arcname = os.path.relpath(file_path, data_dir)
                         try:
                             zf.write(file_path, arcname=arcname)
                         except OSError as ze:
@@ -384,6 +445,18 @@ async def execute_code_in_sandbox(
             zip_bytes = zip_buf.getvalue()
             if zip_bytes:
                 try:
+                    # Save zip file locally to data_dir so it gets synced/uploaded to Google Drive too
+                    zip_file_path = os.path.join(data_dir, "project.zip")
+                    with open(zip_file_path, "wb") as zf_file:
+                        zf_file.write(zip_bytes)
+                        
+                    # Sync ZIP to Google Drive
+                    try:
+                        zip_google = await upload_to_google_drive(user_id, conversation_id, data_dir)
+                    except Exception as gd_err:
+                        logger.warning(f"Failed to upload ZIP to Google Drive: {gd_err}")
+                        zip_google = []
+                        
                     zip_url = await _upload_generated_file(
                         file_bytes=zip_bytes,
                         filename="project.zip",
@@ -391,18 +464,23 @@ async def execute_code_in_sandbox(
                         conversation_id=conversation_id,
                         user_id=user_id,
                     )
+                    
+                    download_url = zip_url
+                    gd_match = next((gf for gf in zip_google if gf["filename"] == "project.zip"), None)
+                    if gd_match:
+                        download_url = gd_match.get("download_url") or zip_url
+                        
                     generated_files.append({
                         "filename": "project.zip",
-                        "download_url": zip_url,
+                        "download_url": download_url,
                         "size_bytes": len(zip_bytes),
                     })
                     logger.info(
                         "sandbox ZIP: %d files, %d bytes → %s",
-                        len(generated_files) - 1, len(zip_bytes), zip_url,
+                        len(generated_files) - 1, len(zip_bytes), download_url,
                     )
                 except Exception as zip_err:
                     logger.warning("ZIP upload failed: %s", zip_err)
-                    # Non-fatal — individual files were already uploaded successfully
 
     except Exception as run_err:
         logger.error(f"Sandbox runner internal error: {run_err}", exc_info=True)
@@ -413,7 +491,7 @@ async def execute_code_in_sandbox(
         # carry over to subsequent turns. We only clean up the temporary script files.
         for temp_script in ("script.py", "script.js", "command.sh"):
             try:
-                os.remove(os.path.join(work_dir, temp_script))
+                os.remove(os.path.join(src_dir, temp_script))
             except OSError:
                 pass
 

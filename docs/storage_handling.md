@@ -6,7 +6,7 @@ This document outlines how chat history, session data, and generated files are s
 
 ## 1. Storage Architecture Overview
 
-We implement a **Local-First, Cloud-Synced** storage model. The data is segregated by size, sensitivity, and access patterns:
+We implement a **Local-First, Cloud-Synced** storage model, augmented by **User-Hosted Google Drive Sandbox Storage** for long-term retention and stateless server scaling. The data is segregated by size, sensitivity, and access patterns:
 
 ```mermaid
 graph TD
@@ -17,7 +17,8 @@ graph TD
     subgraph Cloud Backend
         A -->|3. Query / Sync| D[FastAPI Backend]
         D -->|4. Metadata| E[(Supabase: PostgreSQL)]
-        D -->|5. Chunked Blob| F[(Cloudflare R2: Compressed Storage)]
+        D -->|5. Short-term Cache| F[(Cloudflare R2: 7-day TTL)]
+        D -->|6. Long-term Sync| G[(User's Google Drive: 90-day+ Retention)]
     end
 ```
 
@@ -28,6 +29,7 @@ graph TD
 | **Chat Metadata & Structure** | IndexedDB (Client) | Supabase PostgreSQL | None (SQL Indexed) |
 | **Highly Compressible Files** | OPFS (Client) | Cloudflare R2 | **Gzip** (on-the-fly) |
 | **Large Binaries / Media** | OPFS (Client) | Original Source / R2 (Short TTL) | None (Lazy Loaded) |
+| **Long-Term File Backups** | User's Google Drive | R2 Cache Restores (On miss) | None (Google Drive Native) |
 
 ---
 
@@ -36,7 +38,7 @@ graph TD
 To maintain database performance and reliability at scale, we enforce strict compute boundaries:
 
 ### A. Database Layer (Supabase PostgreSQL) — *Zero File Compute*
-* **What it does**: Handles structured queries, indexing, and user state mapping.
+* **What it does**: Handles structured queries, indexing, and user state mapping. Also securely syncs and stores user Google OAuth credentials (`public.user_google_credentials`) via a trigger on `auth.identities` to authorize background Drive operations.
 * **What it NEVER does**: It **never** decompresses files, decrypts large text buffers, or runs heavy operations. Keeping Postgres lightweight ensures sub-millisecond query responses.
 
 ### B. Backend API (FastAPI Container) — *Orchestration & Streaming*
@@ -45,6 +47,7 @@ To maintain database performance and reliability at scale, we enforce strict com
   - Fetches compressed raw bytes from R2.
   - Compresses generated text outputs using **Gzip** before uploading to R2.
   - Proxies/streams external files chunk-by-chunk to save RAM.
+  - Resolves R2 cache misses by retrieving from Google Drive and re-caching back to R2.
 
 ### C. Client Layer (Browser/Device) — *Decompression & Lazy Hydration*
 * **What it does**:
@@ -62,7 +65,7 @@ To prevent data corruption, state race conditions, and UI stuttering during acti
 
 ---
 
-## 4. Past Chat Restoration Flow
+## 4. Past Chat Restoration & Fallback Recovery Flow
 
 When a user selects a past conversation from the sidebar:
 
@@ -71,15 +74,17 @@ When a user selects a past conversation from the sidebar:
 3. **Lazy Asset Retrieval**: 
    - File attachment cards are rendered in an **idle state** (0-byte footprint).
    - If the user clicks on a file card, the client first attempts to load it from the Origin Private File System (OPFS).
-   - If not present in OPFS, the client calls the backend API `/download-proxy` or fetches it from R2, downloads it, and saves a local copy in OPFS.
+   - If not present in OPFS, the client calls the backend API `/download-proxy` or fetches it from R2.
+   - **R2 Cache Miss Fallback:** If the file has been evicted from R2 (exceeding the 7-day cache TTL), the backend `/download-proxy` detects the 404, fetches the file from the user's personal Google Drive folder using their refresh credentials, uploads it back into R2 to restore the cache, and streams the bytes to the client.
+   - The client then downloads the bytes and saves a local copy in OPFS.
 
 ---
 
 ## 5. Cloudflare R2 — Current State
 
-**R2 is the binary storage layer — Supabase carries zero file data.**
+**R2 acts as a fast temporary cache layer — Supabase and backend containers carry zero file data.**
 
-Supabase PostgreSQL stores only metadata rows (file records, job rows, message references). All binary content — user uploads, generated files, AI images — lives in Cloudflare R2.
+Supabase PostgreSQL stores only metadata rows (file records, job rows, message references). All binary content — user uploads, generated files, AI images — lives in Cloudflare R2. R2 buckets are configured with a 7-day lifecycle eviction rule to conserve storage. Long-term durability is handled by the user's personal Google Drive.
 
 | Component | File | Role |
 | :--- | :--- | :--- |
@@ -183,4 +188,23 @@ No code changes are needed now. The architecture is ready. When keys arrive, one
 
 ---
 
-*Last updated: 2026-07-17 — R2 expansion architecture designed, awaiting 5 Cloudflare API keys to execute wire-up.*
+## 8. User-Hosted Google Drive Sandbox & Sync
+
+To build for scale and achieve stateless containers, files are synced directly to the user's Google Drive account:
+
+### OAuth Login Config
+* The frontend asks for the `https://www.googleapis.com/auth/drive.file` scope and offline access to retrieve a `refresh_token` from Google.
+* The `sync_google_provider_tokens` trigger on the `auth.identities` table intercepts Google logins, checks for valid `refresh_token` presence (NULL-safe), and populates `public.user_google_credentials`.
+
+### File-Script Isolation
+* In the sandbox, execution scripts live in `./src`, while user attachments and output data reside in `./data`.
+* A bidirectional synchronization copying logic bridges `./src` and `./data` to maintain backwards compatibility for local file path scripts.
+
+### Syncing Uploads & Cache recovery
+* Direct uploads to R2 are sent to `/v1/files/sync-google` to sync them to the Google Drive `/uploads/` subfolder in the background.
+* Executed code outputs are uploaded to `/generated/` Google Drive subfolder.
+* Expired cache entries are dynamically downloaded from Google Drive and re-written into R2 automatically.
+
+---
+
+*Last updated: 2026-07-18 — Google Drive hybrid storage & fallback cache miss recovery implemented and fully covered by tests.*

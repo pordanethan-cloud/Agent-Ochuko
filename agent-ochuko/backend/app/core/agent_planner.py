@@ -132,13 +132,13 @@ async def generate_plan(
 def format_plan_for_system_prompt(plan: str) -> str:
     """
     Wraps the raw plan in a clearly-delimited block for injection into the system prompt.
-    The model is instructed to follow the plan sequentially and call write_memory
-    to record each step result before moving to the next.
+    The model is instructed to follow the plan sequentially and record progress
+    in its thinking block before moving to the next step.
     """
     return (
         "\n\n--- AGENT EXECUTION PLAN ---\n"
         "Follow this plan step by step. Call the appropriate tools in order. "
-        "After completing each step, use write_memory to record the result before proceeding.\n"
+        "After completing each step, record the result in your thinking block before proceeding.\n"
         "When all steps are complete, deliver a final, synthesised answer to the user.\n\n"
         f"{plan}\n"
         "--- END PLAN ---\n\n"

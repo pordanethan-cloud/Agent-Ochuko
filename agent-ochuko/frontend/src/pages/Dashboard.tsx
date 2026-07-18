@@ -3639,6 +3639,19 @@ export const Dashboard: React.FC = () => {
         }
         xhr.onload = () => {
           if (xhr.status === 201 || xhr.status === 200) {
+            // Trigger background sync to user's Google Drive account
+            fetch(`${API_BASE}/v1/files/sync-google`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                file_id: file_id,
+                filename: file.name,
+                conversation_id: convoId
+              })
+            }).catch(syncErr => console.warn('Background Google Drive sync request failed:', syncErr))
             resolve()
           } else {
             reject(new Error(`Storage upload returned status ${xhr.status}`))
@@ -4494,7 +4507,7 @@ export const Dashboard: React.FC = () => {
 
   }
 
-  const triggerStream = async (history: Message[], newUserMessage: string | Message, overrideConvoId?: string) => {
+  const triggerStream = async (history: Message[], newUserMessage: string | Message, overrideConvoId?: string, attachments?: any[]) => {
 
     // 1. Abort any active stream before launching a new one
 
@@ -4551,6 +4564,8 @@ export const Dashboard: React.FC = () => {
           mode,
 
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+
+          attachments: attachments || [],
 
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 
@@ -5386,20 +5401,25 @@ export const Dashboard: React.FC = () => {
 
     }
 
-    const attachments = files.map(f => {
+    const codeExts = [
+      '.txt', '.html', '.css', '.js', '.ts', '.tsx', '.jsx', '.java',
+      '.py', '.c', '.cpp', '.h', '.cs', '.sh', '.json', '.md',
+      '.yaml', '.yml', '.xml', '.sql', '.csv', '.rs', '.go', '.rb',
+      '.php', '.kt', '.gradle', '.properties', '.ipynb', '.ini', '.cfg',
+      '.bat', '.cmd', '.ps1'
+    ]
 
-      const isPdf = f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+    const attachments = files.map(f => {
+      const nameLower = f.name.toLowerCase()
+      const isPdf = f.type === 'application/pdf' || nameLower.endsWith('.pdf')
+      const isCode = codeExts.some(ext => nameLower.endsWith(ext))
+      const jobType = isPdf ? 'ocr' : (isCode ? 'code' : 'vision')
 
       return {
-
         name: f.name,
-
-        jobType: (isPdf ? 'ocr' : 'vision') as 'ocr' | 'vision',
-
+        jobType: jobType as 'ocr' | 'vision' | 'code',
         url: f.blobUrl
-
       }
-
     })
 
     const fileNames = files.map(f => f.name).join(', ')
@@ -5410,13 +5430,24 @@ export const Dashboard: React.FC = () => {
 
       : `[Analysis for: ${fileNames}]`
 
+    const ocrVisionFiles = files.filter(f => {
+      const nameLower = f.name.toLowerCase()
+      const isPdf = f.type === 'application/pdf' || nameLower.endsWith('.pdf')
+      const isCode = codeExts.some(ext => nameLower.endsWith(ext))
+      return isPdf || !isCode // it is PDF or an image, not a code/text file
+    })
+
+    const initialAssistantText = ocrVisionFiles.length > 0
+      ? 'Cognitive model preparing backend analysis tasks...'
+      : 'Analyzing attached code/text files...'
+
     setMessages((prev) => [
 
       ...prev,
 
       { role: 'user', content: userMsgText, fileAttachments: attachments },
 
-      { role: 'assistant', content: 'Cognitive model preparing backend analysis tasks...' }
+      { role: 'assistant', content: initialAssistantText }
 
     ])
 
@@ -5428,9 +5459,9 @@ export const Dashboard: React.FC = () => {
 
       if (!token) throw new Error('Authentication session not found.')
 
-      // 1. Launch all jobs in parallel
+      // 1. Launch jobs ONLY for OCR/Vision files
 
-      const jobPromises = files.map(async (file) => {
+      const jobPromises = ocrVisionFiles.map(async (file) => {
 
         const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 
@@ -5490,13 +5521,9 @@ export const Dashboard: React.FC = () => {
 
       })
 
-      const queuedJobs = await Promise.all(jobPromises)
+      if (queuedJobs.length > 0) {
 
-      // 2. Track status of all jobs
-
-      const results: { file: AttachedFile; text: string; success: boolean }[] = []
-
-      const pollJobs = queuedJobs.map(async ({ file, job_id }) => {
+        const pollJobs = queuedJobs.map(async ({ file, job_id }) => {
 
         return new Promise<void>((resolve) => {
 
@@ -5602,19 +5629,27 @@ export const Dashboard: React.FC = () => {
 
       })
 
-      // Wait for all analyses to complete
+        // Wait for all analyses to complete
 
-      await Promise.all(pollJobs)
+        await Promise.all(pollJobs)
 
-      const failedJobs = results.filter(r => !r.success)
+        const failedJobs = results.filter(r => !r.success)
 
-      if (failedJobs.length > 0) {
+        if (failedJobs.length > 0) {
 
-        console.warn('Some file analysis jobs failed:', failedJobs)
+          console.warn('Some file analysis jobs failed:', failedJobs)
+
+        }
 
       }
 
       // 3. Trigger the LLM stream response
+
+      const backendAttachments = attachments.map(a => ({
+        filename: a.name,
+        url: a.url || '',
+        mime_type: a.jobType === 'ocr' ? 'application/pdf' : (a.jobType === 'vision' ? 'image/png' : 'text/plain')
+      }))
 
       await triggerStream(historyBeforeJobs, {
 
@@ -5624,7 +5659,7 @@ export const Dashboard: React.FC = () => {
 
         fileAttachments: attachments
 
-      }, convoId)
+      }, convoId, backendAttachments)
 
     } catch (err: any) {
 
@@ -7655,6 +7690,9 @@ export const Dashboard: React.FC = () => {
               accept=".pdf,.png,.jpg,.jpeg,.webp,.gif"
               className="hidden"
             />
+            {!voice.isRecording && voice.isTranscribing && (
+              <div className="input-loading-bar" />
+            )}
           </form>
           </div>
         </div>

@@ -6,17 +6,41 @@ from app.services.code_sandbox import execute_code_in_sandbox
 
 @pytest.mark.anyio
 async def test_python_sandbox_math_and_print():
+    import uuid
+    conversation_id = f"test-convo-{uuid.uuid4()}"
+    sandbox_dir = f"/tmp/sandbox_{conversation_id}"
+    if os.path.exists(sandbox_dir):
+        try:
+            shutil.rmtree(sandbox_dir)
+        except Exception:
+            pass
     code = """
 a = 10
 b = 20
 print(f"SUM IS {a + b}")
 """
-    output, files = await execute_code_in_sandbox(code, "python", "test-convo-id")
-    assert "SUM IS 30" in output
-    assert len(files) == 0
+    try:
+        output, files = await execute_code_in_sandbox(code, "python", conversation_id)
+        assert "SUM IS 30" in output
+        assert len(files) == 0
+    finally:
+        if os.path.exists(sandbox_dir):
+            try:
+                shutil.rmtree(sandbox_dir)
+            except Exception:
+                pass
 
 @pytest.mark.anyio
 async def test_python_sandbox_file_creation(monkeypatch):
+    import uuid
+    conversation_id = f"test-convo-{uuid.uuid4()}"
+    sandbox_dir = f"/tmp/sandbox_{conversation_id}"
+    if os.path.exists(sandbox_dir):
+        try:
+            shutil.rmtree(sandbox_dir)
+        except Exception:
+            pass
+
     # Mock _upload_generated_file to return a dummy URL
     async def mock_upload(file_bytes, filename, mime_type, conversation_id, user_id):
         return f"https://mockstorage.local/{conversation_id}/{filename}"
@@ -27,10 +51,17 @@ async def test_python_sandbox_file_creation(monkeypatch):
 with open("result.txt", "w") as f:
     f.write("hello from sandbox")
 """
-    output, files = await execute_code_in_sandbox(code, "python", "test-convo-id")
-    assert len(files) == 1
-    assert files[0]["filename"] == "result.txt"
-    assert "mockstorage.local/test-convo-id/result.txt" in files[0]["download_url"]
+    try:
+        output, files = await execute_code_in_sandbox(code, "python", conversation_id)
+        assert len(files) == 1
+        assert files[0]["filename"] == "result.txt"
+        assert f"mockstorage.local/{conversation_id}/result.txt" in files[0]["download_url"]
+    finally:
+        if os.path.exists(sandbox_dir):
+            try:
+                shutil.rmtree(sandbox_dir)
+            except Exception:
+                pass
 
 @pytest.mark.anyio
 async def test_bash_sandbox_persistence_and_delta(monkeypatch):

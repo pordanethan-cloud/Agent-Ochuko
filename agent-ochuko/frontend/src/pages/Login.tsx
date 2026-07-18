@@ -25,8 +25,10 @@ export const Login: React.FC = () => {
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
           queryParams: {
-            prompt: 'select_account',   // always show account chooser after sign-out
-          }
+            access_type: 'offline',
+            prompt: 'consent',
+          },
+          scopes: 'https://www.googleapis.com/auth/drive.file'
         }
       })
       if (error) throw error

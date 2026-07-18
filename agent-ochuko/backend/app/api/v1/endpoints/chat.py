@@ -63,10 +63,55 @@ def get_openai_client() -> AsyncAzureOpenAI:
     return _openai_client
 
 
+async def run_satisfaction_audit(
+    user_query: str,
+    assistant_answer: str,
+    synthesis_deployment: str
+) -> Optional[str]:
+    """
+    Evaluates the quality and completeness of the assistant's answer.
+    Returns:
+        - "SATISFACTORY" if the answer is good.
+        - A string detailing the gaps if the answer is incomplete or needs correction.
+    """
+    try:
+        az_client = get_openai_client()
+        system_prompt = (
+            "You are an expert AI quality auditor. Your job is to verify if the assistant's response "
+            "fully, accurately, and satisfactorily answers all parts of the user's request.\n\n"
+            "Evaluate against these criteria:\n"
+            "1. Did the assistant address EVERY question or implicit request in the prompt?\n"
+            "2. Is the answer factually coherent and free of obvious gaps?\n"
+            "3. If the user asked for specific details (e.g. transfer updates, scores, lists), did the assistant provide them?\n\n"
+            "If the answer is fully satisfactory, reply with ONLY the single word: SATISFACTORY\n"
+            "If the answer is unsatisfactory, incomplete, or contains errors, write a short, bulleted list "
+            "of the exact missing details or corrections needed (no other conversational filler)."
+        )
+        user_input = (
+            f"User Query: {user_query}\n\n"
+            f"Assistant Answer:\n{assistant_answer}"
+        )
+        response = await az_client.responses.create(
+            model=synthesis_deployment,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ]
+        )
+        feedback = (response.output_text or "").strip()
+        if "SATISFACTORY" in feedback.upper() and len(feedback) < 20:
+            return "SATISFACTORY"
+        return feedback
+    except Exception as e:
+        logger.warning(f"Satisfaction audit failed (non-fatal): {e}")
+        return "SATISFACTORY"
+
+
 async def _perform_google_search(
     query: str,
     synthesis_deployment: str = "",
     history: List[Dict[str, Any]] = None,
+    return_raw: bool = False,
 ) -> Dict[str, Any]:
     """
     Two-phase multi-cloud hybrid search (reference architecture):
@@ -177,6 +222,13 @@ async def _perform_google_search(
         logger.warning("Google search retrieval failed, falling back to Azure: %s", e)
         google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
         sources = []
+
+    if return_raw:
+        return {
+            "google_context": google_context,
+            "sources": sources,
+            "answer": google_context
+        }
 
     # ── Phase 2: Azure OpenAI Responses API Synthesis (async) ─────────────
     # The Google context is injected into the system prompt so Azure OpenAI
@@ -293,14 +345,16 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
     """
     supabase = get_supabase_admin()
     try:
-        response = (
-            supabase.table("messages")
-            .select("role, content, is_summary")
-            .eq("conversation_id", conversation_id)
-            .eq("is_archived_msg", False)
-            .order("created_at", desc=False)
-            .execute()
-        )
+        def fetch_msgs():
+            return (
+                supabase.table("messages")
+                .select("role, content, is_summary")
+                .eq("conversation_id", conversation_id)
+                .eq("is_archived_msg", False)
+                .order("created_at", desc=False)
+                .execute()
+            )
+        response = await asyncio.to_thread(fetch_msgs)
         db_messages = response.data or []
         formatted_messages = []
         for msg in db_messages:
@@ -377,6 +431,9 @@ async def chat_stream_generator(
         thinking_buffer = ""
         in_thinking_block = False
         thinking_emitted = False  # emit thinking_start once
+        accumulated_thinking = ""
+        accumulated_image_jobs = []
+        accumulated_files = []
         stream_kwargs: Dict[str, Any] = {
             "model": deployment,
             # Tools the model may call autonomously during the conversation
@@ -465,15 +522,13 @@ async def chat_stream_generator(
             "tool_choice": "auto",
         }
 
-        if previous_response_id:
-            # Stateful multi-turn: Azure holds full history — send only the new message
-            stream_kwargs["previous_response_id"] = previous_response_id
-            user_messages = [m for m in messages if m.get("role") == "user"]
-            stream_kwargs["input"] = user_messages[-1:] if user_messages else messages
-        else:
-            # First turn or fresh conversation: prepend system prompt + full input list
-            input_list = [{"role": "system", "content": full_system}] + messages
-            stream_kwargs["input"] = input_list
+        # State tracking for thinking-block extraction and agent loop
+        thinking_buffer = ""
+        in_thinking_block = False
+        thinking_emitted = False  # emit thinking_start once
+        accumulated_thinking = ""
+        accumulated_image_jobs = []
+        accumulated_files = []
 
         assistant_content = ""
         response_id = None
@@ -482,353 +537,428 @@ async def chat_stream_generator(
         stream_failed = False
         error_message = ""
 
-        try:
-            async with client.responses.stream(**stream_kwargs) as stream:
-                try:
-                    async for event in stream:
-                        # Text delta events
-                        if event.type == "response.output_text.delta":
-                            chunk = event.delta
-                            assistant_content += chunk
+        # We construct a mutable copy of the messages for agent iterations
+        local_messages = list(messages)
+        iteration = 0
+        max_iterations = 4
 
-                            # ── Thinking block interception ────────────────────────────────
-                            # THINK/SOLVE modes receive _THINKING_INSTRUCTION which tells the
-                            # model to wrap reasoning in <thinking>…</thinking> before answer.
-                            # We intercept those chunks here and emit them as thinking_delta
-                            # SSE events so the frontend can render them in a separate panel.
-                            if in_thinking_block:
-                                thinking_buffer += chunk
-                                close_pos = thinking_buffer.lower().find("</thinking")
-                                if close_pos != -1:
-                                    # Strip closing tag (resilient to missing closing bracket)
-                                    tag_len = 10  # len("</thinking")
-                                    if thinking_buffer[close_pos:].startswith("</thinking>"):
-                                        tag_len = 11
-                                    thought_chunk = thinking_buffer[:close_pos]
-                                    if thought_chunk:
-                                        yield (
-                                            "data: "
-                                            + json.dumps({"type": "thinking_delta", "delta": {"text": thought_chunk}})
-                                            + "\n\n"
-                                        )
-                                    # Signal end of thinking
-                                    yield "data: " + json.dumps({"type": "thinking_done"}) + "\n\n"
-                                    in_thinking_block = False
-                                    # Forward any text AFTER </thinking> as normal content
-                                    after = thinking_buffer[close_pos + tag_len:].lstrip("\n")
-                                    thinking_buffer = ""
-                                    if after:
-                                        yield (
-                                            "data: "
-                                            + json.dumps({"type": "content_block_delta", "delta": {"text": after}})
-                                            + "\n\n"
-                                        )
-                                else:
-                                    # Still inside thinking block — emit as thinking_delta
-                                    yield (
-                                        "data: "
-                                        + json.dumps({"type": "thinking_delta", "delta": {"text": chunk}})
-                                        + "\n\n"
-                                    )
-                            else:
-                                thinking_buffer += chunk
-                                open_idx = thinking_buffer.lower().find("<thinking")
-                                if open_idx != -1 and not thinking_emitted:
-                                    # Strip opening tag (resilient to missing closing bracket)
-                                    tag_len = 9  # len("<thinking")
-                                    if thinking_buffer[open_idx:].startswith("<thinking>"):
+        while iteration < max_iterations:
+            current_tool_calls = []
+            current_stream_failed = False
+            current_error_message = ""
+            
+            stream_kwargs: Dict[str, Any] = {
+                "model": deployment,
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "search_web",
+                        "description": (
+                            "Search the web using Google for current, real-time information. "
+                            "Call this whenever the user asks about recent events, news, prices, "
+                            "people, weather, or anything that requires up-to-date knowledge."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The precise search query to submit to Google",
+                                }
+                            },
+                            "required": ["query"],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "execute_code",
+                        "description": (
+                            "Execute Python, JavaScript (Node.js), or Bash code in a persistent sandbox "
+                            "that has FULL internet access. The sandbox can: install pip/npm packages automatically, "
+                            "make HTTP/API requests, scrape web pages, process data, generate files (CSV, PNG, PDF, DOCX, ZIP), "
+                            "create charts with matplotlib, perform numerical computation, convert file formats, "
+                            "and more. Files produced are automatically uploaded and returned as download links.\n"
+                            "Call this whenever the user wants to: run/test code, analyse data, plot charts, "
+                            "fetch live data in code, convert or process files, perform computation, or any task "
+                            "that benefits from actually executing code rather than describing it.\n"
+                            "Do NOT use this for SVG display — output SVG in a ```svg fence instead. "
+                            "Do NOT use this to generate AI images — use generate_image for that."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "description": "The complete code to execute. Must be self-contained and runnable.",
+                                },
+                                "language": {
+                                    "type": "string",
+                                    "enum": ["python", "javascript", "bash"],
+                                    "description": "Programming language of the code snippet",
+                                },
+                            },
+                            "required": ["code", "language"],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "generate_image",
+                        "description": (
+                            "Generate a brand-new image using AI (FLUX) from a natural language text description. "
+                            "Use ONLY when the user wants an AI-synthesised picture from a text prompt — "
+                            "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'. "
+                            "Do NOT call this to render, convert, or execute code. "
+                            "Do NOT call this for SVG-to-image conversion (output a ```svg fence instead). "
+                            "Do NOT call this for data plots or charts (use execute_code with matplotlib instead)."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {
+                                    "type": "string",
+                                    "description": "Detailed, descriptive image generation prompt",
+                                },
+                                "style": {
+                                    "type": "string",
+                                    "enum": ["photorealistic", "illustration", "abstract", "sketch"],
+                                    "description": "Visual style for the image",
+                                },
+                            },
+                            "required": ["prompt"],
+                        },
+                    },
+                ],
+                "tool_choice": "auto",
+            }
+
+            # We use stateful multi-turn only on iteration 0 when previous_response_id is set
+            if iteration == 0 and previous_response_id:
+                stream_kwargs["previous_response_id"] = previous_response_id
+                user_messages = [m for m in messages if m.get("role") == "user"]
+                stream_kwargs["input"] = user_messages[-1:] if user_messages else messages
+            else:
+                # Send full accumulated messages for loop turns
+                input_list = [{"role": "system", "content": full_system}] + local_messages
+                stream_kwargs["input"] = input_list
+
+            try:
+                async with client.responses.stream(**stream_kwargs) as stream:
+                    try:
+                        async for event in stream:
+                            # 1. Text delta
+                            if event.type == "response.output_text.delta":
+                                chunk = event.delta
+                                if in_thinking_block:
+                                    thinking_buffer += chunk
+                                    close_pos = thinking_buffer.lower().find("</thinking")
+                                    if close_pos != -1:
                                         tag_len = 10
-                                    # Emit any text before <thinking> as normal content
-                                    before = thinking_buffer[:open_idx]
-                                    if before:
-                                        yield (
-                                            "data: "
-                                            + json.dumps({"type": "content_block_delta", "delta": {"text": before}})
-                                            + "\n\n"
-                                        )
-                                    # Signal thinking panel open
-                                    yield "data: " + json.dumps({"type": "thinking_start"}) + "\n\n"
-                                    thinking_emitted = True
-                                    in_thinking_block = True
-                                    # Buffer only what comes after <thinking>
-                                    thinking_buffer = thinking_buffer[open_idx + tag_len:]
-                                elif not thinking_emitted:
-                                    # Haven't hit <thinking> yet — keep a short trailing buffer
-                                    # to catch tags that arrive split across chunks, flush older text
-                                    _tag = "<thinking>"
-                                    if len(thinking_buffer) > len(_tag) * 2:
-                                        flush = thinking_buffer[:-len(_tag)]
-                                        thinking_buffer = thinking_buffer[-len(_tag):]
-                                        yield (
-                                            "data: "
-                                            + json.dumps({"type": "content_block_delta", "delta": {"text": flush}})
-                                            + "\n\n"
-                                        )
-                                else:
-                                    # thinking already done — forward as normal
-                                    thinking_buffer = ""
-                                    yield (
-                                        "data: "
-                                        + json.dumps({"type": "content_block_delta", "delta": {"text": chunk}})
-                                        + "\n\n"
-                                    )
-
-
-                        # Function tool calls — AI autonomously called one of our tools
-                        elif event.type == "response.output_item.done":
-                            item = getattr(event, "item", None)
-                            if item is None or getattr(item, "type", None) != "function_call":
-                                pass  # not a function call, skip
-
-                            elif getattr(item, "name", None) == "search_web":
-                                # —— Google Web Search ——————————————————————
-                                try:
-                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
-                                    query = args.get("query", "")
-                                    if query:
-                                        # Tell the frontend: search is starting
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "searching",
-                                                "label": f"Searching Google for: {query[:60]}",
-                                            })
-                                            + "\n\n"
-                                        )
-                                        search_task = asyncio.create_task(_perform_google_search(
-                                            query,
-                                            synthesis_deployment=deployment,
-                                            history=messages,
-                                        ))
-                                        while not search_task.done():
-                                            try:
-                                                await asyncio.wait_for(asyncio.shield(search_task), timeout=4.0)
-                                            except asyncio.TimeoutError:
-                                                yield ": keep-alive\n\n"
-                                        search_result = await search_task
-                                        sources = search_result.get("sources", [])
-                                        snippet = search_result.get("answer", "")[:1200]
-
-                                        # Tell the frontend: search done + sources ready
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "done",
-                                                "label": f"Found {len(sources)} source(s)",
-                                                "sources": sources,
-                                            })
-                                            + "\n\n"
-                                        )
-
-                                        # Inject the search result as a text block so the model
-                                        # can reference it in its streamed reply
-                                        grounding_text = (
-                                            f"[Google Search Result for: {query}]\n"
-                                            f"{snippet}\n"
-                                            f"Sources: {', '.join(s['url'] for s in sources[:5])}"
-                                        )
-                                        assistant_content += grounding_text
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "content_block_delta",
-                                                "delta": {"text": ""},  # empty — content injected server-side
-                                            })
-                                            + "\n\n"
-                                        )
-                                except Exception as search_err:
-                                    import traceback
-                                    print("--- GOOGLE SEARCH TOOL EXCEPTION ---")
-                                    traceback.print_exc()
-                                    print("-------------------------------------")
-                                    logger.error("Google search tool call failed: %s", search_err, exc_info=True)
-                                    yield (
-                                        "data: "
-                                        + json.dumps({
-                                            "type": "search_activity",
-                                            "status": "error",
-                                            "label": f"Web search failed: {str(search_err)}",
-                                        })
-                                        + "\n\n"
-                                    )
-
-                            elif getattr(item, "name", None) == "generate_image":
-                                # —— Image Generation ——————————————————————
-                                try:
-                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
-                                    img_prompt = args.get("prompt", "")
-                                    img_style = args.get("style", "photorealistic")
-                                    if img_prompt:
-                                        # Tell the frontend: image job is queued
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "searching",
-                                                "label": "Generating image with FLUX...",
-                                            })
-                                            + "\n\n"
-                                        )
-                                        job_id = await _enqueue_image_gen(
-                                            user_id, conversation_id, img_prompt, img_style
-                                        )
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "image_gen_queued",
-                                                "job_id": job_id,
-                                                "prompt": img_prompt,
-                                            })
-                                            + "\n\n"
-                                        )
-                                except Exception as img_err:
-                                    logger.error("Failed to enqueue image_gen job: %s", img_err)
-                                    yield (
-                                        "data: "
-                                        + json.dumps({
-                                            "type": "search_activity",
-                                            "status": "error",
-                                            "label": "Image generation could not be started.",
-                                        })
-                                        + "\n\n"
-                                    )
-
-                            elif getattr(item, "name", None) == "execute_code":
-                                # ── Code Sandbox Execution (internet-enabled) ──────────────
-                                try:
-                                    from app.services.code_sandbox import execute_code_in_sandbox
-                                    args = json.loads(getattr(item, "arguments", "{}") or "{}")
-                                    code_str  = args.get("code", "")
-                                    lang_str  = args.get("language", "python")
-
-                                    if code_str:
-                                        # Notify frontend that code is running
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "searching",
-                                                "label": f"Running {lang_str} code...",
-                                            })
-                                            + "\n\n"
-                                        )
-
-                                        exec_task = asyncio.create_task(execute_code_in_sandbox(
-                                            code=code_str,
-                                            language=lang_str,
-                                            conversation_id=conversation_id,
-                                            user_id=user_id,
-                                            timeout_seconds=60,
-                                        ))
-                                        while not exec_task.done():
-                                            try:
-                                                await asyncio.wait_for(asyncio.shield(exec_task), timeout=4.0)
-                                            except asyncio.TimeoutError:
-                                                yield ": keep-alive\n\n"
-                                        exec_output, exec_files = await exec_task
-
-                                        # Notify frontend: execution done
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "search_activity",
-                                                "status": "done",
-                                                "label": "Code execution complete.",
-                                            })
-                                            + "\n\n"
-                                        )
-
-                                        # Inject the execution output into the assistant reply so
-                                        # the model can reason over it and narrate the result.
-                                        result_block = f"\n\n**Code output:**\n```\n{exec_output[:6000]}\n```"
-                                        if exec_files:
-                                            file_list = ", ".join(f["filename"] for f in exec_files)
-                                            result_block += f"\n\n**Generated files:** {file_list}"
-                                        assistant_content += result_block
-
-                                        # Stream the result block as a delta so it appears in the chat
-                                        yield (
-                                            "data: "
-                                            + json.dumps({
-                                                "type": "content_block_delta",
-                                                "delta": {"text": result_block},
-                                            })
-                                            + "\n\n"
-                                        )
-
-                                        # Forward generated file cards to the frontend
-                                        if exec_files:
+                                        if thinking_buffer[close_pos:].startswith("</thinking>"):
+                                            tag_len = 11
+                                        thought_chunk = thinking_buffer[:close_pos]
+                                        if thought_chunk:
+                                            accumulated_thinking += thought_chunk
                                             yield (
                                                 "data: "
-                                                + json.dumps({
-                                                    "type": "generated_files",
-                                                    "files": exec_files,
-                                                })
+                                                + json.dumps({"type": "thinking_delta", "delta": {"text": thought_chunk}})
                                                 + "\n\n"
                                             )
+                                        yield "data: " + json.dumps({"type": "thinking_done"}) + "\n\n"
+                                        in_thinking_block = False
+                                        after = thinking_buffer[close_pos + tag_len:].lstrip("\n")
+                                        thinking_buffer = ""
+                                        if after:
+                                            assistant_content += after
+                                            yield (
+                                                "data: "
+                                                + json.dumps({"type": "content_block_delta", "delta": {"text": after}})
+                                                + "\n\n"
+                                            )
+                                    else:
+                                        accumulated_thinking += chunk
+                                        yield (
+                                            "data: "
+                                            + json.dumps({"type": "thinking_delta", "delta": {"text": chunk}})
+                                            + "\n\n"
+                                        )
+                                else:
+                                    thinking_buffer += chunk
+                                    open_idx = thinking_buffer.lower().find("<thinking")
+                                    if open_idx != -1 and not thinking_emitted:
+                                        tag_len = 9
+                                        if thinking_buffer[open_idx:].startswith("<thinking>"):
+                                            tag_len = 10
+                                        before = thinking_buffer[:open_idx]
+                                        if before:
+                                            assistant_content += before
+                                            yield (
+                                                "data: "
+                                                + json.dumps({"type": "content_block_delta", "delta": {"text": before}})
+                                                + "\n\n"
+                                            )
+                                        yield "data: " + json.dumps({"type": "thinking_start"}) + "\n\n"
+                                        thinking_emitted = True
+                                        in_thinking_block = True
+                                        thinking_buffer = thinking_buffer[open_idx + tag_len:]
+                                    elif not thinking_emitted:
+                                        _tag = "<thinking>"
+                                        if len(thinking_buffer) > len(_tag) * 2:
+                                            flush = thinking_buffer[:-len(_tag)]
+                                            thinking_buffer = thinking_buffer[-len(_tag):]
+                                            assistant_content += flush
+                                            yield (
+                                                "data: "
+                                                + json.dumps({"type": "content_block_delta", "delta": {"text": flush}})
+                                                + "\n\n"
+                                            )
+                                    else:
+                                        thinking_buffer = ""
+                                        assistant_content += chunk
+                                        yield (
+                                            "data: "
+                                            + json.dumps({"type": "content_block_delta", "delta": {"text": chunk}})
+                                            + "\n\n"
+                                        )
 
-                                except Exception as exec_err:
-                                    logger.error("Code sandbox execution failed: %s", exec_err, exc_info=True)
-                                    err_text = f"\n\n**Code execution error:** {exec_err}"
-                                    assistant_content += err_text
+                            # 2. Tool calls
+                            elif event.type == "response.output_item.done":
+                                item = getattr(event, "item", None)
+                                if item is not None and getattr(item, "type", None) == "function_call":
+                                    t_id = getattr(item, "id", None) or f"call_{len(current_tool_calls)}_{iteration}"
+                                    t_name = getattr(item, "name", None)
+                                    t_args = getattr(item, "arguments", "{}")
+                                    current_tool_calls.append({
+                                        "id": t_id,
+                                        "name": t_name,
+                                        "arguments": t_args
+                                    })
+
+                        # Flush any remaining buffer at the end of the stream
+                        if not thinking_emitted and thinking_buffer:
+                            assistant_content += thinking_buffer
+                            yield (
+                                "data: "
+                                + json.dumps({"type": "content_block_delta", "delta": {"text": thinking_buffer}})
+                                + "\n\n"
+                            )
+                            thinking_buffer = ""
+                    except Exception as iter_err:
+                        current_stream_failed = True
+                        current_error_message = str(iter_err)
+                        logger.error(f"Error during stream iteration: {iter_err}")
+
+                    if not current_stream_failed:
+                        try:
+                            final_response = await stream.get_final_response()
+                            response_id = final_response.id if final_response else None
+                            if response_id:
+                                yield (
+                                    "data: "
+                                    + json.dumps({"type": "response_id", "response_id": response_id})
+                                    + "\n\n"
+                                )
+                            if final_response and hasattr(final_response, "usage") and final_response.usage:
+                                prompt_tokens += getattr(final_response.usage, "prompt_tokens", 0) or 0
+                                completion_tokens += getattr(final_response.usage, "completion_tokens", 0) or 0
+                        except Exception as final_err:
+                            logger.warning(f"Could not retrieve final response or tokens: {final_err}")
+                            if not assistant_content and not current_tool_calls:
+                                current_stream_failed = True
+                                current_error_message = str(final_err)
+
+            except Exception as stream_init_err:
+                current_stream_failed = True
+                current_error_message = str(stream_init_err)
+                logger.error(f"Error initializing stream: {stream_init_err}")
+
+            if current_stream_failed:
+                stream_failed = True
+                error_message = current_error_message
+                break
+
+            # If the model generated tool calls, execute them and continue the loop!
+            if current_tool_calls:
+                # Add assistant message with tool calls to local history
+                tool_calls_desc = "".join(
+                    f"\n\n[Executed Tool: {tc['name']} with arguments: {tc['arguments']}]"
+                    for tc in current_tool_calls
+                )
+                local_messages.append({
+                    "role": "assistant",
+                    "content": (assistant_content or "") + tool_calls_desc
+                })
+
+                # Execute all tool calls in this turn
+                tool_outputs = []
+                for tc in current_tool_calls:
+                    t_name = tc["name"]
+                    t_args_str = tc["arguments"]
+                    
+                    if t_name == "search_web":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            query = args.get("query", "")
+                            if query:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Searching the web for: {query}",
+                                    })
+                                    + "\n\n"
+                                )
+                                search_result = await _perform_google_search(
+                                    query,
+                                    synthesis_deployment=deployment,
+                                    history=local_messages,
+                                    return_raw=True,
+                                )
+                                sources = search_result.get("sources", [])
+                                google_context = search_result.get("google_context", "")
+
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "done",
+                                        "label": f"Found {len(sources)} source(s)",
+                                        "sources": sources,
+                                    })
+                                    + "\n\n"
+                                )
+                                tool_outputs.append(google_context)
+                            else:
+                                tool_outputs.append("Search query was empty.")
+                        except Exception as e:
+                            logger.error(f"Agent search_web failed: {e}")
+                            tool_outputs.append(f"Web search error: {str(e)}")
+
+                    elif t_name == "execute_code":
+                        try:
+                            from app.services.code_sandbox import execute_code_in_sandbox
+                            args = json.loads(t_args_str or "{}")
+                            code_str = args.get("code", "")
+                            lang_str = args.get("language", "python")
+                            if code_str:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Running {lang_str} code...",
+                                    })
+                                    + "\n\n"
+                                )
+                                exec_output, exec_files = await execute_code_in_sandbox(
+                                    code=code_str,
+                                    language=lang_str,
+                                    conversation_id=conversation_id,
+                                    user_id=user_id,
+                                    timeout_seconds=60,
+                                )
+                                if exec_files:
+                                    accumulated_files.extend(exec_files)
                                     yield (
                                         "data: "
                                         + json.dumps({
-                                            "type": "content_block_delta",
-                                            "delta": {"text": err_text},
+                                            "type": "generated_files",
+                                            "files": exec_files,
                                         })
                                         + "\n\n"
                                     )
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "done",
+                                        "label": "Code execution complete.",
+                                    })
+                                    + "\n\n"
+                                )
+                                tool_outputs.append(f"Code execution stdout/stderr:\n{exec_output}")
+                            else:
+                                tool_outputs.append("Code snippet was empty.")
+                        except Exception as e:
+                            logger.error(f"Agent execute_code failed: {e}")
+                            tool_outputs.append(f"Code sandbox error: {str(e)}")
 
-                        # Legacy web_search_preview events — forward if they somehow still appear
-                        elif event.type in (
-                            "response.web_search_call.in_progress",
-                            "response.web_search_call.searching",
-                        ):
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "search_activity", "status": "searching", "label": "Searching the web..."})
-                                + "\n\n"
-                            )
-                        elif event.type == "response.web_search_call.completed":
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "search_activity", "status": "done", "label": "Search complete."})
-                                + "\n\n"
-                            )
-                except Exception as iter_err:
-                    stream_failed = True
-                    error_message = str(iter_err)
-                    logger.error(f"Error during stream iteration: {iter_err}")
+                    elif t_name == "generate_image":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            img_prompt = args.get("prompt", "")
+                            img_style = args.get("style", "photorealistic")
+                            if img_prompt:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": "Generating image with FLUX...",
+                                    })
+                                    + "\n\n"
+                                )
+                                job_id = await _enqueue_image_gen(
+                                    user_id, conversation_id, img_prompt, img_style
+                                )
+                                accumulated_image_jobs.append({
+                                    "job_id": job_id,
+                                    "prompt": img_prompt,
+                                    "status": "pending"
+                                })
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "image_gen_queued",
+                                        "job_id": job_id,
+                                        "prompt": img_prompt,
+                                    })
+                                    + "\n\n"
+                                )
+                                tool_outputs.append(f"Image generation job queued successfully with ID: {job_id}.")
+                            else:
+                                tool_outputs.append("Image prompt was empty.")
+                        except Exception as e:
+                            logger.error(f"Agent generate_image failed: {e}")
+                            tool_outputs.append(f"Image generation error: {str(e)}")
+                    else:
+                        tool_outputs.append(f"Unknown tool name: {t_name}")
 
-                if not stream_failed:
-                    try:
-                        final_response = await stream.get_final_response()
-                        response_id = final_response.id if final_response else None
-                        if response_id:
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "response_id", "response_id": response_id})
-                                + "\n\n"
-                            )
+                # Add tool response messages to local history
+                for tc, t_out in zip(current_tool_calls, tool_outputs):
+                    local_messages.append({
+                        "role": "system",
+                        "content": f"[Tool Output for {tc['name']}]:\n{t_out}"
+                    })
 
-                        # Extract actual token usage details
-                        if final_response and hasattr(final_response, "usage") and final_response.usage:
-                            prompt_tokens = getattr(final_response.usage, "prompt_tokens", 0) or 0
-                            completion_tokens = getattr(final_response.usage, "completion_tokens", 0) or 0
-                    except Exception as final_err:
-                        logger.warning(f"Could not retrieve final response or tokens: {final_err}")
-                        # If get_final_response fails but we streamed content, don't crash the conversation
-                        if not assistant_content:
-                            stream_failed = True
-                            error_message = str(final_err)
+                iteration += 1
+                continue
 
-        except Exception as stream_init_err:
-            stream_failed = True
-            error_message = str(stream_init_err)
-            logger.error(f"Error initializing stream: {stream_init_err}")
+            # No tool calls: check satisfaction audit and break
+            user_msg_text = messages[-1].get("content", "") if messages else ""
+            if routing_mode in ("think", "solve") and assistant_content and iteration < max_iterations:
+                audit_result = await run_satisfaction_audit(
+                    user_query=user_msg_text,
+                    assistant_answer=assistant_content,
+                    synthesis_deployment=deployment
+                )
+                if audit_result and audit_result != "SATISFACTORY":
+                    logger.info(f"Satisfaction audit feedback: {audit_result}")
+                    # Feed audit feedback back to model as system prompt and run one more iteration!
+                    local_messages.append({
+                        "role": "system",
+                        "content": (
+                            "AUDIT FEEDBACK: Your draft answer was evaluated as incomplete or unsatisfactory "
+                            f"for the following reasons:\n{audit_result}\n\n"
+                            "Please correct these gaps now. You may run another search or execute code "
+                            "if you need more information, then generate the final complete and satisfactory answer."
+                        )
+                    })
+                    iteration += 1
+                    continue
+
+            # Fully satisfactory, break the loop!
+            break
 
         if stream_failed:
             lower_err = error_message.lower()
@@ -877,52 +1007,79 @@ async def chat_stream_generator(
                 "tokens_input": actual_prompt_tokens,
                 "tokens_output": actual_completion_tokens,
             }
+            content_parts = {}
+            if accumulated_thinking:
+                content_parts["thinking_content"] = accumulated_thinking
+            if accumulated_image_jobs:
+                content_parts["image_jobs"] = accumulated_image_jobs
+            if accumulated_files:
+                content_parts["generated_files"] = [
+                    {
+                        "filename": f["filename"],
+                        "download_url": f["download_url"],
+                        "size_bytes": f["size_bytes"]
+                    } for f in accumulated_files
+                ]
+            if content_parts:
+                assistant_msg_insert["content_parts"] = content_parts
             supabase = get_supabase_admin()
-            supabase.table("messages").insert(assistant_msg_insert).execute()
+            await asyncio.to_thread(
+                lambda: supabase.table("messages").insert(assistant_msg_insert).execute()
+            )
 
             # Reconcile token budget
             actual_total = actual_prompt_tokens + actual_completion_tokens
             diff = actual_total - estimated_tokens
             if diff != 0:
                 try:
-                    supabase.rpc("reconcile_token_budget", {
-                        "p_user_id": user_id,
-                        "p_diff": diff
-                    }).execute()
+                    await asyncio.to_thread(
+                        lambda: supabase.rpc("reconcile_token_budget", {
+                            "p_user_id": user_id,
+                            "p_diff": diff
+                        }).execute()
+                    )
                     logger.info(f"Reconciled token budget for user {user_id} via RPC: diff={diff}")
                 except Exception as rpc_err:
                     logger.warning("Failed to call reconcile_token_budget RPC, falling back to read-modify-write: %s", rpc_err)
                     try:
                         current_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                        budget_res = (
-                            supabase.table("token_budgets")
-                            .select("tokens_used")
-                            .eq("user_id", user_id)
-                            .eq("period", current_date_str)
-                            .maybe_single()
-                            .execute()
-                        )
+                        def get_budget():
+                            return (
+                                supabase.table("token_budgets")
+                                .select("tokens_used")
+                                .eq("user_id", user_id)
+                                .eq("period", current_date_str)
+                                .maybe_single()
+                                .execute()
+                            )
+                        budget_res = await asyncio.to_thread(get_budget)
                         if budget_res.data:
                             current_used = budget_res.data.get("tokens_used", 0)
                             new_used = max(0, current_used + diff)
-                            supabase.table("token_budgets").update({
-                                "tokens_used": new_used
-                            }).eq("user_id", user_id).eq("period", current_date_str).execute()
+                            await asyncio.to_thread(
+                                lambda: supabase.table("token_budgets").update({
+                                    "tokens_used": new_used
+                                }).eq("user_id", user_id).eq("period", current_date_str).execute()
+                            )
                             logger.info(f"Reconciled token budget for user {user_id} via fallback: new_used={new_used}")
                     except Exception as fallback_err:
                         logger.error("Failed in-memory fallback for token budget reconciliation: %s", fallback_err)
 
             # Update message count in conversation
-            count_res = (
-                supabase.table("messages")
-                .select("id", count="exact")
-                .eq("conversation_id", conversation_id)
-                .execute()
-            )
+            def count_msgs():
+                return (
+                    supabase.table("messages")
+                    .select("id", count="exact")
+                    .eq("conversation_id", conversation_id)
+                    .execute()
+                )
+            count_res = await asyncio.to_thread(count_msgs)
             msg_count = count_res.count if count_res.count is not None else (len(messages) + 2)
-            supabase.table("conversations").update({
-                "message_count": msg_count,
-            }).eq("id", conversation_id).execute()
+            await asyncio.to_thread(
+                lambda: supabase.table("conversations").update({
+                    "message_count": msg_count,
+                }).eq("id", conversation_id).execute()
+            )
 
         except Exception as db_err:
             logger.error(f"Failed to save assistant response: {db_err}")
@@ -942,7 +1099,9 @@ async def chat_stream_generator(
                 "policy_decision": "ALLOW",
             }
             supabase = get_supabase_admin()
-            supabase.table("audit_log").insert(audit_entry).execute()
+            await asyncio.to_thread(
+                lambda: supabase.table("audit_log").insert(audit_entry).execute()
+            )
         except Exception as audit_err:
             logger.error(f"Failed to log routing decision to audit_log: {audit_err}")
 
@@ -952,6 +1111,22 @@ async def chat_stream_generator(
         logger.error(f"Error in chat stream generator: {e}")
         yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
+
+
+def is_code_or_text_file(filename: str, mime_type: str = "") -> bool:
+    _, ext = os.path.splitext(filename.lower())
+    code_extensions = {
+        ".txt", ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".java", 
+        ".py", ".c", ".cpp", ".h", ".cs", ".sh", ".json", ".md", 
+        ".yaml", ".yml", ".xml", ".sql", ".csv", ".rs", ".go", ".rb", 
+        ".php", ".kt", ".gradle", ".properties", ".ipynb", ".ini", ".cfg",
+        ".bat", ".cmd", ".ps1"
+    }
+    if ext in code_extensions:
+        return True
+    if mime_type and (mime_type.startswith("text/") or mime_type == "application/json" or mime_type == "application/javascript"):
+        return True
+    return False
 
 
 _VALID_MODES = {"think", "solve", "discuss"}
@@ -1025,7 +1200,9 @@ async def stream_chat(
             for _attempt_mode in _modes_to_try:
                 try:
                     conv_insert["mode"] = _attempt_mode
-                    conv_res = supabase.table("conversations").insert(conv_insert).execute()
+                    conv_res = await asyncio.to_thread(
+                        lambda: supabase.table("conversations").insert(conv_insert).execute()
+                    )
                     if conv_res.data:
                         if _attempt_mode != mode:
                             logger.warning(
@@ -1070,13 +1247,15 @@ async def stream_chat(
             raise HTTPException(status_code=500, detail=f"Database error during conversation creation: {e}")
     else:
         try:
-            conv_res = (
-                supabase.table("conversations")
-                .select("user_id, mode, nano_turn_count")
-                .eq("id", conversation_id)
-                .maybe_single()
-                .execute()
-            )
+            def fetch_conv():
+                return (
+                    supabase.table("conversations")
+                    .select("user_id, mode, nano_turn_count")
+                    .eq("id", conversation_id)
+                    .maybe_single()
+                    .execute()
+                )
+            conv_res = await asyncio.to_thread(fetch_conv)
             if not conv_res.data:
                 raise HTTPException(status_code=404, detail="Conversation not found.")
             if conv_res.data.get("user_id") != user_id:
@@ -1107,11 +1286,66 @@ async def stream_chat(
         f"reason={decision.routing_reason}"
     )
 
+    # Download code/text attachments and place them in the sandbox, then inject them into the system prompt
+    attachments = payload.get("attachments", [])
+    injected_code_prompts = []
+    if attachments:
+        import httpx
+        for att in attachments:
+            att_name = att.get("filename", "")
+            att_url = att.get("url", "")
+            att_mime = att.get("mime_type", "")
+            
+            if att_name and att_url and is_code_or_text_file(att_name, att_mime):
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        r = await client.get(att_url)
+                        if r.status_code == 200:
+                            content_bytes = r.content
+                            
+                            # Standardize path matching serve_sandbox_file / execute_code_in_sandbox
+                            work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
+                            data_dir = os.path.join(work_dir, "data")
+                            os.makedirs(data_dir, exist_ok=True)
+                            file_path = os.path.join(data_dir, att_name)
+                            with open(file_path, "wb") as f:
+                                f.write(content_bytes)
+                                
+                            logger.info(f"Successfully downloaded and placed code file {att_name} in sandbox: {file_path}")
+                            
+                            try:
+                                content_str = content_bytes.decode("utf-8", errors="replace")
+                            except Exception:
+                                content_str = "[Binary or non-UTF-8 content]"
+                                
+                            # Truncate content to avoid token limits (max 40k chars)
+                            if len(content_str) > 40000:
+                                content_str = content_str[:40000] + "\n... [TRUNCATED] ..."
+                                
+                            injected_code_prompts.append(
+                                f"--- START FILE: {att_name} ---\n{content_str}\n--- END FILE: {att_name} ---"
+                            )
+                except Exception as e:
+                    logger.error(f"Failed to process code attachment {att_name}: {e}")
+                    
+    if injected_code_prompts:
+        code_context_str = (
+            "\n\n[System Context: The user has attached coding/text files to this conversation. "
+            "These files have been temporarily saved to your active sandbox workspace directory. "
+            "You can run, test, or modify them using your execute_code tool. "
+            "Here are the contents of the attached files:\n" +
+            "\n\n".join(injected_code_prompts) +
+            "\n]\n\n"
+        )
+        decision.system_prompt += code_context_str
+
     # 3. If nano interceptor fired, increment the turn counter in the database
     if decision.was_intercepted:
         try:
             # We call the increment_nano_turns RPC to update the count
-            supabase.rpc("increment_nano_turns", {"p_conv_id": conversation_id}).execute()
+            await asyncio.to_thread(
+                lambda: supabase.rpc("increment_nano_turns", {"p_conv_id": conversation_id}).execute()
+            )
         except Exception as e:
             logger.error(f"Failed to increment nano turn count: {e}")
 
@@ -1124,7 +1358,9 @@ async def stream_chat(
             "role": "user",
             "content": last_user_msg,
         }
-        supabase.table("messages").insert(user_msg_insert).execute()
+        await asyncio.to_thread(
+            lambda: supabase.table("messages").insert(user_msg_insert).execute()
+        )
     except Exception as e:
         logger.error(f"Failed to save user message to database (non-fatal, stream continues): {e}")
 

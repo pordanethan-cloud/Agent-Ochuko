@@ -1,4 +1,4 @@
-﻿# app/api/v1/endpoints/audio.py
+# app/api/v1/endpoints/audio.py
 """
 Audio API routes ΓÇö /v1/audio/*
 
@@ -206,8 +206,22 @@ async def transcribe_audio(
         raw_transcript: str = transcription if isinstance(transcription, str) else transcription.text
         raw_transcript = raw_transcript.strip()
 
-        if not raw_transcript:
-            # Silent chunk ΓÇö return existing text unchanged
+        # Clean transcript to match common Whisper hallucinations on silent/noisy audio
+        cleaned_transcript = "".join(c for c in raw_transcript if c.isalnum() or c.isspace()).lower().strip()
+        whisper_hallucinations = {
+            "thank you",
+            "thank you very much",
+            "thanks for watching",
+            "you",
+            "bye",
+            "please subscribe",
+            "subscribe",
+            "subtitles by",
+            "subtitles",
+        }
+
+        if not raw_transcript or cleaned_transcript in whisper_hallucinations:
+            # Silent/hallucinated chunk — return existing text unchanged
             return {"text": existing_text}
 
     except Exception as exc:

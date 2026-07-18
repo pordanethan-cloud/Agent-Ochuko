@@ -30,10 +30,14 @@ BASE_IDENTITY = (
     "Tone: confident, direct, crisp. No filler (\"Certainly!\", \"Sure!\"), no emojis, "
     "no exclamation marks unless the user uses them first. "
     "Every sentence must add real information.\n\n"
+    "When integrating web search results from `search_web`, present the facts naturally. "
+    "NEVER say 'based on the context you provided', 'from the context shared', or 'according to the context'. "
+    "Refer to them as search results or present them directly as current facts.\n\n"
     "NEVER ask clarifying questions. Pick the most reasonable interpretation and act. "
     "If a request is ambiguous, execute the most useful reading immediately.\n\n"
     "Correct factual errors directly. Never moralize or lecture. "
-    "Decline clearly illegal requests in one sentence, offer the nearest legal alternative, move on."
+    "Decline clearly illegal requests in one sentence, offer the nearest legal alternative, move on.\n\n"
+    "Tools available: `search_web` (web search), `execute_code` (Python/JS/Bash sandbox), and `generate_image` (AI image generator)."
 )
 
 # ── Skill modules ──────────────────────────────────────────────────────────────
@@ -43,9 +47,15 @@ SKILLS: dict[str, str] = {
     "code": (
         "CODE EXECUTION:\n"
         "You have an execute_code tool — a persistent sandbox (Python/JS/Bash) with FULL internet access.\n"
-        "The sandbox: installs packages automatically (pip/npm), makes HTTP requests, "
+        "The environment is structured with two separate directories:\n"
+        "  1. `./src/` (Where your scripts are saved and executed).\n"
+        "  2. `./data/` (Where all user data files are stored, and where you must save outputs).\n"
+        "- Reading Files: If you need to read a file, read it from `../data/filename.ext`.\n"
+        "- Writing Files: Save all generated files (plots, tables, exports) under `../data/filename.ext`.\n"
+        "- Do not attempt to read or write to root (`./`) or `/workspace/`. Use the relative `../data/` path.\n"
+        "The sandbox installs packages automatically (pip/npm), makes HTTP requests, "
         "fetches live APIs, reads/writes files, generates charts (matplotlib), converts formats.\n"
-        "Files from previous turns in this conversation are available by filename.\n"
+        "Files from previous turns in this conversation are available by filename in `../data/`.\n"
         "Generated files (CSV, PNG, PDF, ZIP) are auto-uploaded and returned as download links.\n"
         "When to use execute_code: run/test code, analyse data, plot charts, fetch live data, "
         "convert files, any computation that benefits from actual execution.\n"
@@ -112,12 +122,12 @@ _SKILL_PATTERNS: list[tuple[str, re.Pattern]] = [
         re.IGNORECASE
     )),
     ("code", re.compile(
-        r"\b(run|execute|running|python|javascript|node\.?js|bash|shell|script|"
+        r"\b(run|execute|running|python|javascript|typescript|react|vue|angular|svelte|component|node\.?js|bash|shell|script|docker|kubernetes|sql|database|query|html|css|c#|java|c\+\+|rust|golang|json|yaml|xml|csv|"
         r"debug|fix\s+(?:this\s+)?(?:code|error|bug)|test\s+(?:this\s+)?code|"
         r"pip\s+install|npm\s+install|import\s+\w|def\s+\w|class\s+\w|"
         r"function\s+\w|traceback|ModuleNotFoundError|syntax\s+error|"
-        r"parse\s+(?:this\s+)?(?:csv|json|xml)|convert\s+(?:the\s+)?file|"
-        r"generate\s+(?:a\s+)?(?:chart|plot|graph|csv|excel|pdf))\b",
+        r"parse\s+(?:this\s+)?(?:csv|json|xml|data|file)|convert\s+(?:the\s+)?file|"
+        r"generate\s+(?:a\s+)?(?:chart|plot|graph|csv|excel|pdf|table))\b",
         re.IGNORECASE
     )),
     ("image", re.compile(

@@ -717,6 +717,33 @@ def get_read_sas_url(blob_url: str) -> str:
         return blob_url
 
 
+def _clean_job_error_message(job_type: str, raw_error: str) -> str:
+    """
+    Sanitizes raw API / runtime error messages into clean user-facing descriptions.
+    Masks API keys and details.
+    """
+    import re
+    # Mask Hugging Face keys
+    raw_error = re.sub(r"hf_[a-zA-Z0-9]{34}", "hf_******", raw_error)
+    # Mask OpenAI keys
+    raw_error = re.sub(r"sk-[a-zA-Z0-9]+", "sk-******", raw_error)
+
+    lower = raw_error.lower()
+    if job_type == "image_gen":
+        if "depleted" in lower or "monthly included credits" in lower or "402" in lower:
+            return "Monthly Hugging Face inference quota or credits depleted. Daily/monthly limits will refresh later."
+        if "rate-limited" in lower or "rate limit" in lower or "too many requests" in lower or "429" in lower:
+            return "Hugging Face API rate limit reached. The AI engine is experiencing high traffic; please try again shortly."
+        if "deprecated and no longer supported" in lower or "deprecated" in lower or "410" in lower:
+            return "The requested image generation model is deprecated or disabled on the serverless API."
+        if "not supported by provider" in lower or "400" in lower:
+            return "The requested model is not supported by the Hugging Face inference provider."
+        if "exhausted" in lower:
+            return "All available image generation endpoints are currently rate-limited or exhausted. Please try again shortly."
+        return f"Image generation failed: {raw_error}"
+    return raw_error
+
+
 @app.queue_trigger(arg_name="msg", queue_name="agent-jobs", connection="AZURE_STORAGE_CONNECTION_STRING")
 def agent_jobs_trigger(msg: func.QueueMessage) -> None:
     """
@@ -894,6 +921,7 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
 
             # Additional fallback options specified in implementation plan
             for fallback_model in [
+                "stabilityai/stable-diffusion-3-medium-diffusers",
                 "black-forest-labs/FLUX.1-schnell",
                 "SG161222/RealVisXL_V4.0",
                 "stabilityai/sdxl-turbo",
@@ -1052,7 +1080,7 @@ def agent_jobs_trigger(msg: func.QueueMessage) -> None:
             update_data = {
                 "retry_count": new_retries,
                 "status": "failed",
-                "error": original_error_msg,
+                "error": _clean_job_error_message(job_type, original_error_msg),
                 "completed_at": datetime.now(timezone.utc).isoformat()
             }
             db.table("jobs").update(update_data).eq("id", job_id).execute()
