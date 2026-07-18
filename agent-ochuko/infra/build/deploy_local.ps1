@@ -33,7 +33,7 @@ Write-Host "======================================" -ForegroundColor Cyan
 
 # 1a. Build Docker image
 Write-Host "`n[1/3] Building Docker image..." -ForegroundColor Yellow
-docker build -t $DockerImage -f $DockerfilePath $BackendPath
+docker build --platform linux/amd64 --provenance=false -t $DockerImage -f $DockerfilePath $BackendPath
 if ($LASTEXITCODE -ne 0) { Write-Error "Docker build failed!"; Stop-Transcript; exit 1 }
 
 # 1b. Push to Docker Hub
