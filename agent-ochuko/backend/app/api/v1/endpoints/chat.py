@@ -99,6 +99,18 @@ async def run_satisfaction_audit(
             ]
         )
         feedback = (response.output_text or "").strip()
+        lower_feedback = feedback.lower()
+        refusal_indicators = [
+            "cannot assist with",
+            "cannot fulfill",
+            "i'm sorry, but i cannot",
+            "i am sorry, but i cannot",
+            "assist with that request",
+            "assist with this request"
+        ]
+        if any(ind in lower_feedback for ind in refusal_indicators):
+            logger.warning(f"Satisfaction audit returned safety refusal: {feedback}. Bypassing audit.")
+            return "SATISFACTORY"
         if "SATISFACTORY" in feedback.upper() and len(feedback) < 20:
             return "SATISFACTORY"
         return feedback
@@ -747,6 +759,31 @@ async def chat_stream_generator(
                         current_error_message = str(iter_err)
                         logger.error(f"Error during stream iteration: {iter_err}")
 
+                    # Check if the generated content contains an Azure content filter safety refusal
+                    lower_content = assistant_content.lower()
+                    refusal_indicators = [
+                        "cannot assist with",
+                        "cannot fulfill",
+                        "i'm sorry, but i cannot",
+                        "i am sorry, but i cannot",
+                        "assist with that request",
+                        "assist with this request"
+                    ]
+                    if any(indicator in lower_content for indicator in refusal_indicators):
+                        logger.warning("Detected Azure OpenAI safety refusal in assistant content stream.")
+                        current_stream_failed = True
+                        current_error_message = "Content safety guardrails triggered."
+                        # Strip the refusal message from the accumulated content to keep it clean
+                        for indicator in refusal_indicators:
+                            pos = lower_content.find(indicator)
+                            if pos != -1:
+                                sorry_pos = lower_content.find("i'm sorry")
+                                if sorry_pos != -1:
+                                    assistant_content = assistant_content[:sorry_pos].strip()
+                                else:
+                                    assistant_content = assistant_content[:pos].strip()
+                                break
+
                     if not current_stream_failed:
                         try:
                             final_response = await stream.get_final_response()
@@ -937,10 +974,11 @@ async def chat_stream_generator(
             # No tool calls: check satisfaction audit and break
             user_msg_text = messages[-1].get("content", "") if messages else ""
             if routing_mode in ("think", "solve") and assistant_content and iteration < max_iterations:
+                nano_deployment = await get_config("NANO_MODEL_DEPLOYMENT", "gpt-5.4-nano")
                 audit_result = await run_satisfaction_audit(
                     user_query=user_msg_text,
                     assistant_answer=assistant_content,
-                    synthesis_deployment=deployment
+                    synthesis_deployment=nano_deployment
                 )
                 if audit_result and audit_result != "SATISFACTORY":
                     logger.info(f"Satisfaction audit feedback: {audit_result}")
