@@ -15,6 +15,10 @@ from app.services.supabase_admin import get_supabase_admin
 from app.services.queue_dispatcher import enqueue_job
 from google import genai
 from google.genai import types as genai_types
+from app.core.verification_gates import verification_gates
+from app.core.circuit_breaker import create_turn_circuit_breaker
+from app.core.prompt_defense import prompt_defense
+from app.core.reflexion_engine import create_reflexion_engine
 
 logger = logging.getLogger("app.api.v1.endpoints.chat")
 router = APIRouter()
@@ -61,63 +65,6 @@ def get_openai_client() -> AsyncAzureOpenAI:
             api_version=api_version
         )
     return _openai_client
-
-
-async def run_satisfaction_audit(
-    user_query: str,
-    assistant_answer: str,
-    synthesis_deployment: str
-) -> Optional[str]:
-    """
-    Evaluates the quality and completeness of the assistant's answer.
-    Returns:
-        - "SATISFACTORY" if the answer is good.
-        - A string detailing the gaps if the answer is incomplete or needs correction.
-    """
-    try:
-        az_client = get_openai_client()
-        system_prompt = (
-            "You are an expert AI quality auditor. Your job is to verify if the assistant's response "
-            "fully, accurately, and satisfactorily answers all parts of the user's request.\n\n"
-            "Evaluate against these criteria:\n"
-            "1. Did the assistant address EVERY question or implicit request in the prompt?\n"
-            "2. Is the answer factually coherent and free of obvious gaps?\n"
-            "3. If the user asked for specific details (e.g. transfer updates, scores, lists), did the assistant provide them?\n\n"
-            "If the answer is fully satisfactory, reply with ONLY the single word: SATISFACTORY\n"
-            "If the answer is unsatisfactory, incomplete, or contains errors, write a short, bulleted list "
-            "of the exact missing details or corrections needed (no other conversational filler)."
-        )
-        user_input = (
-            f"User Query: {user_query}\n\n"
-            f"Assistant Answer:\n{assistant_answer}"
-        )
-        response = await az_client.responses.create(
-            model=synthesis_deployment,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input}
-            ]
-        )
-        feedback = (response.output_text or "").strip()
-        lower_feedback = feedback.lower()
-        refusal_indicators = [
-            "cannot assist with",
-            "cannot fulfill",
-            "i'm sorry, but i cannot",
-            "i am sorry, but i cannot",
-            "assist with that request",
-            "assist with this request"
-        ]
-        if any(ind in lower_feedback for ind in refusal_indicators):
-            logger.warning(f"Satisfaction audit returned safety refusal: {feedback}. Bypassing audit.")
-            return "SATISFACTORY"
-        if "SATISFACTORY" in feedback.upper() and len(feedback) < 20:
-            return "SATISFACTORY"
-        return feedback
-    except Exception as e:
-        logger.warning(f"Satisfaction audit failed (non-fatal): {e}")
-        return "SATISFACTORY"
-
 
 async def _perform_google_search(
     query: str,
@@ -391,6 +338,7 @@ async def chat_stream_generator(
     mode: str,
     estimated_tokens: int,
     previous_response_id: Optional[str] = None,
+    user_timezone: Optional[str] = None,
 ):
     """
     Streams a response from the Azure OpenAI Responses API (ADR-002).
@@ -433,16 +381,58 @@ async def chat_stream_generator(
 
     try:
         # Skills module generates the full system prompt (identity + task skill).
-        # For THINK/SOLVE modes, append the reasoning instruction so the model
-        # wraps its chain-of-thought in <thinking> tags that we parse below.
-        full_system = system_prompt
+        # Inject the current datetime/day-of-week context into the system prompt so the model is aware of the exact date and day.
+        from zoneinfo import ZoneInfo
+        from datetime import timedelta
+        
+        local_now = None
+        tz_label = "WAT"
+        if user_timezone:
+            try:
+                tz = ZoneInfo(user_timezone)
+                local_now = datetime.now(tz)
+                tz_label = user_timezone
+            except Exception as tz_err:
+                logger.warning(f"Failed to load user timezone '{user_timezone}': {tz_err}")
+                
+        if local_now is None:
+            # Fallback to WAT (UTC+1)
+            tz = timezone(timedelta(hours=1))
+            local_now = datetime.now(tz)
+            
+        datetime_context = (
+            f"\n\n[System Context: Current User Time is {local_now.strftime('%I:%M %p')}, "
+            f"Date is {local_now.strftime('%A, %B %d, %Y')} ({tz_label}).]"
+        )
+        full_system = system_prompt + datetime_context
         if routing_mode in ("think", "solve"):
-            full_system = system_prompt + _THINKING_INSTRUCTION
+            full_system = full_system + _THINKING_INSTRUCTION
+
+        # Pre-loop agent task planning for complex multi-step goals
+        try:
+            from app.core.agent_planner import generate_plan, format_plan_for_system_prompt
+            last_user_msg = ""
+            if messages:
+                for m in reversed(messages):
+                    if m.get("role") == "user":
+                        last_user_msg = m.get("content", "")
+                        break
+            if last_user_msg:
+                plan_text = await generate_plan(
+                    user_message=last_user_msg,
+                    conversation_history=messages[:-1] if len(messages) > 1 else None,
+                    openai_client=client,
+                    nano_deployment=deployment,
+                )
+                if plan_text:
+                    full_system += format_plan_for_system_prompt(plan_text)
+                    logger.info("Injected execution plan into system prompt for user message: %.60s", last_user_msg)
+        except Exception as plan_err:
+            logger.warning("Task planning skipped (non-fatal): %s", plan_err)
 
         # State tracking for thinking-block extraction
         thinking_buffer = ""
         in_thinking_block = False
-        thinking_emitted = False  # emit thinking_start once
         accumulated_thinking = ""
         accumulated_image_jobs = []
         accumulated_files = []
@@ -537,7 +527,6 @@ async def chat_stream_generator(
         # State tracking for thinking-block extraction and agent loop
         thinking_buffer = ""
         in_thinking_block = False
-        thinking_emitted = False  # emit thinking_start once
         accumulated_thinking = ""
         accumulated_image_jobs = []
         accumulated_files = []
@@ -552,12 +541,22 @@ async def chat_stream_generator(
         # We construct a mutable copy of the messages for agent iterations
         local_messages = list(messages)
         iteration = 0
-        max_iterations = 4
+        max_iterations = 10
+        circuit_breaker = create_turn_circuit_breaker(max_steps=max_iterations)
+        reflexion = create_reflexion_engine(max_attempts=max_iterations)
+        active_tool_step = 0
 
         while iteration < max_iterations:
             current_tool_calls = []
             current_stream_failed = False
             current_error_message = ""
+            
+            try:
+                circuit_breaker.record_step(f"Turn iteration {iteration + 1}")
+            except Exception as cb_err:
+                logger.warning(f"Circuit breaker budget threshold: {cb_err}")
+
+            is_final_step = (iteration == max_iterations - 1)
             
             stream_kwargs: Dict[str, Any] = {
                 "model": deployment,
@@ -640,7 +639,7 @@ async def chat_stream_generator(
                         },
                     },
                 ],
-                "tool_choice": "auto",
+                "tool_choice": "none" if is_final_step else "auto",
             }
 
             # We use stateful multi-turn only on iteration 0 when previous_response_id is set
@@ -696,7 +695,7 @@ async def chat_stream_generator(
                                 else:
                                     thinking_buffer += chunk
                                     open_idx = thinking_buffer.lower().find("<thinking")
-                                    if open_idx != -1 and not thinking_emitted:
+                                    if open_idx != -1:
                                         tag_len = 9
                                         if thinking_buffer[open_idx:].startswith("<thinking>"):
                                             tag_len = 10
@@ -709,10 +708,9 @@ async def chat_stream_generator(
                                                 + "\n\n"
                                             )
                                         yield "data: " + json.dumps({"type": "thinking_start"}) + "\n\n"
-                                        thinking_emitted = True
                                         in_thinking_block = True
                                         thinking_buffer = thinking_buffer[open_idx + tag_len:]
-                                    elif not thinking_emitted:
+                                    else:
                                         _tag = "<thinking>"
                                         if len(thinking_buffer) > len(_tag) * 2:
                                             flush = thinking_buffer[:-len(_tag)]
@@ -723,14 +721,6 @@ async def chat_stream_generator(
                                                 + json.dumps({"type": "content_block_delta", "delta": {"text": flush}})
                                                 + "\n\n"
                                             )
-                                    else:
-                                        thinking_buffer = ""
-                                        assistant_content += chunk
-                                        yield (
-                                            "data: "
-                                            + json.dumps({"type": "content_block_delta", "delta": {"text": chunk}})
-                                            + "\n\n"
-                                        )
 
                             # 2. Tool calls
                             elif event.type == "response.output_item.done":
@@ -746,13 +736,23 @@ async def chat_stream_generator(
                                     })
 
                         # Flush any remaining buffer at the end of the stream
-                        if not thinking_emitted and thinking_buffer:
-                            assistant_content += thinking_buffer
-                            yield (
-                                "data: "
-                                + json.dumps({"type": "content_block_delta", "delta": {"text": thinking_buffer}})
-                                + "\n\n"
-                            )
+                        if thinking_buffer:
+                            if in_thinking_block:
+                                accumulated_thinking += thinking_buffer
+                                yield (
+                                    "data: "
+                                    + json.dumps({"type": "thinking_delta", "delta": {"text": thinking_buffer}})
+                                    + "\n\n"
+                                )
+                                yield "data: " + json.dumps({"type": "thinking_done"}) + "\n\n"
+                                in_thinking_block = False
+                            else:
+                                assistant_content += thinking_buffer
+                                yield (
+                                    "data: "
+                                    + json.dumps({"type": "content_block_delta", "delta": {"text": thinking_buffer}})
+                                    + "\n\n"
+                                )
                             thinking_buffer = ""
                     except Exception as iter_err:
                         current_stream_failed = True
@@ -831,6 +831,40 @@ async def chat_stream_generator(
                     t_name = tc["name"]
                     t_args_str = tc["arguments"]
                     
+                    # Increment tool step counter and emit dynamic agent step event
+                    active_tool_step += 1
+                    expected_total_steps = max(len(current_tool_calls), active_tool_step)
+                    step_label = f"Executing {t_name}..."
+
+                    try:
+                        args = json.loads(t_args_str or "{}")
+                        if t_name == "search_web":
+                            q = args.get("query", "")
+                            step_label = f"Searching web for: {q}" if q else "Searching web for information..."
+                        elif t_name == "execute_code":
+                            code_text = args.get("code", "").lower()
+                            if any(kw in code_text for kw in ["fitz", "pdf", "docx", "signature", "document"]):
+                                step_label = "Extracting document graphics & updating signatory..."
+                            elif any(kw in code_text for kw in ["plot", "matplotlib", "df", "pandas"]):
+                                step_label = "Processing data & generating chart..."
+                            else:
+                                step_label = "Running Python code in sandbox..."
+                        elif t_name == "generate_image":
+                            step_label = "Synthesizing image with FLUX..."
+                    except Exception:
+                        pass
+
+                    yield (
+                        "data: "
+                        + json.dumps({
+                            "type": "agent_step",
+                            "step": active_tool_step,
+                            "max_steps": expected_total_steps,
+                            "label": step_label,
+                        })
+                        + "\n\n"
+                    )
+
                     if t_name == "search_web":
                         try:
                             args = json.loads(t_args_str or "{}")
@@ -971,31 +1005,6 @@ async def chat_stream_generator(
                 iteration += 1
                 continue
 
-            # No tool calls: check satisfaction audit and break
-            user_msg_text = messages[-1].get("content", "") if messages else ""
-            if routing_mode in ("think", "solve") and assistant_content and iteration < max_iterations:
-                nano_deployment = await get_config("NANO_MODEL_DEPLOYMENT", "gpt-5.4-nano")
-                audit_result = await run_satisfaction_audit(
-                    user_query=user_msg_text,
-                    assistant_answer=assistant_content,
-                    synthesis_deployment=nano_deployment
-                )
-                if audit_result and audit_result != "SATISFACTORY":
-                    logger.info(f"Satisfaction audit feedback: {audit_result}")
-                    # Feed audit feedback back to model as system prompt and run one more iteration!
-                    local_messages.append({
-                        "role": "system",
-                        "content": (
-                            "AUDIT FEEDBACK: Your draft answer was evaluated as incomplete or unsatisfactory "
-                            f"for the following reasons:\n{audit_result}\n\n"
-                            "Please correct these gaps now. You may run another search or execute code "
-                            "if you need more information, then generate the final complete and satisfactory answer."
-                        )
-                    })
-                    iteration += 1
-                    continue
-
-            # Fully satisfactory, break the loop!
             break
 
         if stream_failed:
@@ -1008,8 +1017,18 @@ async def chat_stream_generator(
                 or "trigger" in lower_err
                 or "completed event" in lower_err
             )
+            is_rate_limit = (
+                "rate limit" in lower_err
+                or "too many requests" in lower_err
+                or "429" in lower_err
+                or "high demand" in lower_err
+                or "provisioned throughput" in lower_err
+                or "peak load" in lower_err
+            )
             if is_guardrail:
                 friendly_err = "The request or response was flagged by safety guardrails. Please modify your query and try again."
+            elif is_rate_limit:
+                friendly_err = f"The AI service is experiencing high demand: {error_message}"
             else:
                 friendly_err = f"A streaming connection issue occurred: {error_message}"
 
@@ -1324,9 +1343,10 @@ async def stream_chat(
         f"reason={decision.routing_reason}"
     )
 
-    # Download code/text attachments and place them in the sandbox, then inject them into the system prompt
+    # Download code/text or binary office/PDF attachments and place them in the sandbox, then inject them into the system prompt
     attachments = payload.get("attachments", [])
     injected_code_prompts = []
+    injected_binary_files = []
     if attachments:
         import httpx
         for att in attachments:
@@ -1334,45 +1354,69 @@ async def stream_chat(
             att_url = att.get("url", "")
             att_mime = att.get("mime_type", "")
             
-            if att_name and att_url and is_code_or_text_file(att_name, att_mime):
-                try:
-                    async with httpx.AsyncClient(timeout=15.0) as client:
-                        r = await client.get(att_url)
-                        if r.status_code == 200:
-                            content_bytes = r.content
-                            
-                            # Standardize path matching serve_sandbox_file / execute_code_in_sandbox
-                            work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
-                            data_dir = os.path.join(work_dir, "data")
-                            os.makedirs(data_dir, exist_ok=True)
-                            file_path = os.path.join(data_dir, att_name)
-                            with open(file_path, "wb") as f:
-                                f.write(content_bytes)
+            if att_name and att_url:
+                ext = os.path.splitext(att_name.lower())[1]
+                is_code = is_code_or_text_file(att_name, att_mime)
+                is_binary = ext in {".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls"}
+                
+                if is_code or is_binary:
+                    try:
+                        async with httpx.AsyncClient(timeout=15.0) as client:
+                            r = await client.get(att_url)
+                            if r.status_code == 200:
+                                content_bytes = r.content
                                 
-                            logger.info(f"Successfully downloaded and placed code file {att_name} in sandbox: {file_path}")
-                            
-                            try:
-                                content_str = content_bytes.decode("utf-8", errors="replace")
-                            except Exception:
-                                content_str = "[Binary or non-UTF-8 content]"
+                                # Standardize path matching serve_sandbox_file / execute_code_in_sandbox
+                                work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
+                                data_dir = os.path.join(work_dir, "data")
+                                os.makedirs(data_dir, exist_ok=True)
+                                file_path = os.path.join(data_dir, att_name)
+                                with open(file_path, "wb") as f:
+                                    f.write(content_bytes)
+                                    
+                                logger.info(f"Successfully downloaded and placed file {att_name} in sandbox: {file_path}")
                                 
-                            # Truncate content to avoid token limits (max 40k chars)
-                            if len(content_str) > 40000:
-                                content_str = content_str[:40000] + "\n... [TRUNCATED] ..."
-                                
-                            injected_code_prompts.append(
-                                f"--- START FILE: {att_name} ---\n{content_str}\n--- END FILE: {att_name} ---"
-                            )
-                except Exception as e:
-                    logger.error(f"Failed to process code attachment {att_name}: {e}")
-                    
-    if injected_code_prompts:
+                                if is_code:
+                                    try:
+                                        content_str = content_bytes.decode("utf-8", errors="replace")
+                                    except Exception:
+                                        content_str = "[Binary or non-UTF-8 content]"
+                                        
+                                    # Truncate content to avoid token limits (max 40k chars)
+                                    if len(content_str) > 40000:
+                                        content_str = content_str[:40000] + "\n... [TRUNCATED] ..."
+                                        
+                                    injected_code_prompts.append(
+                                        f"--- START FILE: {att_name} ---\n{content_str}\n--- END FILE: {att_name} ---"
+                                    )
+                                else:
+                                    injected_binary_files.append(att_name)
+                    except Exception as e:
+                        logger.error(f"Failed to process attachment {att_name}: {e}")
+                        
+    if injected_code_prompts or injected_binary_files:
+        context_parts = []
+        if injected_code_prompts:
+            context_parts.append(
+                "Here are the contents of the attached code/text files:\n" +
+                "\n\n".join(injected_code_prompts)
+            )
+        if injected_binary_files:
+            file_list = ", ".join(injected_binary_files)
+            context_parts.append(
+                f"The following binary documents have been saved to your active sandbox at `/tmp/sandbox_{conversation_id}/data/`:\n"
+                f"[{file_list}]\n"
+                "You cannot read them directly as text. However, you can write Python code using `execute_code` "
+                "with libraries like `fitz` (PyMuPDF), `python-docx`, `docx`, `pdf2image`, `openpyxl`, or `Pillow` to "
+                "manipulate them, extract visual elements/images/signatures, overlay layers (e.g. letterheads), "
+                "or write new documents. Any generated/modified files will automatically be uploaded and returned as download links."
+            )
+            
         code_context_str = (
-            "\n\n[System Context: The user has attached coding/text files to this conversation. "
-            "These files have been temporarily saved to your active sandbox workspace directory. "
-            "You can run, test, or modify them using your execute_code tool. "
-            "Here are the contents of the attached files:\n" +
-            "\n\n".join(injected_code_prompts) +
+            "\n\n[System Context: The user has attached files to this conversation. "
+            "These files have been temporarily saved to your active sandbox workspace directory data/ folder. "
+            "You can run, test, read, edit, or modify them using your execute_code tool.\n\n" +
+            "\n\n".join(context_parts) +
             "\n]\n\n"
         )
         decision.system_prompt += code_context_str
@@ -1421,6 +1465,7 @@ async def stream_chat(
             mode,
             estimated_tokens,
             previous_response_id,
+            user_timezone=payload.get("timezone"),
         ),
         media_type="text/event-stream"
     )

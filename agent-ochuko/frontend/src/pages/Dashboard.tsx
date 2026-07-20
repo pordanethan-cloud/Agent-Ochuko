@@ -982,12 +982,8 @@ function SvgBlock({ svg }: { svg: string }) {
           title="Copy SVG source"
           className="flex items-center justify-center w-7 h-7 rounded-md border bg-[#1f1f1f] border-[#30363d] text-[#7d8590] hover:text-[#c9d1d9] hover:border-[#484f58] transition-colors"
         >
-          {copied
-            ? <svg width="13" height="13" viewBox="0 0 16 16" fill="#3fb950"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>
-            : <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg>
-          }
+          {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
         </button>
-        {/* Fullscreen */}
         <button
           onClick={handleFullscreen}
           title="Fullscreen"
@@ -1018,56 +1014,7 @@ function SvgBlock({ svg }: { svg: string }) {
   )
 }
 
-// ─── Thinking block renderer ────────────────────────────────────────────────
-// Collapsible panel showing the model's live reasoning trace.
-// Only rendered for THINK/SOLVE modes. Streams in real-time, finalised after
-// the model emits </thinking>. Content is kept separate from the clean answer.
 
-function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(streaming || false)
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (streaming) {
-      setOpen(true)
-    }
-  }, [streaming])
-
-  useEffect(() => {
-    if (streaming && open && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [content, streaming, open])
-
-  return (
-    <div className="my-2 rounded-xl border border-white/5 bg-[#16171a]/40 backdrop-blur-sm overflow-hidden transition-all duration-200">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs font-semibold text-[#ffffff]/60 hover:text-[#ffffff]/90 hover:bg-white/[0.02] transition-all duration-200"
-      >
-        <Brain className="w-3.5 h-3.5 shrink-0 text-[#a855f7]" />
-        <span className="tracking-widest uppercase text-[10px]">Thinking Process</span>
-        {streaming && (
-          <span className="flex h-1.5 w-1.5 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-purple-500"></span>
-          </span>
-        )}
-        <ChevronDown
-          className={`w-3.5 h-3.5 ml-auto text-white/40 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-      {open && (
-        <div
-          ref={scrollRef}
-          className="px-4 pb-4 pt-3 border-t border-white/[0.03] text-[11.5px] text-[#ffffff]/70 font-mono whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto custom-scrollbar bg-[#0f1012]/40"
-        >
-          {content || '…'}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ─── Block parser ─────────────────────────────────────────────────────────────
 
@@ -1678,7 +1625,7 @@ const BlockquoteWithCopy: React.FC<{ content: string; children: React.ReactNode 
   }
 
   return (
-    <div className="group relative border-l-2 border-[#ffffff]/80 bg-[#ffffff]/4 pl-4 pr-10 py-3.5 my-4 italic text-brand-text/85 rounded-r-lg select-text">
+    <div className="group relative border-l-2 border-brand-accent/40 bg-brand-accent/[0.04] pl-3.5 pr-8 py-2.5 my-2.5 text-brand-text/90 rounded-r-lg select-text">
       <button
         onClick={handleCopy}
         className="absolute top-2 right-2 p-1.5 rounded-lg border border-[#1e2025] bg-[#0d0f11]/60 hover:bg-[#ffffff]/5 text-[#8e95a2] hover:text-brand-text opacity-0 group-hover:opacity-100 transition duration-150 active:scale-95"
@@ -2512,6 +2459,18 @@ function parseMarkdownToBlocks(text: string): ASTBlock[] {
 
       })
 
+    } else {
+
+      blocks.push({
+
+        type: 'paragraph',
+
+        content: lines[i].trim()
+
+      })
+
+      i++
+
     }
 
   }
@@ -2829,6 +2788,15 @@ function getFriendlyErrorMessage(message: string): string {
 
   const lower = message.toLowerCase()
 
+  if (
+    lower.includes("provisioned throughput") ||
+    lower.includes("high demand") ||
+    lower.includes("peak load") ||
+    lower.includes("maximum usage size")
+  ) {
+    return "The AI service is currently experiencing extremely high demand. Please try again in a few moments, or contact your administrator to configure Provisioned Throughput for dedicated capacity."
+  }
+
   if (lower.includes("deactivated") || lower.includes("inactive") || lower.includes("user_inactive")) {
 
     return "Your account access has been deactivated. Please reach out to your workspace administrator for assistance."
@@ -2915,57 +2883,65 @@ function getFriendlyErrorMessage(message: string): string {
 
 }
 
-const AgentStepIndicator: React.FC<{ step: number; maxSteps: number; label?: string; isComplete?: boolean }> = ({ step, maxSteps, label, isComplete }) => (
+const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: string; isComplete?: boolean }> = ({ step, maxSteps, label, isComplete }) => {
+  const currentStep = Math.max(1, step || 1)
+  const hasKnownMax = typeof maxSteps === 'number' && maxSteps > 0
+  const totalSteps = hasKnownMax ? Math.max(currentStep, maxSteps) : currentStep
+  const percent = Math.min(100, Math.round((currentStep / totalSteps) * 100))
 
-  <div className="flex items-center gap-2.5 mb-3 select-none animate-fadeIn">
+  return (
+    <div className="my-3 px-4 py-3 rounded-xl bg-[#0c0d10]/95 border border-white/[0.09] shadow-2xl shadow-black/80 backdrop-blur-xl select-none animate-fadeIn space-y-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 overflow-hidden">
+          {/* Live Status Pulse Dot */}
+          <div className="relative flex items-center justify-center shrink-0 w-3 h-3">
+            {isComplete ? (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]" />
+            ) : (
+              <>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-500 opacity-60" />
+                <span className="relative w-2 h-2 rounded-full bg-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.8)]" />
+              </>
+            )}
+          </div>
 
-    {/* Spinning cog / Checkmark */}
-
-    <div className="relative flex-shrink-0">
-
-      {isComplete ? (
-
-        <div className="w-5 h-5 rounded-full bg-green-500/10 border border-green-500/30 flex items-center justify-center animate-fadeIn">
-
-          <Check className="w-3 h-3 text-green-400" />
-
+          {/* Monospace Badge & Action Label */}
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <span className="px-2 py-0.5 rounded-md bg-[#16181d] border border-white/[0.08] text-[10px] font-mono font-semibold text-[#e2e8f0] tracking-widest uppercase shrink-0">
+              {hasKnownMax ? `STEP ${currentStep} OF ${totalSteps}` : `STEP ${currentStep}`}
+            </span>
+            {label ? (
+              <span className="text-[11.5px] font-sans font-medium text-[#cbd5e1] truncate max-w-[340px]" title={label}>
+                {label}
+              </span>
+            ) : (
+              <span className="text-[11.5px] font-sans text-[#94a3b8] italic truncate">
+                {isComplete ? 'Task execution complete' : 'Processing pipeline...'}
+              </span>
+            )}
+          </div>
         </div>
 
-      ) : (
+        {/* Monospace Percentage */}
+        <span className="text-[10.5px] font-mono font-semibold text-[#94a3b8] tracking-wider shrink-0">
+          {isComplete ? '100%' : `${percent}%`}
+        </span>
+      </div>
 
-        <div className="w-5 h-5 rounded-full border border-[#ffffff]/30 border-t-[#ffffff] animate-spin" />
-
-      )}
-
+      {/* Ultra-sleek Razor Progress Track */}
+      <div className="w-full h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
+        <div
+          className={`h-full transition-all duration-500 ease-out rounded-full ${
+            isComplete
+              ? 'bg-gradient-to-r from-emerald-400 to-teal-300 shadow-[0_0_10px_rgba(52,211,153,0.5)]'
+              : 'bg-gradient-to-r from-purple-500 via-indigo-400 to-cyan-400 shadow-[0_0_10px_rgba(168,85,247,0.5)]'
+          }`}
+          style={{ width: isComplete ? '100%' : `${percent}%` }}
+        />
+      </div>
     </div>
-
-    {/* Step pill */}
-
-    <div className="flex items-center gap-2">
-
-      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ffffff]/10 border border-[#ffffff]/20 text-[10px] font-bold text-[#ffffff] tracking-widest uppercase">
-
-        Step {step}
-
-        {!isComplete && (
-
-          <span className="text-[#ffffff]/40 font-normal">/ {maxSteps}</span>
-
-        )}
-
-      </span>
-
-      {label && (
-
-        <span className="text-[11px] text-[#8e95a2] font-medium truncate max-w-[240px]">{label}</span>
-
-      )}
-
-    </div>
-
-  </div>
-
-)
+  )
+}
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
@@ -3483,7 +3459,7 @@ export const Dashboard: React.FC = () => {
 
   const [, setAgentStep] = useState<number>(0)
 
-  const [agentMaxSteps, setAgentMaxSteps] = useState<number>(10)
+  const [agentMaxSteps, setAgentMaxSteps] = useState<number>(0)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -4554,7 +4530,9 @@ export const Dashboard: React.FC = () => {
 
     const nextMessages: Message[] = [...history, userMessageObj]
 
-    setMessages([...nextMessages, { role: 'assistant', content: '', timestamp: Date.now() }])
+    // No timestamp on the placeholder — it will be stamped when the stream completes
+    // so the "just now" / "3m ago" indicator never shows mid-stream.
+    setMessages([...nextMessages, { role: 'assistant', content: '' }])
 
     try {
 
@@ -4731,6 +4709,56 @@ export const Dashboard: React.FC = () => {
                   ...updated[updated.length - 1],
 
                   content: accumulatedText
+
+                }
+
+                return updated
+
+              })
+
+            } else if (data.type === 'clear_content') {
+
+              accumulatedText = ''
+
+              setMessages((prev) => {
+
+                const updated = [...prev]
+
+                if (updated.length > 0) {
+
+                  updated[updated.length - 1] = {
+
+                    ...updated[updated.length - 1],
+
+                    content: '',
+
+                    sources: undefined,
+
+                    generatedFiles: undefined
+
+                  }
+
+                }
+
+                return updated
+
+              })
+
+            } else if (data.type === 'clear_thinking') {
+
+              setMessages((prev) => {
+
+                const updated = [...prev]
+
+                if (updated.length > 0) {
+
+                  updated[updated.length - 1] = {
+
+                    ...updated[updated.length - 1],
+
+                    thinkingContent: ''
+
+                  }
 
                 }
 
@@ -5133,7 +5161,9 @@ export const Dashboard: React.FC = () => {
                 const updated = [...prev]
                 if (updated.length > 0) {
                   const last = updated[updated.length - 1]
-                  updated[updated.length - 1] = { ...last, thinkingContent: '' }
+                  const existing = last.thinkingContent
+                  const newThinking = existing ? existing + '\n\n=== REASONING ===\n\n' : ''
+                  updated[updated.length - 1] = { ...last, thinkingContent: newThinking }
                 }
                 return updated
               })
@@ -5287,23 +5317,31 @@ export const Dashboard: React.FC = () => {
         abortControllerRef.current = null
 
         // Persist conversation to localStorage after the stream completes successfully (asynchronously)
-        if (currentConvoId && currentConvoId !== '00000000-0000-0000-0000-000000000000') {
-          const uid = userIdRef.current
-          setMessages(prev => {
+        const completionTimestamp = Date.now()
+        setMessages(prev => {
+          const updated = [...prev]
+          if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
+            updated[updated.length - 1] = {
+              ...updated[updated.length - 1],
+              timestamp: completionTimestamp
+            }
+          }
+          if (currentConvoId && currentConvoId !== '00000000-0000-0000-0000-000000000000') {
+            const uid = userIdRef.current
             // Defer localStorage writes to the event loop so they never block React's render thread or cut message flow
             setTimeout(() => {
               try {
                 if (uid) {
                   localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), currentConvoId)
                 }
-                saveConvoCache(uid, currentConvoId, prev, mode)
+                saveConvoCache(uid, currentConvoId, updated, mode)
               } catch (err) {
                 console.warn('Deferred cache write failed:', err)
               }
             }, 0)
-            return prev
-          })
-        }
+          }
+          return updated
+        })
 
         // Return focus to input so user can type the next message immediately
 
@@ -5426,11 +5464,19 @@ export const Dashboard: React.FC = () => {
       '.bat', '.cmd', '.ps1'
     ]
 
+    // Binary office/document files — routed to the Python sandbox (execute_code)
+    // so the model can use python-docx, PyMuPDF, Pillow to manipulate them.
+    // These must NOT go to the OCR queue (which only extracts flat text).
+    const binaryDocExts = ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt']
+
     const attachments = files.map(f => {
       const nameLower = f.name.toLowerCase()
       const isPdf = f.type === 'application/pdf' || nameLower.endsWith('.pdf')
+      const isDocxFamily = binaryDocExts.some(ext => nameLower.endsWith(ext))
       const isCode = codeExts.some(ext => nameLower.endsWith(ext))
-      const jobType = isPdf ? 'ocr' : (isCode ? 'code' : 'vision')
+      // PDFs: still run OCR for text context, AND placed in sandbox for binary manipulation
+      // DOCX/binary office: go directly to sandbox path (skip OCR queue)
+      const jobType = isPdf ? 'ocr' : (isDocxFamily || isCode ? 'code' : 'vision')
 
       return {
         name: f.name,
@@ -5450,8 +5496,11 @@ export const Dashboard: React.FC = () => {
     const ocrVisionFiles = files.filter(f => {
       const nameLower = f.name.toLowerCase()
       const isPdf = f.type === 'application/pdf' || nameLower.endsWith('.pdf')
+      const isDocxFamily = binaryDocExts.some(ext => nameLower.endsWith(ext))
       const isCode = codeExts.some(ext => nameLower.endsWith(ext))
-      return isPdf || !isCode // it is PDF or an image, not a code/text file
+      // Only PDF and pure images go to the OCR/vision queue.
+      // DOCX and code/text files are handled directly in the sandbox.
+      return isPdf || (!isCode && !isDocxFamily)
     })
 
     const initialAssistantText = ocrVisionFiles.length > 0
@@ -5666,11 +5715,31 @@ export const Dashboard: React.FC = () => {
 
       // 3. Trigger the LLM stream response
 
-      const backendAttachments = attachments.map(a => ({
-        filename: a.name,
-        url: a.url || '',
-        mime_type: a.jobType === 'ocr' ? 'application/pdf' : (a.jobType === 'vision' ? 'image/png' : 'text/plain')
-      }))
+      const backendAttachments = attachments.map(a => {
+        const nameLower = a.name.toLowerCase()
+        let mime = 'text/plain'
+        if (a.jobType === 'ocr') {
+          mime = 'application/pdf'
+        } else if (a.jobType === 'vision') {
+          mime = nameLower.endsWith('.png') ? 'image/png'
+            : nameLower.endsWith('.gif') ? 'image/gif'
+            : nameLower.endsWith('.webp') ? 'image/webp'
+            : 'image/jpeg'
+        } else {
+          // code / binary-doc path
+          if (nameLower.endsWith('.docx')) mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          else if (nameLower.endsWith('.doc')) mime = 'application/msword'
+          else if (nameLower.endsWith('.xlsx')) mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          else if (nameLower.endsWith('.pptx')) mime = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+          else if (nameLower.endsWith('.pdf')) mime = 'application/pdf'
+          else mime = 'text/plain'
+        }
+        return {
+          filename: a.name,
+          url: a.url || '',
+          mime_type: mime,
+        }
+      })
 
       await triggerStream(historyBeforeJobs, {
 
@@ -6972,20 +7041,6 @@ export const Dashboard: React.FC = () => {
 
                     >
 
-                      {/* Thinking panel — shown above answer in THINK/SOLVE modes */}
-
-                      {msg.role === 'assistant' && msg.thinkingContent && (
-
-                        <ThinkingBlock
-
-                          content={msg.thinkingContent}
-
-                          streaming={isStreaming && i === messages.length - 1 && !msg.content}
-
-                        />
-
-                      )}
-
                       {/* Content */}
 
                       {msg.role === 'user' ? (
@@ -7353,7 +7408,7 @@ export const Dashboard: React.FC = () => {
 
                     {/* Relative timestamp — visible on hover */}
 
-                    {msg.timestamp && !isStreaming && (
+                    {msg.timestamp && !(isStreaming && i === messages.length - 1) && (
 
                       <span
 
@@ -7387,7 +7442,7 @@ export const Dashboard: React.FC = () => {
 
                     {/* Actions Row at the bottom (outside the bubble), visible on hover */}
 
-                    {((msg.role === 'assistant' && msg.content.length > 0) || (msg.role === 'user' && editingMessageIndex !== i)) && (
+                    {((msg.role === 'assistant' && msg.content.length > 0 && !(isStreaming && i === messages.length - 1)) || (msg.role === 'user' && editingMessageIndex !== i)) && (
 
                       <div className="flex items-center gap-3.5 px-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
 
