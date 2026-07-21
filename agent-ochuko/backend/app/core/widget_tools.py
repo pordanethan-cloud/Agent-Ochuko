@@ -70,7 +70,11 @@ WIDGET_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "name": "visualize__show_widget",
         "description": (
-            "Renders interactive visual widgets inline in the chat bubble. "
+            "Renders interactive visual widgets inline in the chat bubble — including UI mockups, "
+            "wireframes, component cards, dashboards, forms, architecture diagrams, and charts.\n"
+            "MANDATORY RULE FOR UI MOCKUPS & INTERFACE DESIGNS:\n"
+            "Call visualize__show_widget whenever the user asks for a UI mockup, wireframe, dashboard card, "
+            "component layout, form, or interface design. NEVER call generate_image for UI mockups or software designs!\n"
             "Supports dual modes:\n"
             "  1. SVG Mode: Output starting with '<svg' — for architecture diagrams, flowcharts, timelines, & vector graphics.\n"
             "  2. HTML Mode: Complete HTML page with CSS and JS — for interactive calculators, Chart.js graphs, forms, and UI mockups.\n"

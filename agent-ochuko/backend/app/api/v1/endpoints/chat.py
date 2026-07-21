@@ -500,11 +500,13 @@ async def chat_stream_generator(
                     "name": "generate_image",
                     "description": (
                         "Generate a brand-new image using AI (FLUX) from a natural language text description. "
-                        "Use ONLY when the user wants an AI-synthesised picture from a text prompt — "
-                        "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'. "
-                        "Do NOT call this to render, convert, or execute code. "
-                        "Do NOT call this for SVG-to-image conversion (output a ```svg fence or visualize__show_widget instead). "
-                        "Do NOT call this for data plots or charts (use execute_code or visualize__show_widget instead)."
+                        "Use ONLY when the user wants an AI-synthesised artwork, photograph, or illustration — "
+                        "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'.\n"
+                        "STRICT EXCLUSIONS:\n"
+                        "- Do NOT call this for UI mockups, wireframes, component cards, forms, or dashboard designs (use visualize__show_widget instead).\n"
+                        "- Do NOT call this to render, convert, or execute code.\n"
+                        "- Do NOT call this for SVG-to-image conversion (output a ```svg fence or visualize__show_widget instead).\n"
+                        "- Do NOT call this for data plots or charts (use execute_code or visualize__show_widget instead)."
                     ),
                     "parameters": {
                         "type": "object",

@@ -80,10 +80,10 @@ SKILLS: dict[str, str] = {
 
     "image": (
         "AI IMAGE GENERATION:\n"
-        "Use generate_image (FLUX) ONLY for AI-synthesised pictures from a text prompt — "
+        "Use generate_image (FLUX) ONLY for AI-synthesised pictures, artwork, or photos from a text prompt — "
         "e.g. 'draw a dragon', 'generate a photo of a mountain at sunset'.\n"
-        "Do NOT use it for: SVG display, code output visualisation, data charts, file conversion, "
-        "or rendering existing markup. Use execute_code or ```svg fences for those."
+        "Do NOT use it for: UI mockups, wireframes, dashboard cards, forms, component layouts, SVG display, code output visualisation, "
+        "data charts, file conversion, or rendering existing markup. Use visualize__show_widget for UI mockups, cards, forms, and charts."
     ),
 
     "research": (
