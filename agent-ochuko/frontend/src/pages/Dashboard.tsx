@@ -606,11 +606,11 @@ function WidgetRenderer({
       {/* Header Bar */}
       <div className="flex items-center justify-between px-3.5 py-2 bg-[#12151c]/90 border-b border-white/[0.08] text-xs">
         <div className="flex items-center gap-2 overflow-hidden">
-          <span className="w-2 h-2 rounded-full bg-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.7)] shrink-0" />
-          <span className="font-mono text-[10px] font-bold text-purple-300 tracking-wider uppercase shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#8e95a2] shrink-0" />
+          <span className="font-mono text-[9.5px] font-medium text-[#a0a6b2] tracking-wider uppercase shrink-0">
             {widgetType}
           </span>
-          <span className="text-[11px] font-semibold text-[#cbd5e1] truncate" title={title}>
+          <span className="text-[11px] font-medium text-[#cbd5e1] truncate" title={title}>
             {formattedTitle}
           </span>
         </div>
@@ -3106,52 +3106,41 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: st
   const percent = Math.min(100, Math.round((currentStep / totalSteps) * 100))
 
   return (
-    <div className="my-3 px-4 py-3 rounded-xl bg-[#0c0d10]/95 border border-white/[0.09] shadow-2xl shadow-black/80 backdrop-blur-xl select-none animate-fadeIn space-y-2.5">
+    <div className="my-3 px-3.5 py-2.5 rounded-xl bg-[#0c0d10]/95 border border-white/[0.08] shadow-lg backdrop-blur-xl select-none animate-fadeIn space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 overflow-hidden">
-          {/* Live Status Pulse Dot */}
-          <div className="relative flex items-center justify-center shrink-0 w-3 h-3">
-            {isComplete ? (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]" />
-            ) : (
-              <>
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-500 opacity-60" />
-                <span className="relative w-2 h-2 rounded-full bg-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.8)]" />
-              </>
-            )}
+        <div className="flex items-center gap-2.5 overflow-hidden">
+          {/* Minimalist Ash Dot */}
+          <div className="flex items-center justify-center shrink-0 w-2.5 h-2.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${isComplete ? 'bg-[#8e95a2]' : 'bg-[#a0a6b2] animate-pulse'}`} />
           </div>
 
           {/* Monospace Badge & Action Label */}
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <span className="px-2 py-0.5 rounded-md bg-[#16181d] border border-white/[0.08] text-[10px] font-mono font-semibold text-[#e2e8f0] tracking-widest uppercase shrink-0">
-              {hasKnownMax ? `STEP ${currentStep} OF ${totalSteps}` : `STEP ${currentStep}`}
+          <div className="flex items-center gap-2 overflow-hidden">
+            <span className="px-2 py-0.5 rounded bg-[#16181d] border border-white/10 text-[9.5px] font-mono font-medium text-[#a0a6b2] tracking-wider uppercase shrink-0">
+              {hasKnownMax ? `STEP ${currentStep}/${totalSteps}` : `STEP ${currentStep}`}
             </span>
             {label ? (
-              <span className="text-[11.5px] font-sans font-medium text-[#cbd5e1] truncate max-w-[340px]" title={label}>
+              <span className="text-[11px] font-sans text-[#cbd5e1] truncate max-w-[360px]" title={label}>
                 {label}
               </span>
             ) : (
-              <span className="text-[11.5px] font-sans text-[#94a3b8] italic truncate">
-                {isComplete ? 'Task execution complete' : 'Processing pipeline...'}
+              <span className="text-[11px] font-sans text-[#717784] italic truncate">
+                {isComplete ? 'Completed' : 'Running pipeline...'}
               </span>
             )}
           </div>
         </div>
 
         {/* Monospace Percentage */}
-        <span className="text-[10.5px] font-mono font-semibold text-[#94a3b8] tracking-wider shrink-0">
+        <span className="text-[10px] font-mono font-medium text-[#717784] tracking-wider shrink-0">
           {isComplete ? '100%' : `${percent}%`}
         </span>
       </div>
 
-      {/* Ultra-sleek Razor Progress Track */}
-      <div className="w-full h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
+      {/* Razor-thin Ash Progress Track */}
+      <div className="w-full h-[1px] bg-white/[0.08] rounded-full overflow-hidden">
         <div
-          className={`h-full transition-all duration-500 ease-out rounded-full ${
-            isComplete
-              ? 'bg-gradient-to-r from-emerald-400 to-teal-300 shadow-[0_0_10px_rgba(52,211,153,0.5)]'
-              : 'bg-gradient-to-r from-purple-500 via-indigo-400 to-cyan-400 shadow-[0_0_10px_rgba(168,85,247,0.5)]'
-          }`}
+          className="h-full bg-[#8e95a2] transition-all duration-300 ease-out rounded-full opacity-80"
           style={{ width: isComplete ? '100%' : `${percent}%` }}
         />
       </div>
