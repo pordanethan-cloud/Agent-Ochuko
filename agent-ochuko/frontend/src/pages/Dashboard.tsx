@@ -4536,8 +4536,8 @@ export const Dashboard: React.FC = () => {
 
         fetchConversations()
 
-      }
-
+    }).catch((err) => {
+      console.warn('Supabase auth connection offline or closed:', err)
     })
 
   }, [])
@@ -7589,7 +7589,7 @@ export const Dashboard: React.FC = () => {
 
                               <span className="text-[11.5px] font-mono font-medium text-[#a0a6b2] tracking-wide">
 
-                                {activityLabel || (activeMode === 'discuss' ? 'Thinking...' : 'Assembling response...')}
+                                {activityLabel || (mode === 'discuss' ? 'Thinking...' : 'Assembling response...')}
 
                               </span>
 
