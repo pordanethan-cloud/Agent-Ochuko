@@ -522,14 +522,41 @@ function WidgetRenderer({
   const [copied, setCopied] = useState(false)
   const [zoom, setZoom] = useState(1)
 
+  const [iframeHeight, setIframeHeight] = useState(340)
+
   const isSvg = useMemo(() => {
     const trimmed = code.trim().toLowerCase()
     return trimmed.startsWith('<svg') || (trimmed.includes('<svg') && trimmed.includes('</svg>'))
   }, [code])
 
+  const cleanSvg = useMemo(() => {
+    if (!isSvg) return ''
+    return code
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/\son\w+="[^"]*"/gi, '')
+      .replace(/\son\w+='[^']*'/gi, '')
+  }, [code, isSvg])
+
   const formattedTitle = useMemo(() => {
     return title ? title.replace(/_/g, ' ').toUpperCase() : 'WIDGET DISPLAY'
   }, [title])
+
+  // Listen for iframe postMessage (sendPrompt bridge and iframe_height resize)
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (!e.data) return
+      if (e.data.type === 'widget_height' && typeof e.data.height === 'number') {
+        setIframeHeight(Math.min(800, Math.max(220, e.data.height)))
+      } else if (e.data.type === 'agent_prompt' && typeof e.data.text === 'string') {
+        const cleanPrompt = e.data.text.slice(0, 500).replace(/[<>]/g, '').trim()
+        if (cleanPrompt) {
+          window.dispatchEvent(new CustomEvent('agent:send_prompt', { detail: { text: cleanPrompt } }))
+        }
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [])
 
   const handleCopyCode = async () => {
     try {
@@ -542,7 +569,7 @@ function WidgetRenderer({
   const handleDownloadPng = () => {
     if (!isSvg) return
     try {
-      const blob = new Blob([code], { type: 'image/svg+xml;charset=utf-8' })
+      const blob = new Blob([cleanSvg || code], { type: 'image/svg+xml;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const img = new Image()
       img.onload = () => {
@@ -567,7 +594,22 @@ function WidgetRenderer({
 
   const fullHtml = useMemo(() => {
     if (isSvg) return ''
-    if (code.includes('<html') || code.includes('<body')) return code
+    const bridgeScript = `
+      <script>
+        function sendPrompt(text) {
+          if (typeof text === 'string' && text.trim()) {
+            window.parent.postMessage({ type: 'agent_prompt', text: text }, '*');
+          }
+        }
+        window.addEventListener('load', function() {
+          var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+          window.parent.postMessage({ type: 'widget_height', height: h + 24 }, '*');
+        });
+      </script>
+    `
+    if (code.includes('<html') || code.includes('<body')) {
+      return code.includes('</body>') ? code.replace('</body>', `${bridgeScript}</body>`) : code + bridgeScript
+    }
 
     return `<!DOCTYPE html>
 <html>
@@ -594,6 +636,7 @@ function WidgetRenderer({
       font-family: var(--font-sans);
     }
   </style>
+  ${bridgeScript}
 </head>
 <body>
   ${code}
@@ -674,13 +717,14 @@ function WidgetRenderer({
           <div
             className="transition-transform duration-200 flex justify-center items-center max-w-full"
             style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
-            dangerouslySetInnerHTML={{ __html: code }}
+            dangerouslySetInnerHTML={{ __html: cleanSvg || code }}
           />
         ) : (
           <iframe
             srcDoc={fullHtml}
             sandbox="allow-scripts"
-            className="w-full min-h-[320px] rounded-lg border border-white/5 bg-[#0c0d10]"
+            className="w-full rounded-lg border border-white/5 bg-[#0c0d10] transition-all duration-200"
+            style={{ height: `${iframeHeight}px` }}
             title={title}
           />
         )}
@@ -690,7 +734,7 @@ function WidgetRenderer({
       {fullscreen && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col p-6 animate-fadeIn">
           <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
-            <span className="font-mono text-sm font-bold text-purple-400">{formattedTitle}</span>
+            <span className="font-mono text-sm font-medium text-[#e2e8f0]">{formattedTitle}</span>
             <button
               onClick={() => setFullscreen(false)}
               className="px-3 py-1.5 rounded-lg bg-white/10 text-white font-semibold text-xs hover:bg-white/20"
@@ -702,7 +746,7 @@ function WidgetRenderer({
             {isSvg ? (
               <div
                 className="w-full h-full flex items-center justify-center"
-                dangerouslySetInnerHTML={{ __html: code }}
+                dangerouslySetInnerHTML={{ __html: cleanSvg || code }}
               />
             ) : (
               <iframe
@@ -7475,21 +7519,19 @@ export const Dashboard: React.FC = () => {
 
                             }
 
-                            return (
-
-                              <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
-
-                                {msg.content}
-
-                              </p>
-
-                            )
-
+                            if (msg.content && msg.content.trim().length > 0) {
+                              return (
+                                <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
+                                  {msg.content}
+                                </p>
+                              )
+                            }
+                            return null
                           })()
 
                         )
 
-                      ) : msg.content === '' && isStreaming ? (
+                      ) : msg.content === '' && isStreaming && (!msg.widgetData || msg.widgetData.length === 0) && (!msg.generatedFiles || msg.generatedFiles.length === 0) && !msg.imageUrl ? (
 
                         /* Typing / searching indicator — appears immediately before first token */
 
@@ -7547,7 +7589,7 @@ export const Dashboard: React.FC = () => {
 
                         <div className="space-y-3">
 
-                          {msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content.length > 0 && (
+                          {msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content && msg.content.trim().length > 0 && (
 
                             <AgentStepIndicator
 
@@ -7563,7 +7605,7 @@ export const Dashboard: React.FC = () => {
 
                           )}
 
-                          {msg.content.length > 0 && renderRichContent(
+                          {msg.content && msg.content.trim().length > 0 && renderRichContent(
 
                             msg.content,
 
