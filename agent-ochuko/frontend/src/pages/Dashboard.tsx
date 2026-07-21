@@ -2852,6 +2852,22 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
           }
 
           case 'code': {
+            const lang = (block.language || '').toLowerCase().trim()
+            const content = block.content || ''
+            if ((lang === 'html' || lang === 'htm' || lang === 'svg' || lang === 'xml') && content.trim().length > 30) {
+              const lower = content.toLowerCase()
+              const isRenderableMarkup = lower.includes('<html') || lower.includes('<body') || lower.includes('<div') || lower.includes('<canvas') || lower.includes('<svg') || lower.includes('<script') || lower.includes('<style')
+              if (isRenderableMarkup) {
+                return (
+                  <WidgetRenderer
+                    key={key}
+                    code={content}
+                    title={lang === 'svg' ? 'SVG DIAGRAM' : 'INTERACTIVE HTML WIDGET'}
+                    widgetType={lang === 'svg' ? 'diagram' : 'interactive'}
+                  />
+                )
+              }
+            }
 
             return (
 
@@ -2861,7 +2877,7 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
 
                 language={block.language || 'text'}
 
-                content={block.content || ''}
+                content={content}
 
               />
 
