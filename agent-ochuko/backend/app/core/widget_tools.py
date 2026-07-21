@@ -4,40 +4,65 @@ Defines `visualize__show_widget` schema and embedded CSS/SVG design tokens.
 """
 from typing import Dict, Any, List
 
-# Agent-Ochuko Obsidian & Brass Design System Tokens
+# Agent-Ochuko Obsidian & Brass Design System Tokens & Display Techniques
 OCHUKO_WIDGET_DESIGN_SYSTEM = """
-## Agent-Ochuko Design System (Obsidian & Brass HUD)
+## Agent-Ochuko Design System (Obsidian HUD Aesthetic)
 
-### CSS Variables (Inject into <style> or SVG <defs>):
+### CSS Variables:
 :root {
-  /* Backgrounds */
   --bg-void: #06060a;
   --bg-deep: #0c0d10;
   --bg-surface: #12151c;
   --bg-raised: #181c26;
 
-  /* Accent Palette */
+  --accent-primary: #8e95a2;
   --accent-purple: #a855f7;
   --accent-indigo: #6366f1;
   --accent-cyan: #06b6d4;
   --accent-emerald: #10b981;
   --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
 
-  /* Text Colors */
   --text-primary: #f8fafc;
   --text-secondary: #cbd5e1;
   --text-muted: #64748b;
 
-  /* Borders & Glows */
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-visible: rgba(255, 255, 255, 0.18);
-  --border-accent: rgba(168, 85, 247, 0.35);
 
-  /* Typography */
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 }
+
+### DISPLAY TECHNIQUES & MODULE PATTERNS:
+
+1. DIAGRAM MODULE (SVG Mode):
+   - Flowcharts, architecture graphs, sequence diagrams, state machines.
+   - Nodes: <rect rx="6"/> with bg-raised fill and border-visible stroke.
+   - Connectors: Include reusable <defs><marker id="arrow".../></defs> for clean arrow heads.
+   - Spacing: Left-to-right or top-to-bottom layout with min 60px node spacing.
+
+2. CHART MODULE (HTML / Canvas Mode):
+   - Bar, line, donut, area charts.
+   - Include Chart.js script: <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+   - Dark theme styling on transparent background with primary series color #8e95a2 or #a855f7.
+
+3. MOCKUP MODULE (HTML Mode):
+   - UI component previews, forms, cards, dashboards.
+   - Containers: min-height 280px, background #0c0d10, rounded-xl padding 20px.
+   - Realistic data (no 'Lorem Ipsum' or 'placeholder' text).
+
+4. INTERACTIVE MODULE (HTML Mode):
+   - Calculators, sliders, sorting demos, step-through explainers.
+   - All state in inline JS. Use transition: all 0.2s ease for smooth micro-interactions.
+
+5. ART MODULE (SVG Mode):
+   - Abstract visual metaphors, geometric compositions, noise texture filters (<feTurbulence>).
+
+6. DATA VIZ MODULE (HTML/D3 or SVG):
+   - Treemaps, heatmaps, sankey diagrams with legend controls. Max width 680px for inline chat alignment.
+
+7. ELICITATION MODULE (HTML Mode):
+   - Option picker cards for user selection. Send response via window.parent or sendPrompt hook.
 """
 
 WIDGET_TOOLS: List[Dict[str, Any]] = [
