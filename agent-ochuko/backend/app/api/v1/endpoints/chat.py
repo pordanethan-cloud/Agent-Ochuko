@@ -440,6 +440,8 @@ async def chat_stream_generator(
             "model": deployment,
             # Tools the model may call autonomously during the conversation
             "tools": [
+                # Inline visual widget renderer
+                *__import__("app.core.widget_tools", fromlist=["WIDGET_TOOLS"]).WIDGET_TOOLS,
                 # Web search
                 {
                     "type": "function",
@@ -473,7 +475,7 @@ async def chat_stream_generator(
                         "Call this whenever the user wants to: run/test code, analyse data, plot charts, "
                         "fetch live data in code, convert or process files, perform computation, or any task "
                         "that benefits from actually executing code rather than describing it.\n"
-                        "Do NOT use this for SVG display — output SVG in a ```svg fence instead. "
+                        "Do NOT use this for SVG display — output SVG in a ```svg fence or use visualize__show_widget instead. "
                         "Do NOT use this to generate AI images — use generate_image for that."
                     ),
                     "parameters": {
@@ -501,8 +503,8 @@ async def chat_stream_generator(
                         "Use ONLY when the user wants an AI-synthesised picture from a text prompt — "
                         "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'. "
                         "Do NOT call this to render, convert, or execute code. "
-                        "Do NOT call this for SVG-to-image conversion (output a ```svg fence instead). "
-                        "Do NOT call this for data plots or charts (use execute_code with matplotlib instead)."
+                        "Do NOT call this for SVG-to-image conversion (output a ```svg fence or visualize__show_widget instead). "
+                        "Do NOT call this for data plots or charts (use execute_code or visualize__show_widget instead)."
                     ),
                     "parameters": {
                         "type": "object",
@@ -989,9 +991,45 @@ async def chat_stream_generator(
                                 tool_outputs.append(f"Image generation job queued successfully with ID: {job_id}.")
                             else:
                                 tool_outputs.append("Image prompt was empty.")
+                    elif t_name == "visualize__show_widget":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            w_code = args.get("widget_code", "")
+                            w_title = args.get("title", "ochuko_widget")
+                            w_msgs = args.get("loading_messages", ["Assembling visual widget..."])
+                            w_type = args.get("widget_type", "diagram")
+
+                            # If model passed minimal prompt or incomplete code, synthesize via Gemini Flash / Nano
+                            if not w_code or len(w_code) < 30 or "```" in w_code:
+                                from app.services.widget_generator import generate_widget_code
+                                gen_res = await generate_widget_code(
+                                    prompt=w_title.replace("_", " "),
+                                    widget_type=w_type,
+                                    title=w_title,
+                                    openai_client=client,
+                                    nano_deployment=deployment,
+                                )
+                                if gen_res.get("widget_code"):
+                                    w_code = gen_res["widget_code"]
+
+                            if w_code:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "widget",
+                                        "code": w_code,
+                                        "title": w_title,
+                                        "loading_messages": w_msgs,
+                                        "widget_type": w_type,
+                                    })
+                                    + "\n\n"
+                                )
+                                tool_outputs.append(f"Widget '{w_title}' rendered successfully inline on client UI.")
+                            else:
+                                tool_outputs.append(f"Widget generation was empty for title: {w_title}.")
                         except Exception as e:
-                            logger.error(f"Agent generate_image failed: {e}")
-                            tool_outputs.append(f"Image generation error: {str(e)}")
+                            logger.error(f"Agent visualize__show_widget failed: {e}")
+                            tool_outputs.append(f"Widget execution error: {str(e)}")
                     else:
                         tool_outputs.append(f"Unknown tool name: {t_name}")
 

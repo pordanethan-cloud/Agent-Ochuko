@@ -296,6 +296,8 @@ interface Message {
 
   agentLabel?: string
 
+  widgetData?: { code: string; title: string; loadingMessages?: string[]; widgetType?: string }[]
+
   timestamp?: number     // Unix ms — set at send/receive time for relative display
 
   generatedFiles?: { filename: string; download_url: string; size_bytes: number }[]
@@ -499,6 +501,220 @@ function FileDownloadCard({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ─── Inline Widget Renderer Component (visualize__show_widget) ───────────
+
+function WidgetRenderer({
+  code,
+  title,
+  loadingMessages: _loadingMessages = [],
+  widgetType = 'diagram',
+}: {
+  code: string
+  title: string
+  loadingMessages?: string[]
+  widgetType?: string
+}) {
+  const [fullscreen, setFullscreen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [zoom, setZoom] = useState(1)
+
+  const isSvg = useMemo(() => {
+    const trimmed = code.trim().toLowerCase()
+    return trimmed.startsWith('<svg') || (trimmed.includes('<svg') && trimmed.includes('</svg>'))
+  }, [code])
+
+  const formattedTitle = useMemo(() => {
+    return title ? title.replace(/_/g, ' ').toUpperCase() : 'WIDGET DISPLAY'
+  }, [title])
+
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (_) {}
+  }
+
+  const handleDownloadPng = () => {
+    if (!isSvg) return
+    try {
+      const blob = new Blob([code], { type: 'image/svg+xml;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.width || 800
+        canvas.height = img.height || 600
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.fillStyle = '#0c0d10'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+          ctx.drawImage(img, 0, 0)
+          const pngUrl = canvas.toDataURL('image/png')
+          triggerDirectDownload(pngUrl, `${title || 'ochuko_widget'}.png`)
+        }
+        URL.revokeObjectURL(url)
+      }
+      img.src = url
+    } catch (e) {
+      console.error('PNG export failed:', e)
+    }
+  }
+
+  const fullHtml = useMemo(() => {
+    if (isSvg) return ''
+    if (code.includes('<html') || code.includes('<body')) return code
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg-void: #06060a;
+      --bg-deep: #0c0d10;
+      --bg-surface: #12151c;
+      --bg-raised: #181c26;
+      --accent-purple: #a855f7;
+      --accent-cyan: #06b6d4;
+      --text-primary: #f8fafc;
+      --text-secondary: #cbd5e1;
+      --text-muted: #64748b;
+      --font-sans: 'Inter', system-ui, sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #0c0d10;
+      color: #f8fafc;
+      font-family: var(--font-sans);
+    }
+  </style>
+</head>
+<body>
+  ${code}
+</body>
+</html>`
+  }, [code, isSvg])
+
+  return (
+    <div className="mt-3 my-2 rounded-xl bg-[#0a0c10]/95 border border-white/[0.09] shadow-xl backdrop-blur-md overflow-hidden font-sans select-none animate-fadeIn">
+      {/* Header Bar */}
+      <div className="flex items-center justify-between px-3.5 py-2 bg-[#12151c]/90 border-b border-white/[0.08] text-xs">
+        <div className="flex items-center gap-2 overflow-hidden">
+          <span className="w-2 h-2 rounded-full bg-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.7)] shrink-0" />
+          <span className="font-mono text-[10px] font-bold text-purple-300 tracking-wider uppercase shrink-0">
+            {widgetType}
+          </span>
+          <span className="text-[11px] font-semibold text-[#cbd5e1] truncate" title={title}>
+            {formattedTitle}
+          </span>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isSvg && (
+            <>
+              <button
+                onClick={() => setZoom((z) => Math.max(0.6, z - 0.2))}
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[#8e95a2] hover:text-white bg-white/5 hover:bg-white/10"
+                title="Zoom Out"
+              >
+                -
+              </button>
+              <button
+                onClick={() => setZoom(1)}
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[#8e95a2] hover:text-white bg-white/5 hover:bg-white/10"
+                title="Reset Zoom"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                onClick={() => setZoom((z) => Math.min(2.5, z + 0.2))}
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[#8e95a2] hover:text-white bg-white/5 hover:bg-white/10"
+                title="Zoom In"
+              >
+                +
+              </button>
+              <button
+                onClick={handleDownloadPng}
+                className="px-2 py-1 rounded text-[10px] font-semibold text-[#8e95a2] hover:text-white border border-white/10 hover:bg-white/5"
+                title="Export PNG"
+              >
+                PNG
+              </button>
+            </>
+          )}
+
+          <button
+            onClick={handleCopyCode}
+            className="px-2 py-1 rounded text-[10px] font-semibold text-[#8e95a2] hover:text-white border border-white/10 hover:bg-white/5"
+            title="Copy Code"
+          >
+            {copied ? 'Copied' : 'Code'}
+          </button>
+
+          <button
+            onClick={() => setFullscreen(true)}
+            className="px-2 py-1 rounded text-[10px] font-semibold text-[#8e95a2] hover:text-white border border-white/10 hover:bg-white/5"
+            title="Expand Fullscreen"
+          >
+            Expand
+          </button>
+        </div>
+      </div>
+
+      {/* Content Canvas Area */}
+      <div className="p-3 bg-[#06060a] overflow-x-auto flex justify-center items-center min-h-[180px]">
+        {isSvg ? (
+          <div
+            className="transition-transform duration-200 flex justify-center items-center max-w-full"
+            style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+            dangerouslySetInnerHTML={{ __html: code }}
+          />
+        ) : (
+          <iframe
+            srcDoc={fullHtml}
+            sandbox="allow-scripts"
+            className="w-full min-h-[320px] rounded-lg border border-white/5 bg-[#0c0d10]"
+            title={title}
+          />
+        )}
+      </div>
+
+      {/* Fullscreen Modal */}
+      {fullscreen && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col p-6 animate-fadeIn">
+          <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
+            <span className="font-mono text-sm font-bold text-purple-400">{formattedTitle}</span>
+            <button
+              onClick={() => setFullscreen(false)}
+              className="px-3 py-1.5 rounded-lg bg-white/10 text-white font-semibold text-xs hover:bg-white/20"
+            >
+              Close
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto flex items-center justify-center bg-[#06060a] p-4 rounded-xl border border-white/10">
+            {isSvg ? (
+              <div
+                className="w-full h-full flex items-center justify-center"
+                dangerouslySetInnerHTML={{ __html: code }}
+              />
+            ) : (
+              <iframe
+                srcDoc={fullHtml}
+                sandbox="allow-scripts"
+                className="w-full h-full rounded-xl border border-white/5 bg-[#0c0d10]"
+                title={title}
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -5148,6 +5364,30 @@ export const Dashboard: React.FC = () => {
 
               })
 
+            } else if (data.type === 'widget') {
+
+              // Widget payload emitted from visualize__show_widget
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = updated[updated.length - 1]
+                  const existingWidgets = last.widgetData || []
+                  updated[updated.length - 1] = {
+                    ...last,
+                    widgetData: [
+                      ...existingWidgets,
+                      {
+                        code: data.code,
+                        title: data.title,
+                        loadingMessages: data.loading_messages || [],
+                        widgetType: data.widget_type || 'diagram',
+                      },
+                    ],
+                  }
+                }
+                return updated
+              })
+
             } else if (data.type === 'memory_written') {
 
               // Agent stored a fact — show a transient toast so the user sees it
@@ -7369,6 +7609,34 @@ export const Dashboard: React.FC = () => {
                                     downloadUrl: gf.download_url,
                                     sizeBytes: gf.size_bytes
                                   })}
+
+                                />
+
+                              ))}
+
+                            </div>
+
+                          )}
+
+                          {/* Inline visual widgets (visualize__show_widget) */}
+
+                          {msg.widgetData && msg.widgetData.length > 0 && (
+
+                            <div className="mt-3 space-y-3">
+
+                              {msg.widgetData.map((wData, wIdx) => (
+
+                                <WidgetRenderer
+
+                                  key={wIdx}
+
+                                  code={wData.code}
+
+                                  title={wData.title}
+
+                                  loadingMessages={wData.loadingMessages}
+
+                                  widgetType={wData.widgetType}
 
                                 />
 
