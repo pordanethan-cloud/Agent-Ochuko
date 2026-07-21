@@ -7583,17 +7583,17 @@ export const Dashboard: React.FC = () => {
 
                           ) : (
 
-                            [0, 150, 300].map((delay, d) => (
+                            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#12151c] border border-white/[0.08] text-xs animate-fadeIn">
 
-                              <span
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#8e95a2] animate-pulse" />
 
-                                key={d}
+                              <span className="text-[11.5px] font-mono font-medium text-[#a0a6b2] tracking-wide">
 
-                                className={`w-1.5 h-1.5 rounded-full bg-[#ffffff]/50 animate-bounce dot-bounce-${delay}`}
+                                {activityLabel || (activeMode === 'discuss' ? 'Thinking...' : 'Assembling response...')}
 
-                              />
+                              </span>
 
-                            ))
+                            </div>
 
                           )}
 

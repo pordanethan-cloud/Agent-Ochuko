@@ -993,6 +993,8 @@ async def chat_stream_generator(
                                 tool_outputs.append(f"Image generation job queued successfully with ID: {job_id}.")
                             else:
                                 tool_outputs.append("Image prompt was empty.")
+                        except Exception as err:
+                            tool_outputs.append(f"Image generation error: {err}")
                     elif t_name == "visualize__show_widget":
                         try:
                             args = json.loads(t_args_str or "{}")
