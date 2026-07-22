@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pordanethan-cloud/agent-ochuko/gateway/pkg/auth"
+	"github.com/pordanethan-cloud/agent-ochuko/gateway/pkg/cache"
 )
 
 // CircuitBreaker state tracking for Python AI Worker health
@@ -56,7 +59,6 @@ func (cb *CircuitBreaker) IsTripped() bool {
 		return false
 	}
 
-	// Auto-cool down after 10 seconds: transition to HALF-OPEN test
 	if time.Since(cb.lastStateMod) > 10*time.Second {
 		return false
 	}
@@ -69,9 +71,10 @@ type GatewayProxy struct {
 	reverseProxy *httputil.ReverseProxy
 	validator    *auth.JWTValidator
 	circuit      *CircuitBreaker
+	hotCache     *cache.HotCache
 }
 
-func NewGatewayProxy(targetStr string, validator *auth.JWTValidator) (*GatewayProxy, error) {
+func NewGatewayProxy(targetStr string, validator *auth.JWTValidator, hotCache *cache.HotCache) (*GatewayProxy, error) {
 	target, err := url.Parse(targetStr)
 	if err != nil {
 		return nil, err
@@ -81,7 +84,6 @@ func NewGatewayProxy(targetStr string, validator *auth.JWTValidator) (*GatewayPr
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1 // Immediate flushing for real-time SSE token streaming
 
-	// Customize proxy error handler with circuit breaker integration
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("[GATEWAY-PROXY] Connection error for %s %s: %v", r.Method, r.URL.Path, err)
 		cb.RecordFailure()
@@ -94,8 +96,14 @@ func NewGatewayProxy(targetStr string, validator *auth.JWTValidator) (*GatewayPr
 		})
 	}
 
-	// Intercept downstream status codes for circuit breaker telemetry
 	rp.ModifyResponse = func(resp *http.Response) error {
+		// Strip downstream CORS headers from Python to eliminate duplicate headers
+		resp.Header.Del("Access-Control-Allow-Origin")
+		resp.Header.Del("Access-Control-Allow-Credentials")
+		resp.Header.Del("Access-Control-Allow-Methods")
+		resp.Header.Del("Access-Control-Allow-Headers")
+		resp.Header.Del("Access-Control-Max-Age")
+
 		if resp.StatusCode >= 500 {
 			cb.RecordFailure()
 		} else {
@@ -104,11 +112,16 @@ func NewGatewayProxy(targetStr string, validator *auth.JWTValidator) (*GatewayPr
 		return nil
 	}
 
+	if hotCache == nil {
+		hotCache = cache.NewHotCache(30*time.Minute, 1000)
+	}
+
 	return &GatewayProxy{
 		targetURL:    target,
 		reverseProxy: rp,
 		validator:    validator,
 		circuit:      cb,
+		hotCache:     hotCache,
 	}, nil
 }
 
@@ -142,7 +155,6 @@ func (gp *GatewayProxy) Handler() http.Handler {
 			userCtx, authErr = gp.validator.ValidateToken(authHeader)
 		}
 
-		// Check if endpoint requires authentication
 		if isProtectedPath(r.URL.Path) && (authHeader == "" || authErr != nil) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -152,14 +164,37 @@ func (gp *GatewayProxy) Handler() http.Handler {
 			return
 		}
 
-		// Inject pre-validated claims into downstream headers for Python worker
 		if userCtx != nil {
 			r.Header.Set("X-User-Id", userCtx.UserID)
 			r.Header.Set("X-User-Email", userCtx.Email)
 			r.Header.Set("X-User-Role", userCtx.Role)
 		}
 
-		// Forward request to Python backend
+		// 4. In-Memory Hot Cache Interception for Chat Requests
+		var cacheKey string
+		userID := "anonymous"
+		if userCtx != nil && userCtx.UserID != "" {
+			userID = userCtx.UserID
+		}
+
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/chat") && r.Header.Get("Cache-Control") != "no-cache" {
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err == nil && len(bodyBytes) > 0 {
+				r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+				cacheKey = cache.GenerateKey(userID, string(bodyBytes))
+
+				if val, contentType, found := gp.hotCache.Get(cacheKey); found {
+					w.Header().Set("Content-Type", contentType)
+					w.Header().Set("X-Cache", "HIT")
+					w.WriteHeader(http.StatusOK)
+					w.Write(val)
+					log.Printf("[GATEWAY-CACHE] HIT for %s [%v]", r.URL.Path, time.Since(start))
+					return
+				}
+			}
+		}
+
+		w.Header().Set("X-Cache", "MISS")
 		gp.reverseProxy.ServeHTTP(w, r)
 
 		log.Printf("[GATEWAY] %s %s -> Proxied [%v]", r.Method, r.URL.Path, time.Since(start))
@@ -169,6 +204,7 @@ func (gp *GatewayProxy) Handler() http.Handler {
 func isProtectedPath(path string) bool {
 	protectedPrefixes := []string{
 		"/v1/chat",
+		"/v1/responses",
 		"/v1/conversations",
 		"/v1/files",
 		"/v1/agents",

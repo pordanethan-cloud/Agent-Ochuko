@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pordanethan-cloud/agent-ochuko/gateway/pkg/auth"
+	"github.com/pordanethan-cloud/agent-ochuko/gateway/pkg/cache"
 	"github.com/pordanethan-cloud/agent-ochuko/gateway/pkg/middleware"
 	"github.com/pordanethan-cloud/agent-ochuko/gateway/pkg/proxy"
 )
@@ -55,8 +56,9 @@ func main() {
 	jwtValidator := auth.NewJWTValidator()
 	corsMW := middleware.NewCORSMiddleware()
 	rateLimiter := middleware.NewRateLimiter(120, 1*time.Minute)
+	hotCache := cache.NewHotCache(30*time.Minute, 1000)
 
-	gatewayProxy, err := proxy.NewGatewayProxy(pythonTarget, jwtValidator)
+	gatewayProxy, err := proxy.NewGatewayProxy(pythonTarget, jwtValidator, hotCache)
 	if err != nil {
 		log.Fatalf("[SUPERVISOR] Failed to initialize Gateway Proxy: %v", err)
 	}
