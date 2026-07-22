@@ -53,13 +53,19 @@ def _find_bash_executable() -> str:
 logger = logging.getLogger("app.services.code_sandbox")
 
 # Define global persistent library paths
-GLOBAL_LIBS_DIR = "/app/sandbox_libs"
+import tempfile
+GLOBAL_LIBS_DIR = os.environ.get("SANDBOX_LIBS_DIR") or (
+    os.path.join(tempfile.gettempdir(), "ochuko_sandbox_libs")
+    if os.name == "nt"
+    else "/app/sandbox_libs"
+)
 PYTHON_LIBS_DIR = os.path.join(GLOBAL_LIBS_DIR, "python_packages")
 NODE_LIBS_DIR = os.path.join(GLOBAL_LIBS_DIR, "node_modules")
 
 # Ensure persistent directories exist
 os.makedirs(PYTHON_LIBS_DIR, exist_ok=True)
 os.makedirs(NODE_LIBS_DIR, exist_ok=True)
+
 
 
 async def mount_conversation_files(user_id: str, conversation_id: str, work_dir: str) -> List[str]:
@@ -134,9 +140,12 @@ async def execute_code_in_sandbox(
     language = language.lower().strip()
     
     # 1. Create segregated directories inside the workspace
-    work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
+    import tempfile
+    tmp_base = tempfile.gettempdir()
+    work_dir = os.path.abspath(os.path.join(tmp_base, f"sandbox_{conversation_id}")).replace("\\", "/")
     src_dir = os.path.join(work_dir, "src")
     data_dir = os.path.join(work_dir, "data")
+
     
     os.makedirs(src_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
@@ -358,14 +367,15 @@ async def execute_code_in_sandbox(
         # 2. Upload any created/generated files in the data directory to Google Drive and R2
         from app.api.v1.endpoints.chat import _upload_generated_file
         from app.services.supabase_admin import get_supabase_admin
-        from app.services.google_drive import upload_to_google_drive
-        
-        # Sync generated files to Google Drive first
+        # Sync generated files to Google Drive first if available
+        google_uploaded = []
         try:
+            from app.services.google_drive import upload_to_google_drive
             google_uploaded = await upload_to_google_drive(user_id, conversation_id, data_dir)
         except Exception as gd_err:
-            logger.error(f"Failed to sync generated files to Google Drive: {gd_err}")
+            logger.warning(f"Google Drive sync skipped or unavailable: {gd_err}")
             google_uploaded = []
+
         
         for root, dirs, files_in_dir in os.walk(data_dir):
             # Skip scanning dependency and version control directories

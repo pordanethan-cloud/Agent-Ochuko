@@ -7,13 +7,22 @@ directly to the user's personal Google Drive account under the "Ochuko Workspace
 import os
 import io
 import logging
-from typing import Optional, List, Dict
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+try:
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+    HAS_GOOGLE_API = True
+except ImportError:
+    Credentials = None
+    build = None
+    MediaFileUpload = None
+    MediaIoBaseDownload = None
+    HAS_GOOGLE_API = False
+
 from app.services.supabase_admin import get_supabase_admin
 
 logger = logging.getLogger("app.services.google_drive")
+
 
 
 def get_drive_credentials(user_id: str) -> Optional[Credentials]:
@@ -21,7 +30,11 @@ def get_drive_credentials(user_id: str) -> Optional[Credentials]:
     Fetches the Google refresh token for a user from supabase table public.user_google_credentials
     and returns a Credentials object. Falls back to environment variables for local testing.
     """
+    if not HAS_GOOGLE_API:
+        return None
+
     client_id = os.getenv("GOOGLE_CLIENT_ID")
+
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
     
     if not client_id or not client_secret:

@@ -1,9 +1,10 @@
 // @refresh reset
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 
 import { supabase } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -296,7 +297,7 @@ interface Message {
 
   agentLabel?: string
 
-  widgetData?: { code: string; title: string; loadingMessages?: string[]; widgetType?: string }[]
+  widgetData?: { code: string; title: string; loadingMessages?: string[]; widgetType?: string; widgetLoading?: boolean }[]
 
   timestamp?: number     // Unix ms — set at send/receive time for relative display
 
@@ -511,18 +512,59 @@ function WidgetRenderer({
   code,
   title,
   loadingMessages: _loadingMessages = [],
-  widgetType = 'diagram',
+  widgetType: _widgetType = 'diagram',
+  widgetLoading = false,
 }: {
   code: string
   title: string
   loadingMessages?: string[]
   widgetType?: string
+  widgetLoading?: boolean
 }) {
   const [fullscreen, setFullscreen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [zoom, setZoom] = useState(1)
-
   const [iframeHeight, setIframeHeight] = useState(340)
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  // Close actions dropdown on click outside
+  useEffect(() => {
+    const clickOutside = (e: MouseEvent) => {
+      if (menuOpen && menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', clickOutside)
+    return () => document.removeEventListener('mousedown', clickOutside)
+  }, [menuOpen])
+
+  // Dynamically auto-resize iframe to fit content size exactly
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'resize-iframe') {
+        const height = parseInt(e.data.height, 10);
+        if (!isNaN(height) && height > 0) {
+          // Keep dynamic height within healthy preview bounds (180px to 800px)
+          setIframeHeight(Math.max(180, Math.min(800, height)));
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const loadingMessages = _loadingMessages.length > 0 ? _loadingMessages : ['Assembling visual...']
+
+  // Cycle loading messages every 800ms while in loading state
+  useEffect(() => {
+    if (!widgetLoading) return
+    const interval = setInterval(() => {
+      setLoadingMsgIdx((i) => (i + 1) % loadingMessages.length)
+    }, 800)
+    return () => clearInterval(interval)
+  }, [widgetLoading, loadingMessages.length])
 
   const isSvg = useMemo(() => {
     const trimmed = code.trim().toLowerCase()
@@ -531,15 +573,53 @@ function WidgetRenderer({
 
   const cleanSvg = useMemo(() => {
     if (!isSvg) return ''
-    return code
+    let cleaned = code
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/\son\w+="[^"]*"/gi, '')
       .replace(/\son\w+='[^']*'/gi, '')
+
+    const tokenStyle = `<style>
+      :root, svg {
+        --bg-void: #06060a;
+        --bg-deep: #0d0d14;
+        --bg-surface: #14141e;
+        --bg-raised: #1c1c2a;
+        --bg-overlay: #232333;
+        --brass-core: #b8860b;
+        --brass-bright: #d4a832;
+        --brass-dim: #7a5a08;
+        --brass-whisper: rgba(184, 134, 11, 0.12);
+        --brass-glow: rgba(212, 168, 50, 0.25);
+        --text-primary: #e8e0d0;
+        --text-secondary: #9a9090;
+        --text-muted: #5a5465;
+        --text-accent: #d4a832;
+        --border-subtle: rgba(184, 134, 11, 0.15);
+        --border-visible: rgba(184, 134, 11, 0.30);
+        --border-strong: rgba(184, 134, 11, 0.55);
+        --success: #4a9463;
+        --warning: #c4841a;
+        --error: #a83232;
+        --info: #3a6ea8;
+        --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+        --font-ui: 'Inter', system-ui, sans-serif;
+      }
+      svg {
+        background-color: var(--bg-deep, #0d0d14);
+        color: var(--text-primary, #e8e0d0);
+        font-family: var(--font-ui, 'Inter', sans-serif);
+      }
+      text {
+        fill: var(--text-primary, #e8e0d0) !important;
+      }
+    </style>`
+
+    if (cleaned.includes('<svg') && !cleaned.includes('--brass-core')) {
+      cleaned = cleaned.replace(/(<svg[^>]*>)/i, `$1${tokenStyle}`)
+    }
+    return cleaned
   }, [code, isSvg])
 
-  const formattedTitle = useMemo(() => {
-    return title ? title.replace(/_/g, ' ').toUpperCase() : 'WIDGET DISPLAY'
-  }, [title])
 
   // Listen for iframe postMessage (sendPrompt bridge and iframe_height resize)
   useEffect(() => {
@@ -578,7 +658,7 @@ function WidgetRenderer({
         canvas.height = img.height || 600
         const ctx = canvas.getContext('2d')
         if (ctx) {
-          ctx.fillStyle = '#0c0d10'
+          ctx.fillStyle = '#0d0d14'
           ctx.fillRect(0, 0, canvas.width, canvas.height)
           ctx.drawImage(img, 0, 0)
           const pngUrl = canvas.toDataURL('image/png')
@@ -617,147 +697,286 @@ function WidgetRenderer({
   <meta charset="utf-8">
   <style>
     :root {
-      --bg-void: #06060a;
-      --bg-deep: #0c0d10;
-      --bg-surface: #12151c;
-      --bg-raised: #181c26;
-      --accent-purple: #a855f7;
-      --accent-cyan: #06b6d4;
-      --text-primary: #f8fafc;
-      --text-secondary: #cbd5e1;
-      --text-muted: #64748b;
-      --font-sans: 'Inter', system-ui, sans-serif;
+      --bg-void:    #06060a;
+      --bg-deep:    #0d0d14;
+      --bg-surface: #14141e;
+      --bg-raised:  #1c1c2a;
+      --bg-overlay: #232333;
+      --brass-core:    #b8860b;
+      --brass-bright:  #d4a832;
+      --brass-dim:     #7a5a08;
+      --brass-whisper: rgba(184,134,11,0.12);
+      --brass-glow:    rgba(212,168,50,0.25);
+      --text-primary:   #e8e0d0;
+      --text-secondary: #9a9090;
+      --text-muted:     #5a5465;
+      --text-accent:    #d4a832;
+      --border-subtle:  rgba(184,134,11,0.15);
+      --border-visible: rgba(184,134,11,0.30);
+      --border-strong:  rgba(184,134,11,0.55);
+      --success: #4a9463;
+      --warning: #c4841a;
+      --error:   #a83232;
+      --info:    #3a6ea8;
+      --font-mono: 'JetBrains Mono','Fira Code',monospace;
+      --font-ui:   'Inter',system-ui,sans-serif;
     }
     body {
       margin: 0;
-      padding: 16px;
-      background: #0c0d10;
-      color: #f8fafc;
-      font-family: var(--font-sans);
+      padding: 12px;
+      background: transparent;
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      overflow-x: auto;
+      max-width: 100vw;
+    }
+    #app, body > div:first-of-type {
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    /* Elegant dark custom scrollbar for all scrollable elements inside the iframe */
+    *::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    *::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    *::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 99px;
+    }
+    *::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
     }
   </style>
   ${bridgeScript}
 </head>
 <body>
   ${code}
+  <script>
+    // Scale container if it overflows the iframe viewport width (minimum scale 0.85 to stay readable)
+    const fitViewport = () => {
+      const el = document.getElementById('app') || document.body.firstElementChild;
+      if (!el) return;
+      el.style.maxWidth = '100%';
+      const elWidth = el.scrollWidth;
+      const viewWidth = window.innerWidth;
+      if (elWidth > viewWidth && viewWidth > 0) {
+        const ratio = Math.max(0.85, viewWidth / elWidth);
+        el.style.transform = 'scale(' + ratio + ')';
+        el.style.transformOrigin = 'top left';
+        el.style.width = elWidth + 'px';
+        el.style.marginBottom = (el.scrollHeight * (1 - ratio)) + 'px';
+      } else {
+        el.style.transform = '';
+        el.style.width = '';
+        el.style.marginBottom = '';
+      }
+    };
+
+    // Report height updates to the parent page to resize the container
+    const reportHeight = () => {
+      fitViewport();
+      const height = document.documentElement.scrollHeight || document.body.scrollHeight;
+      window.parent.postMessage({ type: 'resize-iframe', height: height }, '*');
+    };
+
+    window.addEventListener('load', reportHeight);
+    window.addEventListener('resize', reportHeight);
+
+    // Also track layout modifications
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(reportHeight);
+      observer.observe(document.body);
+    }
+  </script>
 </body>
 </html>`
   }, [code, isSvg])
 
+  // ── Loading state ────────────────────────────────────────────────────────────
+  if (widgetLoading) {
+    return (
+      <div className="mt-3 my-2 rounded-xl bg-[#1A3038]/90 border border-[rgba(233,236,239,0.12)] shadow-xl overflow-hidden font-sans animate-fadeIn">
+        <div className="flex items-center gap-3 px-4 py-3.5 bg-[#223D47]/85 border-b border-[rgba(233,236,239,0.08)]">
+          <div
+            className="w-3.5 h-3.5 rounded-full border-2 border-white/10 shrink-0"
+            style={{
+              borderTopColor: '#00A896',
+              animation: 'widget-spin 0.75s linear infinite',
+            }}
+          />
+          <span
+            className="text-[12px] font-medium text-[#F4F1DE] font-mono transition-all duration-300"
+            key={loadingMsgIdx}
+          >
+            {loadingMessages[loadingMsgIdx]}
+          </span>
+        </div>
+        <style>{`@keyframes widget-spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
+
   return (
-    <div className="mt-3 my-2 rounded-xl bg-[#0a0c10]/95 border border-white/[0.09] shadow-xl backdrop-blur-md overflow-hidden font-sans select-none animate-fadeIn">
-      {/* Header Bar */}
-      <div className="flex items-center justify-between px-3.5 py-2 bg-[#12151c]/90 border-b border-white/[0.08] text-xs">
-        <div className="flex items-center gap-2 overflow-hidden">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#8e95a2] shrink-0" />
-          <span className="font-mono text-[9.5px] font-medium text-[#a0a6b2] tracking-wider uppercase shrink-0">
-            {widgetType}
-          </span>
-          <span className="text-[11px] font-medium text-[#cbd5e1] truncate" title={title}>
-            {formattedTitle}
-          </span>
-        </div>
+    <div className="relative group/widget w-full my-4 font-sans select-none animate-widgetUnfold z-10">
+      {/* Absolute 3-Dots Action Button & Dropdown Menu */}
+      <div ref={menuRef} className="absolute right-3.5 top-3.5 z-50">
+        <button
+          type="button"
+          onClick={() => setMenuOpen(!menuOpen)}
+          className="p-1.5 rounded-lg border border-white/5 bg-[#12141c]/90 text-[#8e95a2] hover:text-[#ffffff] hover:bg-[#1a1d29] shadow-lg backdrop-blur-md cursor-pointer transition duration-150"
+          title="More actions"
+        >
+          <MoreVertical className="w-3.5 h-3.5" />
+        </button>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {isSvg && (
-            <>
-              <button
-                onClick={() => setZoom((z) => Math.max(0.6, z - 0.2))}
-                className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[#8e95a2] hover:text-white bg-white/5 hover:bg-white/10"
-                title="Zoom Out"
-              >
-                -
-              </button>
-              <button
-                onClick={() => setZoom(1)}
-                className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[#8e95a2] hover:text-white bg-white/5 hover:bg-white/10"
-                title="Reset Zoom"
-              >
-                {Math.round(zoom * 100)}%
-              </button>
-              <button
-                onClick={() => setZoom((z) => Math.min(2.5, z + 0.2))}
-                className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[#8e95a2] hover:text-white bg-white/5 hover:bg-white/10"
-                title="Zoom In"
-              >
-                +
-              </button>
-              <button
-                onClick={handleDownloadPng}
-                className="px-2 py-1 rounded text-[10px] font-semibold text-[#8e95a2] hover:text-white border border-white/10 hover:bg-white/5"
-                title="Export PNG"
-              >
-                PNG
-              </button>
-            </>
-          )}
+        {menuOpen && (
+          <div className="absolute right-0 mt-1.5 w-44 py-1.5 bg-[#0f1118]/95 border border-white/10 rounded-xl shadow-2xl backdrop-blur-md text-[11px] font-medium text-[#8e95a2] select-none flex flex-col z-[100]">
 
-          <button
-            onClick={handleCopyCode}
-            className="px-2 py-1 rounded text-[10px] font-semibold text-[#8e95a2] hover:text-white border border-white/10 hover:bg-white/5"
-            title="Copy Code"
-          >
-            {copied ? 'Copied' : 'Code'}
-          </button>
-
-          <button
-            onClick={() => setFullscreen(true)}
-            className="px-2 py-1 rounded text-[10px] font-semibold text-[#8e95a2] hover:text-white border border-white/10 hover:bg-white/5"
-            title="Expand Fullscreen"
-          >
-            Expand
-          </button>
-        </div>
+            {isSvg && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setZoom((z) => Math.max(0.6, z - 0.2)); setMenuOpen(false); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-white/5 hover:text-white transition duration-150"
+                >
+                  Zoom Out
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setZoom(1); setMenuOpen(false); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-white/5 hover:text-white transition duration-150"
+                >
+                  Reset Zoom ({Math.round(zoom * 100)}%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setZoom((z) => Math.min(2.5, z + 0.2)); setMenuOpen(false); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-white/5 hover:text-white transition duration-150"
+                >
+                  Zoom In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { handleDownloadPng(); setMenuOpen(false); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-white/5 hover:text-white transition duration-150 border-b border-white/[0.05]"
+                >
+                  Export PNG
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => { handleCopyCode(); setMenuOpen(false); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-white/5 hover:text-white transition duration-150"
+            >
+              {copied ? 'Copied!' : 'Copy Code'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setFullscreen(true); setMenuOpen(false); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-white/5 hover:text-white transition duration-150"
+            >
+              Expand Fullscreen
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Content Canvas Area */}
-      <div className="p-3 bg-[#06060a] overflow-x-auto flex justify-center items-center min-h-[180px]">
+      {/* Content Canvas Area — direct borderless view */}
+      <div className="w-full bg-transparent overflow-x-auto flex justify-center items-center min-h-[180px] relative">
         {isSvg ? (
           <div
-            className="transition-transform duration-200 flex justify-center items-center max-w-full"
-            style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+            className="transition-transform duration-200 flex justify-center items-center max-w-full [&>svg]:max-w-full [&>svg]:h-auto [&>svg>rect:first-of-type]:fill-transparent"
+            style={{
+              transform: `scale(${zoom})`,
+              transformOrigin: 'top center',
+              '--bg-void': '#0D191D',
+              '--bg-deep': '#1A3038',
+              '--bg-surface': '#223D47',
+              '--bg-raised': '#294954',
+              '--bg-overlay': '#325764',
+              '--brass-core': '#00A896',
+              '--brass-bright': '#FFB703',
+              '--brass-dim': '#2E6F40',
+              '--brass-whisper': 'rgba(0, 168, 150, 0.08)',
+              '--brass-glow': 'rgba(0, 168, 150, 0.18)',
+              '--text-primary': '#F4F1DE',
+              '--text-secondary': '#E9ECEF',
+              '--text-muted': '#8e95a2',
+              '--text-accent': '#D4AF37',
+              '--border-subtle': 'rgba(233, 236, 239, 0.08)',
+              '--border-visible': 'rgba(233, 236, 239, 0.18)',
+              '--border-strong': 'rgba(233, 236, 239, 0.35)',
+            } as React.CSSProperties}
             dangerouslySetInnerHTML={{ __html: cleanSvg || code }}
           />
         ) : (
           <iframe
             srcDoc={fullHtml}
             sandbox="allow-scripts"
-            className="w-full rounded-lg border border-white/5 bg-[#0c0d10] transition-all duration-200"
+            className="w-full rounded-lg border-0 bg-[#0d0d14]/20 transition-all duration-200"
             style={{ height: `${iframeHeight}px` }}
             title={title}
           />
         )}
       </div>
 
-      {/* Fullscreen Modal */}
-      {fullscreen && (
-        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col p-6 animate-fadeIn">
-          <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
-            <span className="font-mono text-sm font-medium text-[#e2e8f0]">{formattedTitle}</span>
-            <button
-              onClick={() => setFullscreen(false)}
-              className="px-3 py-1.5 rounded-lg bg-white/10 text-white font-semibold text-xs hover:bg-white/20"
-            >
-              Close
-            </button>
-          </div>
-          <div className="flex-1 overflow-auto flex items-center justify-center bg-[#06060a] p-4 rounded-xl border border-white/10">
+      {/* Fullscreen Modal — Complete edge-to-edge canvas wrapped in React Portal */}
+      {fullscreen && createPortal(
+        <div className="fixed inset-0 z-50 bg-[#06060a] flex items-center justify-center animate-fadeIn select-none">
+          {/* Floating close button */}
+          <button
+            type="button"
+            onClick={() => setFullscreen(false)}
+            className="absolute right-6 top-6 z-30 p-2 rounded-full border border-white/10 bg-black/60 hover:bg-black/80 text-white cursor-pointer transition shadow-lg animate-scaleIn"
+            title="Exit Fullscreen"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          <div className="w-full h-full flex items-center justify-center p-4">
             {isSvg ? (
               <div
-                className="w-full h-full flex items-center justify-center"
+                className="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full [&>svg]:max-h-screen [&>svg]:object-contain"
+                style={{
+                  '--bg-void': '#0D191D',
+                  '--bg-deep': '#1A3038',
+                  '--bg-surface': '#223D47',
+                  '--bg-raised': '#294954',
+                  '--bg-overlay': '#325764',
+                  '--brass-core': '#00A896',
+                  '--brass-bright': '#FFB703',
+                  '--brass-dim': '#2E6F40',
+                  '--brass-whisper': 'rgba(0, 168, 150, 0.08)',
+                  '--brass-glow': 'rgba(0, 168, 150, 0.18)',
+                  '--text-primary': '#F4F1DE',
+                  '--text-secondary': '#E9ECEF',
+                  '--text-muted': '#8e95a2',
+                  '--text-accent': '#D4AF37',
+                  '--border-subtle': 'rgba(233, 236, 239, 0.08)',
+                  '--border-visible': 'rgba(233, 236, 239, 0.18)',
+                  '--border-strong': 'rgba(233, 236, 239, 0.35)',
+                } as React.CSSProperties}
                 dangerouslySetInnerHTML={{ __html: cleanSvg || code }}
               />
             ) : (
               <iframe
                 srcDoc={fullHtml}
                 sandbox="allow-scripts"
-                className="w-full h-full rounded-xl border border-white/5 bg-[#0c0d10]"
+                className="w-full h-full min-h-[80vh] border-0 bg-[#0c0d10]"
                 title={title}
               />
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
@@ -771,8 +990,6 @@ function WidgetRenderer({
 
 let _mermaidReady = false
 
-let _mermaidIdCounter = 0
-
 // Validate and clean mermaid code before rendering
 function validateMermaidCode(code: string): { valid: boolean, cleanedCode: string, error?: string } {
   if (!code || code.trim().length === 0) {
@@ -782,34 +999,11 @@ function validateMermaidCode(code: string): { valid: boolean, cleanedCode: strin
   // Clean up common issues
   let cleaned = code.trim()
 
-  // Remove trailing dashes or other non-mermaid characters at the end
-  cleaned = cleaned.replace(/[-]{3,}$/, '')
-
-  // Remove multiple consecutive dashes that might cause parsing errors
-  cleaned = cleaned.replace(/[-]{4,}/g, '---')
+  // Remove wrapping backticks / markdown fence if present
+  cleaned = cleaned.replace(/^```(?:mermaid)?\r?\n?/i, '').replace(/\r?\n?```$/i, '').trim()
 
   // Ensure proper line endings
   cleaned = cleaned.replace(/\r\n/g, '\n')
-
-  // Check for basic mermaid structure
-  const validStartPatterns = /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|mindmap|gitGraph|C4Context|blockDiagram|architecture|requirementDiagram|objectDiagram|networkDiagram|sankey|xychart|block-beta|timeline|sact|packet|circuit|wireframe|info|piechart|quadrantChart|gitGraph)/i
-
-  if (!validStartPatterns.test(cleaned.split('\n')[0])) {
-    return { valid: false, cleanedCode: cleaned, error: 'Invalid mermaid diagram type' }
-  }
-
-  // Check for balanced brackets/parentheses (basic check)
-  const openBrackets = (cleaned.match(/\[/g) || []).length
-  const closeBrackets = (cleaned.match(/\]/g) || []).length
-  if (openBrackets !== closeBrackets) {
-    return { valid: false, cleanedCode: cleaned, error: 'Unbalanced brackets' }
-  }
-
-  const openParens = (cleaned.match(/\(/g) || []).length
-  const closeParens = (cleaned.match(/\)/g) || []).length
-  if (openParens !== closeParens) {
-    return { valid: false, cleanedCode: cleaned, error: 'Unbalanced parentheses' }
-  }
 
   return { valid: true, cleanedCode: cleaned }
 }
@@ -833,8 +1027,6 @@ const VoiceWaveform: React.FC<{ volume: number }> = ({ volume }) => {
 function MermaidBlock({ code }: { code: string }) {
 
   const diagramRef = useRef<HTMLDivElement>(null)
-
-  const id = useRef(`mermaid-${++_mermaidIdCounter}`).current
 
   const [showSource, setShowSource] = useState(false)
 
@@ -861,7 +1053,6 @@ function MermaidBlock({ code }: { code: string }) {
 
       try {
 
-        // Use validated and cleaned code
         if (!validation.valid) {
           throw new Error(validation.error || 'Invalid mermaid syntax')
         }
@@ -870,7 +1061,12 @@ function MermaidBlock({ code }: { code: string }) {
 
           const m = await import('mermaid')
 
-          m.default.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+          m.default.initialize({ 
+            startOnLoad: false, 
+            theme: 'dark', 
+            securityLevel: 'loose',
+            suppressErrorRendering: true
+          })
 
           _mermaidReady = true
 
@@ -878,7 +1074,13 @@ function MermaidBlock({ code }: { code: string }) {
 
         const { default: mermaid } = await import('mermaid')
 
-        const { svg } = await mermaid.render(id, validation.cleanedCode)
+        const renderId = `mermaid-${Date.now()}-${Math.floor(Math.random() * 100000)}`
+
+        const { svg } = await mermaid.render(renderId, validation.cleanedCode)
+
+        // Clean up temporary DOM element appended by mermaid if still present
+        const tempEl = document.getElementById(renderId)
+        if (tempEl) tempEl.remove()
 
         if (!cancelled && diagramRef.current) {
 
@@ -916,7 +1118,7 @@ function MermaidBlock({ code }: { code: string }) {
 
     return () => { cancelled = true }
 
-  }, [validation, id, showSource])
+  }, [validation, showSource])
 
   const handleCopy = () => {
 
@@ -1008,29 +1210,17 @@ function MermaidBlock({ code }: { code: string }) {
     }
   }
 
-  if (isLoading) {
-
-    return (
-
-      <div className="my-3 p-4 rounded-xl border border-[#1e2025] bg-[#0d1117]/50">
-
-        <div className="flex items-center gap-2">
-
-          <div className="w-4 h-4 border-2 border-brand-muted/30 border-t-brand-text rounded-full animate-spin" />
-
-          <p className="text-sm text-brand-muted">Rendering diagram...</p>
-
-        </div>
-
-      </div>
-
-    )
-
-  }
-
   return (
 
     <div className="group my-3 relative rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
+      {isLoading && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d1117]/80 backdrop-blur-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 border-2 border-brand-muted/30 border-t-brand-text rounded-full animate-spin" />
+            <p className="text-sm text-brand-muted">Rendering diagram...</p>
+          </div>
+        </div>
+      )}
 
       {/* Corner icon buttons — top right, revealed on hover */}
 
@@ -1970,11 +2160,12 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
   return (
 
-    <div className="group relative bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-xl overflow-hidden my-4 shadow-lg">
+    <div className="group relative bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-xl my-4 shadow-lg z-10">
 
       {/* Split-button — top-right, reveal on hover */}
 
-      <div ref={menuRef} className="absolute top-2 right-2 z-20 flex items-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+      <div ref={menuRef} className="absolute top-2 right-2 z-50 flex items-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+
 
         {/* Copy */}
 
@@ -3208,6 +3399,50 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: st
   )
 }
 
+const ThinkingPanel: React.FC<{ content: string; isStreaming?: boolean }> = ({ content, isStreaming }) => {
+  const [expanded, setExpanded] = useState<boolean>(!!isStreaming)
+
+  useEffect(() => {
+    if (isStreaming) {
+      setExpanded(true)
+    }
+  }, [isStreaming])
+
+  if (!content || !content.trim()) return null
+
+  const trimmed = content.trim()
+  const wordCount = trimmed.split(/\s+/).length
+
+  return (
+    <div className="my-2.5 rounded-xl bg-[#0b0c10]/95 border border-white/[0.08] shadow-lg overflow-hidden select-none animate-fadeIn transition-all duration-200">
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        className="w-full flex items-center justify-between px-3.5 py-2 bg-[#14161f]/70 hover:bg-[#1a1d29]/90 border-b border-white/[0.05] transition duration-150 text-left"
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Brain className={`w-3.5 h-3.5 shrink-0 ${isStreaming ? 'text-amber-400 animate-pulse' : 'text-[#8e95a2]'}`} />
+          <span className="text-[11.5px] font-mono font-medium text-[#c5a880] tracking-wide truncate">
+            {isStreaming ? 'Thinking...' : `Thought process (${wordCount} words)`}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0 text-[#8e95a2]">
+          {isStreaming && (
+            <span className="text-[10px] font-mono text-amber-400/80 animate-pulse">Reasoning...</span>
+          )}
+          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="p-3.5 max-h-80 overflow-y-auto font-mono text-[11.5px] text-[#9a9090] leading-relaxed whitespace-pre-wrap select-text bg-[#07080b]/90 border-t border-white/[0.03]">
+          {trimmed}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 // ─── LazyMessage (Virtualized rendering for long message history) ────────────────
@@ -4259,6 +4494,22 @@ export const Dashboard: React.FC = () => {
 
             imagePending: m.content_parts?.image_jobs?.[0]?.status === 'pending' || undefined,
 
+            thinkingContent: m.content_parts?.thinking_content || undefined,
+
+            generatedFiles: m.content_parts?.generated_files || undefined,
+
+            widgetData: m.content_parts?.widgets ? m.content_parts.widgets.map((w: any) => ({
+
+              code: w.code,
+
+              title: w.title,
+
+              widgetType: w.widget_type || w.widgetType || 'diagram',
+
+              widgetLoading: false,
+
+            })) : undefined,
+
           }
 
           if (m.role === 'user') {
@@ -4535,7 +4786,7 @@ export const Dashboard: React.FC = () => {
         } catch {}
 
         fetchConversations()
-
+      }
     }).catch((err) => {
       console.warn('Supabase auth connection offline or closed:', err)
     })
@@ -4801,9 +5052,17 @@ export const Dashboard: React.FC = () => {
 
     try {
 
-      const session = await supabase.auth.getSession()
-
-      const token = session.data.session?.access_token
+      let token = ''
+      try {
+        const getSessionPromise = supabase.auth.getSession()
+        const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve(null), 2500))
+        const sessionRes = await Promise.race([getSessionPromise, timeoutPromise])
+        if (sessionRes?.data?.session?.access_token) {
+          token = sessionRes.data.session.access_token
+        }
+      } catch (authErr) {
+        console.warn('Failed to retrieve Supabase session token:', authErr)
+      }
 
       const sendStreamRequest = () => fetch(`${API_BASE}/v1/responses/stream`, {
 
@@ -4830,6 +5089,8 @@ export const Dashboard: React.FC = () => {
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 
           local_time: new Date().toString(),
+
+          viewport: window.innerWidth < 640 ? 'mobile' : 'desktop',
 
         }),
 
@@ -4901,6 +5162,10 @@ export const Dashboard: React.FC = () => {
           if (errData?.error?.message) {
 
             errMsg = errData.error.message
+
+          } else if (errData?.detail) {
+
+            errMsg = typeof errData.detail === 'string' ? errData.detail : JSON.stringify(errData.detail)
 
           } else if (errData?.error?.code) {
 
@@ -5413,26 +5678,53 @@ export const Dashboard: React.FC = () => {
 
               })
 
-            } else if (data.type === 'widget') {
+            } else if (data.type === 'widget_loading') {
 
-              // Widget payload emitted from visualize__show_widget
+              // Pre-signal: show animated loading placeholder while the model finishes code generation
               setMessages((prev) => {
                 const updated = [...prev]
                 if (updated.length > 0) {
-                  const last = updated[updated.length - 1]
+                  const last = { ...updated[updated.length - 1] }
                   const existingWidgets = last.widgetData || []
-                  updated[updated.length - 1] = {
-                    ...last,
-                    widgetData: [
-                      ...existingWidgets,
-                      {
-                        code: data.code,
-                        title: data.title,
-                        loadingMessages: data.loading_messages || [],
-                        widgetType: data.widget_type || 'diagram',
-                      },
-                    ],
+                  last.widgetData = [
+                    ...existingWidgets,
+                    {
+                      code: '',
+                      title: data.title || 'widget',
+                      loadingMessages: data.loading_messages || ['Assembling visual...'],
+                      widgetType: data.widget_type || 'diagram',
+                      widgetLoading: true,
+                    },
+                  ]
+                  updated[updated.length - 1] = last
+                }
+                return updated
+              })
+
+            } else if (data.type === 'widget') {
+
+              // Full widget payload — replace the loading placeholder (last widgetLoading item)
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = { ...updated[updated.length - 1] }
+                  const existingWidgets = [...(last.widgetData || [])]
+                  // Find the last loading placeholder and replace it
+                  const placeholderIdx = existingWidgets.map(w => w.widgetLoading).lastIndexOf(true)
+                  const newEntry = {
+                    code: data.code,
+                    title: data.title,
+                    loadingMessages: data.loading_messages || [],
+                    widgetType: data.widget_type || 'diagram',
+                    widgetLoading: false,
                   }
+                  if (placeholderIdx !== -1) {
+                    existingWidgets[placeholderIdx] = newEntry
+                  } else {
+                    existingWidgets.push(newEntry)
+                  }
+                  last.widgetData = existingWidgets
+                  updated[updated.length - 1] = last
                 }
                 return updated
               })
@@ -5451,7 +5743,7 @@ export const Dashboard: React.FC = () => {
                 if (updated.length > 0) {
                   const last = updated[updated.length - 1]
                   const existing = last.thinkingContent
-                  const newThinking = existing ? existing + '\n\n=== REASONING ===\n\n' : ''
+                  const newThinking = existing ? existing + '\n\n' : ''
                   updated[updated.length - 1] = { ...last, thinkingContent: newThinking }
                 }
                 return updated
@@ -6547,7 +6839,7 @@ export const Dashboard: React.FC = () => {
 
               placeholder="Search chats (Ctrl+K)..."
 
-              className="w-full h-9 bg-black/20 border border-[#1e2025] rounded-lg pl-9 pr-8 text-[11px] text-brand-text placeholder-[#8e95a2]/30 focus:outline-none focus:border-[#ffffff]/20 focus:ring-0 transition"
+              className="w-full h-9 bg-white/[0.03] focus:bg-white/[0.05] border border-white/[0.05] focus:border-white/10 rounded-lg pl-9 pr-8 text-[11px] text-[#f3f4f6] placeholder-[#8e95a2]/40 focus:outline-none transition"
 
             />
 
@@ -6834,9 +7126,9 @@ export const Dashboard: React.FC = () => {
 
                                 active
 
-                                  ? 'bg-[#ffffff]/10 text-brand-text border border-[#ffffff]/20'
+                                  ? 'bg-white/[0.06] text-white border-0'
 
-                                  : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
+                                  : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/[0.03] border-0'
 
                               }`}
 
@@ -7549,53 +7841,87 @@ export const Dashboard: React.FC = () => {
 
                       ) : msg.content === '' && isStreaming && (!msg.widgetData || msg.widgetData.length === 0) && (!msg.generatedFiles || msg.generatedFiles.length === 0) && !msg.imageUrl ? (
 
-                        /* Typing / searching indicator — appears immediately before first token */
+                        /* Typing / searching / thinking indicator — appears immediately before first token */
 
-                        <div className="flex items-center gap-2 h-6">
+                        <div className="space-y-2">
 
-                          {msg.agentStep && msg.agentStep > 0 ? (
+                          {msg.role === 'assistant' && msg.thinkingContent && msg.thinkingContent.trim().length > 0 && (
 
-                            /* OODA loop active — show step counter */
+                            <ThinkingPanel
 
-                            <AgentStepIndicator
+                              content={msg.thinkingContent}
 
-                              step={msg.agentStep}
-
-                              maxSteps={msg.agentMaxSteps || agentMaxSteps}
-
-                              label={msg.agentLabel || (webSearchStatus === 'searching' ? activityLabel : undefined)}
+                              isStreaming={isStreaming && i === messages.length - 1}
 
                             />
 
-                          ) : webSearchStatus === 'searching' ? (
-
-                            <>
-
-                              <Globe className="w-3.5 h-3.5 text-[#ffffff] animate-pulse" />
-
-                              <span className="text-[11px] text-[#ffffff]/70 font-semibold tracking-wide">
-
-                                {activityLabel || 'Searching the web...'}
-
-                              </span>
-
-                            </>
-
-                          ) : (
-
-                            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#12151c] border border-white/[0.08] text-xs animate-fadeIn">
-
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#8e95a2] animate-pulse" />
-
-                              <span className="text-[11.5px] font-mono font-medium text-[#a0a6b2] tracking-wide">
-
-                                {activityLabel || (mode === 'discuss' ? 'Thinking...' : 'Assembling response...')}
-
-                              </span>
-
-                            </div>
-
                           )}
+
+                          <div className="flex items-center gap-2 h-6">
+
+                            {msg.agentStep && msg.agentStep > 0 ? (
+
+                              /* OODA loop active — show step counter */
+
+                              <AgentStepIndicator
+
+                                step={msg.agentStep}
+
+                                maxSteps={msg.agentMaxSteps || agentMaxSteps}
+
+                                label={msg.agentLabel || (webSearchStatus === 'searching' ? activityLabel : undefined)}
+
+                              />
+
+                            ) : webSearchStatus === 'searching' ? (
+
+                              <>
+
+                                <Globe className="w-3.5 h-3.5 text-[#ffffff] animate-pulse" />
+
+                                <span className="text-[11px] text-[#ffffff]/70 font-semibold tracking-wide">
+
+                                  {activityLabel || 'Searching the web...'}
+
+                                </span>
+
+                              </>
+
+                            ) : activityLabel ? (
+
+                              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#12151c] border border-white/[0.08] text-xs animate-fadeIn">
+
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#8e95a2] animate-pulse" />
+
+                                <span className="text-[11.5px] font-mono font-medium text-[#a0a6b2] tracking-wide">
+
+                                  {activityLabel}
+
+                                </span>
+
+                              </div>
+
+                            ) : (
+
+                              <div className="flex items-center gap-1.5 h-6 px-1">
+
+                                {[0, 150, 300].map((delay, d) => (
+
+                                  <span
+
+                                    key={d}
+
+                                    className={`w-1.5 h-1.5 rounded-full bg-[#8e95a2]/70 animate-bounce dot-bounce-${delay}`}
+
+                                  />
+
+                                ))}
+
+                              </div>
+
+                            )}
+
+                          </div>
 
                         </div>
 
@@ -7604,6 +7930,18 @@ export const Dashboard: React.FC = () => {
                         /* Rendered markdown — optionally preceded by a step pill while looping */
 
                         <div className="space-y-3">
+
+                          {msg.role === 'assistant' && msg.thinkingContent && msg.thinkingContent.trim().length > 0 && (
+
+                            <ThinkingPanel
+
+                              content={msg.thinkingContent}
+
+                              isStreaming={isStreaming && i === messages.length - 1}
+
+                            />
+
+                          )}
 
                           {msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content && msg.content.trim().length > 0 && (
 
@@ -7684,6 +8022,8 @@ export const Dashboard: React.FC = () => {
                                   loadingMessages={wData.loadingMessages}
 
                                   widgetType={wData.widgetType}
+
+                                  widgetLoading={wData.widgetLoading ?? false}
 
                                 />
 
@@ -8145,9 +8485,14 @@ export const Dashboard: React.FC = () => {
 
             return (
               <div
-                style={{ width: isArtifactExpanded ? '100%' : `${artifactWidth}px` }}
-                className="border-l border-[#1a1c1f] bg-[#0b0c0e] flex flex-col relative shrink-0 z-20 transition-all duration-150"
+                style={isArtifactExpanded ? undefined : { width: `${artifactWidth}px` }}
+                className={
+                  isArtifactExpanded
+                    ? "fixed inset-0 z-[90] w-screen h-screen bg-[#0b0c0e] flex flex-col p-4 md:p-6 transition-all duration-200"
+                    : "border-l border-[#1a1c1f] bg-[#0b0c0e] flex flex-col relative shrink-0 z-20 transition-all duration-150"
+                }
               >
+
                 {/* Resizing Handle */}
                 {!isArtifactExpanded && (
                   <div
@@ -8651,7 +8996,7 @@ export const Dashboard: React.FC = () => {
         >
           {/* Modal Header */}
           <div 
-            className="w-full max-w-5xl flex items-center justify-between pb-4 border-b border-[#1e2025] mb-4 relative z-10"
+            className="w-full flex items-center justify-between pb-3 border-b border-[#1e2025] mb-3 relative z-10 shrink-0"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-3">
@@ -8754,29 +9099,40 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Modal Content */}
+          {/* Modal Content — Full Viewport Screen */}
           <div 
-            className="flex-1 w-full max-w-5xl flex items-center justify-center overflow-hidden"
+            className="flex-1 w-full h-full flex items-center justify-center overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {previewingFile.type.startsWith('image/') ? (
               <img 
                 src={previewingFile.url} 
                 alt={previewingFile.name} 
-                className="max-w-full max-h-[75vh] object-contain rounded-xl border border-[#ffffff]/10 shadow-2xl animate-scaleIn"
+                className="w-auto h-auto max-w-full max-h-[88vh] object-contain rounded-xl border border-[#ffffff]/10 shadow-2xl animate-scaleIn"
               />
+            ) : (previewingFile.type === 'text/html' || previewingFile.type === 'html' || previewingFile.name.endsWith('.html')) ? (
+              <div className="w-full h-full min-h-[85vh] bg-white rounded-xl border border-[#ffffff]/10 overflow-hidden shadow-2xl">
+                <iframe 
+                  srcDoc={previewingFile.content || undefined} 
+                  src={previewingFile.url} 
+                  className="w-full h-full border-0" 
+                  sandbox="allow-scripts allow-popups allow-forms allow-modals" 
+                  title={previewingFile.name}
+                />
+              </div>
             ) : previewingFile.type === 'application/pdf' ? (
               <embed 
                 src={previewingFile.url} 
                 type="application/pdf" 
-                className="w-full h-full max-h-[75vh] rounded-xl border border-[#ffffff]/10 shadow-2xl bg-[#0b0c0e]" 
+                className="w-full h-full max-h-[88vh] rounded-xl border border-[#ffffff]/10 shadow-2xl bg-[#0b0c0e]" 
               />
             ) : (
-              <pre className="w-full h-full max-h-[75vh] bg-[#0b0c0f] border border-[#1e2025] rounded-xl p-5 text-[#8b949e] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
+              <pre className="w-full h-full max-h-[88vh] bg-[#0b0c0f] border border-[#1e2025] rounded-xl p-6 text-[#8b949e] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
                 {previewingFile.content || "No text content available to display."}
               </pre>
             )}
           </div>
+
 
           {/* Footer Info */}
           <div className="pt-4 text-[10px] text-brand-muted/40 font-medium select-none">

@@ -2,13 +2,17 @@
 import pytest
 import os
 import shutil
+import tempfile
 from app.services.code_sandbox import execute_code_in_sandbox
 
-@pytest.mark.anyio
+def get_sandbox_dir(conversation_id: str) -> str:
+    return os.path.abspath(os.path.join(tempfile.gettempdir(), f"sandbox_{conversation_id}")).replace("\\", "/")
+
+@pytest.mark.asyncio
 async def test_python_sandbox_math_and_print():
     import uuid
     conversation_id = f"test-convo-{uuid.uuid4()}"
-    sandbox_dir = f"/tmp/sandbox_{conversation_id}"
+    sandbox_dir = get_sandbox_dir(conversation_id)
     if os.path.exists(sandbox_dir):
         try:
             shutil.rmtree(sandbox_dir)
@@ -30,11 +34,11 @@ print(f"SUM IS {a + b}")
             except Exception:
                 pass
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_python_sandbox_file_creation(monkeypatch):
     import uuid
     conversation_id = f"test-convo-{uuid.uuid4()}"
-    sandbox_dir = f"/tmp/sandbox_{conversation_id}"
+    sandbox_dir = get_sandbox_dir(conversation_id)
     if os.path.exists(sandbox_dir):
         try:
             shutil.rmtree(sandbox_dir)
@@ -63,7 +67,7 @@ with open("result.txt", "w") as f:
             except Exception:
                 pass
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_bash_sandbox_persistence_and_delta(monkeypatch):
     # Mock _upload_generated_file to return a dummy URL
     uploaded_files = []
@@ -76,8 +80,7 @@ async def test_bash_sandbox_persistence_and_delta(monkeypatch):
     import uuid
     import asyncio
     conversation_id = str(uuid.uuid4())
-    # Ensure starting clean
-    sandbox_dir = f"/tmp/sandbox_{conversation_id}"
+    sandbox_dir = get_sandbox_dir(conversation_id)
     if os.path.exists(sandbox_dir):
         try:
             shutil.rmtree(sandbox_dir)
@@ -107,10 +110,9 @@ async def test_bash_sandbox_persistence_and_delta(monkeypatch):
         assert len(files2) == 1
         assert files2[0]["filename"] == "step2.txt"
         assert "step2.txt" in uploaded_files
-        assert "step1.txt" not in uploaded_files  # delta upload: step1.txt was not modified, so it shouldn't be uploaded again!
+        assert "step1.txt" not in uploaded_files
         
     finally:
-        # Give Windows a moment to release file handles, then clean up
         await asyncio.sleep(0.5)
         if os.path.exists(sandbox_dir):
             for retry in range(5):
@@ -119,3 +121,4 @@ async def test_bash_sandbox_persistence_and_delta(monkeypatch):
                     break
                 except Exception:
                     await asyncio.sleep(0.2)
+

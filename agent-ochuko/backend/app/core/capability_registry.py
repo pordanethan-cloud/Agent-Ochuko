@@ -138,11 +138,13 @@ The interface renders the following natively. Visual output is always better tha
 ### Mermaid Diagrams
 When to use: {r['mermaid']['when']}
 Supported types: flowchart, sequenceDiagram, erDiagram, gantt, classDiagram, stateDiagram, pie, mindmap, timeline
+Syntax Rules: ALWAYS double-quote node labels containing parentheses, brackets, or special characters (e.g. `O["Auth consent screen (Google)"]` NOT `O[Auth consent screen (Google)]`).
 Syntax:
 ```mermaid
 graph TD
-    A[Start] --> B[Process]
+    A["Start Flow"] --> B["Auth Consent Screen (Google)"]
 ```
+
 
 ### SVG Graphics
 When to use: {r['svg']['when']}

@@ -105,12 +105,27 @@ async def generate_plan(
         else:
             planner_input.append({"role": "user", "content": user_message})
 
-        response = await openai_client.responses.create(
-            model=nano_deployment,
-            input=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
-        )
+        try:
+            if hasattr(openai_client, "chat") and hasattr(openai_client.chat, "completions"):
+                response = await openai_client.chat.completions.create(
+                    model=nano_deployment,
+                    messages=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
+                )
+                plan_text = (response.choices[0].message.content or "").strip()
+            else:
+                response = await openai_client.responses.create(
+                    model=nano_deployment,
+                    input=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
+                )
+                plan_text = (getattr(response, "output_text", "") or "").strip()
+        except Exception as api_err:
+            logger.debug(f"Primary planner API call attempt: {api_err}, trying fallback")
+            response = await openai_client.responses.create(
+                model=nano_deployment,
+                input=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
+            )
+            plan_text = (getattr(response, "output_text", "") or "").strip()
 
-        plan_text = (response.output_text or "").strip()
 
         if not plan_text or plan_text == "SINGLE_STEP":
             logger.debug("Planner returned SINGLE_STEP — no plan injected")

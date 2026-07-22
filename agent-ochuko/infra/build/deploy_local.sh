@@ -9,12 +9,13 @@ exec > >(tee -a "$SCRIPT_DIR/deploy_local.log") 2>&1
 
 echo "Starting local build and deploy..."
 
-# Resolve backend path
+# Resolve paths
+WORKSPACE_ROOT="$( cd "$SCRIPT_DIR/../../.." && pwd )"
 BACKEND_DIR="$SCRIPT_DIR/../../backend"
 
 # 1. Build the Docker image
 echo "Building Docker image..."
-docker build -t ochair1/agent-ochuko-api:latest -f "$BACKEND_DIR/Dockerfile" "$BACKEND_DIR"
+docker build -t ochair1/agent-ochuko-api:latest -f "$BACKEND_DIR/Dockerfile" "$WORKSPACE_ROOT"
 
 # 2. Push to Docker Hub
 echo "Pushing image to Docker Hub..."

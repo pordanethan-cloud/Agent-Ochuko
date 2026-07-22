@@ -10,11 +10,12 @@ Write-Host "Logging to: $LogPath" -ForegroundColor Gray
 Start-Transcript -Path $LogPath -Append -Force
 
 # -- Resolve paths -------------------------------------------------------------
-$RootPath     = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
-$BackendPath  = Join-Path $RootPath "backend"
-$FrontendPath = Join-Path $RootPath "frontend"
+$RootPath      = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
+$WorkspaceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../.."))
+$BackendPath   = Join-Path $RootPath "backend"
+$FrontendPath  = Join-Path $RootPath "frontend"
 $DockerfilePath = Join-Path $BackendPath "Dockerfile"
-$BackendEnv   = Join-Path $BackendPath ".env"
+$BackendEnv    = Join-Path $BackendPath ".env"
 
 # -- Config --------------------------------------------------------------------
 $DockerImage      = "ochair1/agent-ochuko-api:latest"
@@ -33,7 +34,7 @@ Write-Host "======================================" -ForegroundColor Cyan
 
 # 1a. Build Docker image
 Write-Host "`n[1/3] Building Docker image..." -ForegroundColor Yellow
-docker build --platform linux/amd64 --provenance=false -t $DockerImage -f $DockerfilePath $BackendPath
+docker build --platform linux/amd64 --provenance=false -t $DockerImage -f $DockerfilePath $WorkspaceRoot
 if ($LASTEXITCODE -ne 0) { Write-Error "Docker build failed!"; Stop-Transcript; exit 1 }
 
 # 1b. Push to Docker Hub

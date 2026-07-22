@@ -2,7 +2,9 @@ import os
 import json
 import asyncio
 import logging
+import re
 from typing import List, Dict, Any, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from datetime import datetime, timezone
@@ -41,6 +43,9 @@ _THINKING_INSTRUCTION = (
     "</thinking>\n"
     "After the closing tag, write the clean final answer with no reference to the thinking block."
 )
+
+_THINK_OPEN_RE = re.compile(r"<(?:thinking|think|reasoning)>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</(?:thinking|think|reasoning)?>", re.IGNORECASE)
 
 # Initialize OpenAI client lazily (so we don't crash at startup if config isn't loaded yet)
 _openai_client: Optional[AsyncAzureOpenAI] = None
@@ -339,6 +344,7 @@ async def chat_stream_generator(
     estimated_tokens: int,
     previous_response_id: Optional[str] = None,
     user_timezone: Optional[str] = None,
+    viewport: Optional[str] = None,  # "mobile" | "desktop" | None
 ):
     """
     Streams a response from the Azure OpenAI Responses API (ADR-002).
@@ -436,97 +442,6 @@ async def chat_stream_generator(
         accumulated_thinking = ""
         accumulated_image_jobs = []
         accumulated_files = []
-        stream_kwargs: Dict[str, Any] = {
-            "model": deployment,
-            # Tools the model may call autonomously during the conversation
-            "tools": [
-                # Inline visual widget renderer
-                *__import__("app.core.widget_tools", fromlist=["WIDGET_TOOLS"]).WIDGET_TOOLS,
-                # Web search
-                {
-                    "type": "function",
-                    "name": "search_web",
-                    "description": (
-                        "Search the web using Google for current, real-time information. "
-                        "Call this whenever the user asks about recent events, news, prices, "
-                        "people, weather, or anything that requires up-to-date knowledge."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "The precise search query to submit to Google",
-                            }
-                        },
-                        "required": ["query"],
-                    },
-                },
-                # Code execution sandbox — Python / JavaScript / Bash with full internet access
-                {
-                    "type": "function",
-                    "name": "execute_code",
-                    "description": (
-                        "Execute Python, JavaScript (Node.js), or Bash code in a persistent sandbox "
-                        "that has FULL internet access. The sandbox can: install pip/npm packages automatically, "
-                        "make HTTP/API requests, scrape web pages, process data, generate files (CSV, PNG, PDF, DOCX, ZIP), "
-                        "create charts with matplotlib, perform numerical computation, convert file formats, "
-                        "and more. Files produced are automatically uploaded and returned as download links.\n"
-                        "Call this whenever the user wants to: run/test code, analyse data, plot charts, "
-                        "fetch live data in code, convert or process files, perform computation, or any task "
-                        "that benefits from actually executing code rather than describing it.\n"
-                        "Do NOT use this for SVG display — output SVG in a ```svg fence or use visualize__show_widget instead. "
-                        "Do NOT use this to generate AI images — use generate_image for that."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "The complete code to execute. Must be self-contained and runnable.",
-                            },
-                            "language": {
-                                "type": "string",
-                                "enum": ["python", "javascript", "bash"],
-                                "description": "Programming language of the code snippet",
-                            },
-                        },
-                        "required": ["code", "language"],
-                    },
-                },
-                # AI image generation via FLUX — for new images from a text prompt only
-                {
-                    "type": "function",
-                    "name": "generate_image",
-                    "description": (
-                        "Generate a brand-new image using AI (FLUX) from a natural language text description. "
-                        "Use ONLY when the user wants an AI-synthesised artwork, photograph, or illustration — "
-                        "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'.\n"
-                        "STRICT EXCLUSIONS:\n"
-                        "- Do NOT call this for UI mockups, wireframes, component cards, forms, or dashboard designs (use visualize__show_widget instead).\n"
-                        "- Do NOT call this to render, convert, or execute code.\n"
-                        "- Do NOT call this for SVG-to-image conversion (output a ```svg fence or visualize__show_widget instead).\n"
-                        "- Do NOT call this for data plots or charts (use execute_code or visualize__show_widget instead)."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "prompt": {
-                                "type": "string",
-                                "description": "Detailed, descriptive image generation prompt",
-                            },
-                            "style": {
-                                "type": "string",
-                                "enum": ["photorealistic", "illustration", "abstract", "sketch"],
-                                "description": "Visual style for the image",
-                            },
-                        },
-                        "required": ["prompt"],
-                    },
-                },
-            ],
-            "tool_choice": "auto",
-        }
 
         # State tracking for thinking-block extraction and agent loop
         thinking_buffer = ""
@@ -534,6 +449,7 @@ async def chat_stream_generator(
         accumulated_thinking = ""
         accumulated_image_jobs = []
         accumulated_files = []
+        accumulated_widgets = []  # [{type, title, mode, code, widget_type}] — persisted to content_parts
 
         assistant_content = ""
         response_id = None
@@ -562,9 +478,12 @@ async def chat_stream_generator(
 
             is_final_step = (iteration == max_iterations - 1)
             
+            from app.core.widget_tools import WIDGET_TOOLS
             stream_kwargs: Dict[str, Any] = {
                 "model": deployment,
                 "tools": [
+                    # Two-tool inline widget renderer (read_me + show_widget)
+                    *WIDGET_TOOLS,
                     {
                         "type": "function",
                         "name": "search_web",
@@ -596,7 +515,7 @@ async def chat_stream_generator(
                             "Call this whenever the user wants to: run/test code, analyse data, plot charts, "
                             "fetch live data in code, convert or process files, perform computation, or any task "
                             "that benefits from actually executing code rather than describing it.\n"
-                            "Do NOT use this for SVG display — output SVG in a ```svg fence instead. "
+                            "Do NOT use this for SVG display — use visualize__show_widget instead. "
                             "Do NOT use this to generate AI images — use generate_image for that."
                         ),
                         "parameters": {
@@ -623,7 +542,7 @@ async def chat_stream_generator(
                             "Use ONLY when the user wants an AI-synthesised picture from a text prompt — "
                             "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'. "
                             "Do NOT call this to render, convert, or execute code. "
-                            "Do NOT call this for SVG-to-image conversion (output a ```svg fence instead). "
+                            "Do NOT call this for SVG-to-image conversion (use visualize__show_widget instead). "
                             "Do NOT call this for data plots or charts (use execute_code with matplotlib instead)."
                         ),
                         "parameters": {
@@ -665,12 +584,9 @@ async def chat_stream_generator(
                                 chunk = event.delta
                                 if in_thinking_block:
                                     thinking_buffer += chunk
-                                    close_pos = thinking_buffer.lower().find("</thinking")
-                                    if close_pos != -1:
-                                        tag_len = 10
-                                        if thinking_buffer[close_pos:].startswith("</thinking>"):
-                                            tag_len = 11
-                                        thought_chunk = thinking_buffer[:close_pos]
+                                    close_match = _THINK_CLOSE_RE.search(thinking_buffer)
+                                    if close_match:
+                                        thought_chunk = thinking_buffer[:close_match.start()]
                                         if thought_chunk:
                                             accumulated_thinking += thought_chunk
                                             yield (
@@ -680,7 +596,7 @@ async def chat_stream_generator(
                                             )
                                         yield "data: " + json.dumps({"type": "thinking_done"}) + "\n\n"
                                         in_thinking_block = False
-                                        after = thinking_buffer[close_pos + tag_len:].lstrip("\n")
+                                        after = thinking_buffer[close_match.end():].lstrip("\n")
                                         thinking_buffer = ""
                                         if after:
                                             assistant_content += after
@@ -690,20 +606,31 @@ async def chat_stream_generator(
                                                 + "\n\n"
                                             )
                                     else:
-                                        accumulated_thinking += chunk
-                                        yield (
-                                            "data: "
-                                            + json.dumps({"type": "thinking_delta", "delta": {"text": chunk}})
-                                            + "\n\n"
-                                        )
+                                        # Flush safe text while watching for partial closing tags like "</t"
+                                        if "</" in thinking_buffer:
+                                            partial_idx = thinking_buffer.rfind("</")
+                                            safe_part = thinking_buffer[:partial_idx]
+                                            thinking_buffer = thinking_buffer[partial_idx:]
+                                            if safe_part:
+                                                accumulated_thinking += safe_part
+                                                yield (
+                                                    "data: "
+                                                    + json.dumps({"type": "thinking_delta", "delta": {"text": safe_part}})
+                                                    + "\n\n"
+                                                )
+                                        else:
+                                            accumulated_thinking += thinking_buffer
+                                            yield (
+                                                "data: "
+                                                + json.dumps({"type": "thinking_delta", "delta": {"text": thinking_buffer}})
+                                                + "\n\n"
+                                            )
+                                            thinking_buffer = ""
                                 else:
                                     thinking_buffer += chunk
-                                    open_idx = thinking_buffer.lower().find("<thinking")
-                                    if open_idx != -1:
-                                        tag_len = 9
-                                        if thinking_buffer[open_idx:].startswith("<thinking>"):
-                                            tag_len = 10
-                                        before = thinking_buffer[:open_idx]
+                                    open_match = _THINK_OPEN_RE.search(thinking_buffer)
+                                    if open_match:
+                                        before = thinking_buffer[:open_match.start()]
                                         if before:
                                             assistant_content += before
                                             yield (
@@ -713,18 +640,28 @@ async def chat_stream_generator(
                                             )
                                         yield "data: " + json.dumps({"type": "thinking_start"}) + "\n\n"
                                         in_thinking_block = True
-                                        thinking_buffer = thinking_buffer[open_idx + tag_len:]
+                                        thinking_buffer = thinking_buffer[open_match.end():]
                                     else:
-                                        _tag = "<thinking>"
-                                        if len(thinking_buffer) > len(_tag) * 2:
-                                            flush = thinking_buffer[:-len(_tag)]
-                                            thinking_buffer = thinking_buffer[-len(_tag):]
-                                            assistant_content += flush
+                                        if "<" in thinking_buffer:
+                                            partial_idx = thinking_buffer.rfind("<")
+                                            flush = thinking_buffer[:partial_idx]
+                                            thinking_buffer = thinking_buffer[partial_idx:]
+                                            if flush:
+                                                assistant_content += flush
+                                                yield (
+                                                    "data: "
+                                                    + json.dumps({"type": "content_block_delta", "delta": {"text": flush}})
+                                                    + "\n\n"
+                                                )
+                                        else:
+                                            assistant_content += thinking_buffer
                                             yield (
                                                 "data: "
-                                                + json.dumps({"type": "content_block_delta", "delta": {"text": flush}})
+                                                + json.dumps({"type": "content_block_delta", "delta": {"text": thinking_buffer}})
                                                 + "\n\n"
                                             )
+                                            thinking_buffer = ""
+
 
                             # 2. Tool calls
                             elif event.type == "response.output_item.done":
@@ -995,28 +932,56 @@ async def chat_stream_generator(
                                 tool_outputs.append("Image prompt was empty.")
                         except Exception as err:
                             tool_outputs.append(f"Image generation error: {err}")
+                    elif t_name == "visualize__read_me":
+                        # Returns design tokens + module rules as a tool result.
+                        # No SSE event — this is purely context injection for the model.
+                        try:
+                            from app.core.widget_tools import get_read_me_result
+                            args = json.loads(t_args_str or "{}")
+                            modules = args.get("modules", ["diagram"])
+                            # Model passes platform; if "unknown", use the viewport hint from the request
+                            platform = args.get("platform", "desktop")
+                            if platform == "unknown" and viewport == "mobile":
+                                platform = "mobile"
+                            elif platform == "unknown":
+                                platform = "desktop"
+                            result_text = get_read_me_result(modules, platform)
+                            tool_outputs.append(result_text)
+                            logger.info("visualize__read_me: loaded modules=%s platform=%s", modules, platform)
+                        except Exception as e:
+                            logger.error(f"visualize__read_me failed: {e}")
+                            tool_outputs.append(f"Design token load error: {str(e)}")
+
                     elif t_name == "visualize__show_widget":
                         try:
                             args = json.loads(t_args_str or "{}")
                             w_code = args.get("widget_code", "")
                             w_title = args.get("title", "ochuko_widget")
-                            w_msgs = args.get("loading_messages", ["Assembling visual widget..."])
+                            w_msgs = args.get("loading_messages", ["Assembling visual..."])
                             w_type = args.get("widget_type", "diagram")
 
-                            # If model passed minimal prompt or incomplete code, synthesize via Gemini Flash / Nano
-                            if not w_code or len(w_code) < 30 or "```" in w_code:
-                                from app.services.widget_generator import generate_widget_code
-                                gen_res = await generate_widget_code(
-                                    prompt=w_title.replace("_", " "),
-                                    widget_type=w_type,
-                                    title=w_title,
-                                    openai_client=client,
-                                    nano_deployment=deployment,
+                            # §5 security: rate-limit to max 3 widget renders per turn
+                            widget_render_count = sum(
+                                1 for tc in current_tool_calls if tc.get("name") == "visualize__show_widget"
+                            )
+                            if widget_render_count > 3:
+                                tool_outputs.append(
+                                    "Widget render limit reached (max 3 per turn). "
+                                    "Summarise remaining visuals in prose."
                                 )
-                                if gen_res.get("widget_code"):
-                                    w_code = gen_res["widget_code"]
-
-                            if w_code:
+                            elif w_code and w_code.strip():
+                                # Signal loading state to frontend BEFORE the full payload
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "widget_loading",
+                                        "title": w_title,
+                                        "loading_messages": w_msgs,
+                                        "widget_type": w_type,
+                                    })
+                                    + "\n\n"
+                                )
+                                # Emit the full widget payload for rendering
                                 yield (
                                     "data: "
                                     + json.dumps({
@@ -1028,12 +993,28 @@ async def chat_stream_generator(
                                     })
                                     + "\n\n"
                                 )
-                                tool_outputs.append(f"Widget '{w_title}' rendered successfully inline on client UI.")
+                                is_svg = w_code.strip().startswith("<svg")
+                                tool_outputs.append(
+                                    f"Widget '{w_title}' rendered successfully in "
+                                    f"{'SVG' if is_svg else 'HTML'} mode on client UI."
+                                )
+                                # Accumulate for §8.4 persistence
+                                accumulated_widgets.append({
+                                    "type": "widget",
+                                    "title": w_title,
+                                    "mode": "svg" if is_svg else "html",
+                                    "code": w_code,
+                                    "widget_type": w_type,
+                                })
                             else:
-                                tool_outputs.append(f"Widget generation was empty for title: {w_title}.")
+                                tool_outputs.append(
+                                    f"Widget '{w_title}' had empty code. "
+                                    "Ensure visualize__read_me was called first and the code is complete."
+                                )
                         except Exception as e:
                             logger.error(f"Agent visualize__show_widget failed: {e}")
-                            tool_outputs.append(f"Widget execution error: {str(e)}")
+                            tool_outputs.append(f"Widget render error: {str(e)}")
+
                     else:
                         tool_outputs.append(f"Unknown tool name: {t_name}")
 
@@ -1119,6 +1100,8 @@ async def chat_stream_generator(
                         "size_bytes": f["size_bytes"]
                     } for f in accumulated_files
                 ]
+            if accumulated_widgets:
+                content_parts["widgets"] = accumulated_widgets
             if content_parts:
                 assistant_msg_insert["content_parts"] = content_parts
             supabase = get_supabase_admin()
@@ -1508,6 +1491,7 @@ async def stream_chat(
             estimated_tokens,
             previous_response_id,
             user_timezone=payload.get("timezone"),
+            viewport=payload.get("viewport"),  # "mobile" | "desktop" | None
         ),
         media_type="text/event-stream"
     )

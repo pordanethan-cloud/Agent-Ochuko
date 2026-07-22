@@ -66,11 +66,21 @@ def _is_trivial(message_text: str) -> bool:
     if not message_text:
         return False
     stripped = message_text.strip()
-    # Short messages (< 15 chars) that match trivial patterns
+    
+    # Do NOT intercept if the query contains digits/years
+    if any(c.isdigit() for c in stripped):
+        return False
+        
+    # Short messages (< 40 chars) that match trivial patterns
     if len(stripped) <= 40 and _TRIVIAL_RE.match(stripped):
         return True
-    # Very short messages that don't look like code or structured content
+        
+    # Very short messages (e.g. <= 8 characters) that are greetings/ack
     if len(stripped) <= 8 and not any(c in stripped for c in "{}[]()=<>|&;"):
+        # Explicit check to avoid matching search keywords
+        keywords = {"wc", "cl", "tax", "gdp", "rate", "fed", "news", "info", "help", "run"}
+        if stripped.lower() in keywords:
+            return False
         return True
     return False
 
@@ -84,7 +94,11 @@ def _is_simple_request(message_text: str) -> bool:
         return False
     stripped = message_text.strip()
     
-    # Simple requests must be short (e.g. <= 90 characters) to avoid false positives on longer complex prompts
+    # Temporal year lookups need full model tool capabilities (OODA web search)
+    if any(yr in stripped for yr in ["2024", "2025", "2026", "2027"]):
+        return False
+
+    # Simple requests must be short (e.g. <= 90 characters)
     if len(stripped) > 90:
         return False
         
