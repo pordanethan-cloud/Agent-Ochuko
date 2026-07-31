@@ -71,6 +71,134 @@ def get_openai_client() -> AsyncAzureOpenAI:
         )
     return _openai_client
 
+async def _perform_open_websearch_fallback(query: str) -> tuple:
+    """
+    Fallback search using local open-websearch daemon/CLI.
+    Queries the open-websearch daemon on http://127.0.0.1:3210.
+    If the daemon is not running, attempts to start it in the background using `open-websearch serve`.
+    """
+    import subprocess
+    import json
+    import shutil
+    import httpx
+
+    daemon_url = "http://127.0.0.1:3210"
+    daemon_running = False
+    
+    # 1. Check if daemon is running by querying /health
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            res = await client.get(f"{daemon_url}/health")
+            if res.status_code == 200:
+                daemon_running = True
+    except Exception:
+        pass
+
+    if not daemon_running:
+        logger.info("open-websearch daemon is not running. Starting it in background...")
+        npx_path = shutil.which("npx")
+        if npx_path:
+            try:
+                cmd = [npx_path, "open-websearch", "serve"]
+                if os.name == 'nt':
+                    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW, shell=True)
+                else:
+                    subprocess.Popen(cmd, start_new_session=True)
+                
+                # Wait up to 3 seconds for boot
+                for _ in range(6):
+                    await asyncio.sleep(0.5)
+                    try:
+                        async with httpx.AsyncClient(timeout=0.5) as client:
+                            res = await client.get(f"{daemon_url}/health")
+                            if res.status_code == 200:
+                                daemon_running = True
+                                logger.info("open-websearch daemon successfully started and ready")
+                                break
+                    except Exception:
+                        pass
+            except Exception as start_err:
+                logger.error("Failed to start open-websearch daemon: %s", start_err)
+
+    # 2. Perform the search query
+    # If the daemon is running, query it via HTTP (POST /search).
+    if daemon_running:
+        try:
+            logger.info("Querying open-websearch daemon: POST %s/search", daemon_url)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(
+                    f"{daemon_url}/search",
+                    json={"query": query, "limit": 6, "engines": ["duckduckgo", "brave", "bing"]}
+                )
+                if res.status_code == 200:
+                    json_data = res.json()
+                    results = json_data.get("results", []) or json_data.get("data", {}).get("results", [])
+                    if results:
+                        search_chunks = []
+                        sources = []
+                        seen_urls = set()
+                        for r in results:
+                            title = r.get("title", "") or r.get("url", "")
+                            url = r.get("url", "")
+                            desc = r.get("description", "")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                sources.append({"title": title, "url": url})
+                                search_chunks.append(f"Source: {title}\nURL: {url}\nContent: {desc}")
+                        google_context = "\n\n".join(search_chunks)
+                        return google_context, sources
+        except Exception as http_err:
+            logger.warning("HTTP query to open-websearch daemon failed: %s. Falling back to CLI...", http_err)
+
+    # CLI fallback (using npx)
+    logger.info("Executing open-websearch via CLI subprocess...")
+    npx_path = shutil.which("npx")
+    if not npx_path:
+        raise RuntimeError("npx not found in path")
+
+    def _run_cli():
+        cmd = [
+            npx_path, "open-websearch", "search", query,
+            "--limit", "6",
+            "--engines", "duckduckgo,brave,bing",
+            "--json"
+        ]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=25,
+            shell=True if os.name == 'nt' else False
+        )
+        if proc.returncode == 0:
+            stdout_text = proc.stdout or ""
+            start_idx = stdout_text.find('{')
+            if start_idx != -1:
+                json_data = json.loads(stdout_text[start_idx:])
+                results = json_data.get("data", {}).get("results", []) or json_data.get("results", [])
+                if results:
+                    search_chunks = []
+                    sources = []
+                    seen_urls = set()
+                    for r in results:
+                        title = r.get("title", "") or r.get("url", "")
+                        url = r.get("url", "")
+                        desc = r.get("description", "")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            sources.append({"title": title, "url": url})
+                            search_chunks.append(f"Source: {title}\nURL: {url}\nContent: {desc}")
+                    google_context = "\n\n".join(search_chunks)
+                    return google_context, sources
+        raise RuntimeError(f"CLI search failed with status {proc.returncode}")
+
+    try:
+        return await asyncio.to_thread(_run_cli)
+    except Exception as e:
+        logger.error("All open-websearch search methods failed: %s", e)
+        raise e
+
+
 async def _perform_google_search(
     query: str,
     synthesis_deployment: str = "",
@@ -168,7 +296,16 @@ async def _perform_google_search(
                         search_chunks.append(f"Source: {s['title']}\nURL: {s['url']}")
 
                 google_context = "\n\n".join(search_chunks[:14]) if search_chunks else "No live web results found."
-                return google_context, sources[:8]
+                
+                # Include Gemini's synthesized answer so the agent in the loop has access to the full response
+                gemini_text = getattr(g_response, "text", "") or ""
+                if gemini_text:
+                    google_context = (
+                        f"Search Query: {query}\n"
+                        f"Search Synthesis: {gemini_text}\n\n"
+                        f"Supporting Grounding Context:\n{google_context}"
+                    )
+                return google_context, sources[:20]  # Increased cap: frontend de-duplicates across iterations
             except Exception as e:
                 logger.warning("Google search failed with key index %d: %s", idx, e)
                 last_exc = e
@@ -178,14 +315,15 @@ async def _perform_google_search(
 
     try:
         google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
-    except Exception as e:
-        import traceback
-        print("--- CHAT GOOGLE RETRIEVAL PHASE ERROR (FALLBACK TO AZURE KNOWLEDGE) ---")
-        traceback.print_exc()
-        print("------------------------------------------------------------------------")
-        logger.warning("Google search retrieval failed, falling back to Azure: %s", e)
-        google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
-        sources = []
+    except Exception as google_err:
+        logger.warning("Primary Google search retrieval failed: %s. Attempting open-websearch fallback...", google_err)
+        try:
+            google_context, sources = await _perform_open_websearch_fallback(query)
+            logger.info("Successfully retrieved search results using open-websearch fallback")
+        except Exception as fallback_err:
+            logger.error("Fallback open-websearch also failed: %s. Reverting to empty context.", fallback_err)
+            google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
+            sources = []
 
     if return_raw:
         return {
@@ -262,6 +400,64 @@ async def _perform_google_search(
         raise
 
 
+
+async def _perform_parallel_searches(
+    queries: List[str],
+    deployment: str,
+    history: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Fan-out parallel search: runs up to 6 queries concurrently using asyncio.gather,
+    merges the returned contexts, and deduplicates sources.
+
+    Returns a dict with:
+      - "merged_context": str  — combined Google context from all queries
+      - "sources":        list — deduplicated [{title, url}] across all queries
+      - "query_count":    int  — number of sub-queries that succeeded
+    """
+    queries = queries[:6]  # hard cap
+    if not queries:
+        return {"merged_context": "No queries provided.", "sources": [], "query_count": 0}
+
+    tasks = [
+        _perform_google_search(
+            q,
+            synthesis_deployment=deployment,
+            history=history,
+            return_raw=True,
+        )
+        for q in queries
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    merged_parts: List[str] = []
+    seen_urls: set = set()
+    all_sources: List[Dict[str, str]] = []
+    succeeded = 0
+
+    for q, result in zip(queries, results):
+        if isinstance(result, Exception):
+            logger.warning("Parallel search sub-query failed for '%s': %s", q, result)
+            merged_parts.append(f"[Sub-query '{q}' failed: {result}]")
+            continue
+        succeeded += 1
+        ctx = result.get("google_context", "") or result.get("answer", "")
+        if ctx:
+            merged_parts.append(f"--- Results for: {q} ---\n{ctx}")
+        for src in result.get("sources", []):
+            url = src.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                all_sources.append(src)
+
+    merged_context = "\n\n".join(merged_parts) if merged_parts else "No results returned."
+    return {
+        "merged_context": merged_context,
+        "sources": all_sources[:30],  # cap total sources at 30
+        "query_count": succeeded,
+    }
+
+
 async def _enqueue_image_gen(user_id: str, conversation_id: str, prompt: str, style: str = "") -> str:
     """
     Creates a pending image_gen job row in Supabase and dispatches it to the
@@ -306,6 +502,14 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
     """
     Builds the context for the LLM by fetching non-archived messages from the database.
     This automatically includes the summary message (if compaction ran) and recent active turns.
+
+    Token efficiency:
+    - Summary messages are included as-is (they replace archived turns).
+    - Raw Google Search Result blocks embedded in historical messages are stripped;
+      only the clean synthesised answer text is retained. Search context is not
+      useful as conversational history — it was relevant only at call time.
+    - [Tool Output for ...] system messages from the agent loop are also stripped
+      to avoid replaying raw tool outputs as permanent history.
     """
     supabase = get_supabase_admin()
     try:
@@ -322,14 +526,141 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
         db_messages = response.data or []
         formatted_messages = []
         for msg in db_messages:
-            formatted_messages.append({
-                "role": msg.get("role"),
-                "content": msg.get("content")
-            })
+            role = msg.get("role")
+            content = msg.get("content") or ""
+            is_summary = msg.get("is_summary", False)
+
+            # System messages from the agent loop (tool outputs) are ephemeral context,
+            # not conversational history — skip them to save tokens.
+            # BUT: do NOT skip if it is a summary message.
+            if role == "system" and not is_summary:
+                continue
+
+            # For summary messages, include them verbatim — they represent compacted history.
+            if is_summary:
+                formatted_messages.append({"role": role, "content": content})
+                continue
+
+            # Strip raw [Google Search Result for: ...] blocks from historical assistant messages.
+            # These were only relevant at search time; re-sending them bloats the context window.
+            if role == "assistant" and "[Google Search Result for:" in content:
+                # Keep only the synthesised portion before the raw block
+                content = content.split("[Google Search Result for:")[0].strip()
+
+            # Also strip [Executed Tool: ...] annotation lines appended during agent loops
+            if role == "assistant" and "[Executed Tool:" in content:
+                content = content.split("[Executed Tool:")[0].strip()
+
+            if content:  # Only include non-empty messages
+                formatted_messages.append({"role": role, "content": content})
+
         return formatted_messages
     except Exception as e:
         logger.error(f"Failed to build LLM context for conversation {conversation_id}: {e}")
         return []
+
+
+async def compact_conversation_history(conversation_id: str) -> Optional[str]:
+    """
+    Checks if the conversation history needs compaction.
+    If the active message count (non-summary, non-archived) exceeds 14,
+    it compresses the older messages (retaining the last 6 turns active)
+    into a concise summary and archives the original turns.
+    Returns the summary text if compaction occurred, else None.
+    """
+    supabase = get_supabase_admin()
+    try:
+        # Fetch active messages
+        def get_active():
+            return (
+                supabase.table("messages")
+                .select("id, role, content, is_summary")
+                .eq("conversation_id", conversation_id)
+                .eq("is_archived_msg", False)
+                .order("created_at", desc=False)
+                .execute()
+            )
+        res = await asyncio.to_thread(get_active)
+        messages = res.data or []
+        
+        # Count non-summary active messages
+        active_count = sum(1 for m in messages if not m.get("is_summary"))
+        if active_count <= 60:
+            return None
+
+        # Compact all messages up to the last 20 messages
+        to_summarize = messages[:-20]
+        if not to_summarize:
+            return None
+
+        logger.info(f"Compacting {len(to_summarize)} messages for conversation {conversation_id}")
+
+        history_lines = []
+        for msg in to_summarize:
+            role = msg.get("role")
+            content = msg.get("content") or ""
+            if msg.get("is_summary"):
+                history_lines.append(f"[Previous Summary of earlier turns]:\n{content}")
+            else:
+                history_lines.append(f"{role.upper()}: {content}")
+        history_text = "\n\n".join(history_lines)
+
+        # Call OpenAI to generate summary
+        client = get_openai_client()
+        deploy = (
+            os.getenv("SOLVE_MODEL_DEPLOYMENT")
+            or os.getenv("AZURE_OPENAI_SOLVE_DEPLOYMENT")
+            or "gpt-4o-mini"
+        )
+        
+        system_prompt = (
+            "You are a helpful assistant. Provide a highly robust, comprehensive 'Deep Briefing' of the conversation history so far. "
+            "It must act as a detailed briefing document for a new developer agent taking over the session. "
+            "Include:\n"
+            "- Key Goal / Objective\n"
+            "- Decisions made, design patterns chosen, and user preferences\n"
+            "- Exact names/paths of files created, modified, or discussed\n"
+            "- Core context facts and exact logic constraints\n"
+            "Format the output as clear, structured markdown headers/points. Do NOT omit details or generalize."
+        )
+
+        az_response = await client.responses.create(
+            model=deploy,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": history_text}
+            ]
+        )
+        summary = (az_response.output_text or "").strip()
+        if not summary:
+            return None
+
+        # Insert new summary message and archive old ones in database
+        def persist_compaction():
+            # 1. Insert summary message
+            summary_msg = {
+                "conversation_id": conversation_id,
+                "role": "assistant",
+                "is_summary": True,
+                "content": f"Summary of earlier conversation:\n{summary}",
+            }
+            supabase.table("messages").insert(summary_msg).execute()
+
+            # 2. Archive old messages
+            ids_to_archive = [m["id"] for m in to_summarize]
+            supabase.table("messages").update({"is_archived_msg": True}).in_("id", ids_to_archive).execute()
+
+            # 3. Update last_compacted_at
+            now_str = datetime.now(timezone.utc).isoformat()
+            supabase.table("conversations").update({"last_compacted_at": now_str}).eq("id", conversation_id).execute()
+
+        await asyncio.to_thread(persist_compaction)
+        logger.info(f"Compaction complete for conversation {conversation_id}. Created summary: {summary}")
+        return summary
+
+    except Exception as e:
+        logger.error(f"Failed to compact conversation history: {e}", exc_info=True)
+        return None
 
 
 async def chat_stream_generator(
@@ -345,6 +676,7 @@ async def chat_stream_generator(
     previous_response_id: Optional[str] = None,
     user_timezone: Optional[str] = None,
     viewport: Optional[str] = None,  # "mobile" | "desktop" | None
+    compaction_summary: Optional[str] = None,
 ):
     """
     Streams a response from the Azure OpenAI Responses API (ADR-002).
@@ -384,6 +716,16 @@ async def chat_stream_generator(
         })
         + "\n\n"
     )
+
+    if compaction_summary:
+        yield (
+            "data: "
+            + json.dumps({
+                "type": "context_compacted",
+                "summary": compaction_summary,
+            })
+            + "\n\n"
+        )
 
     try:
         # Skills module generates the full system prompt (identity + task skill).
@@ -489,8 +831,9 @@ async def chat_stream_generator(
                         "name": "search_web",
                         "description": (
                             "Search the web using Google for current, real-time information. "
-                            "Call this whenever the user asks about recent events, news, prices, "
-                            "people, weather, or anything that requires up-to-date knowledge."
+                            "Call this for a SINGLE, focused lookup. "
+                            "For comparing multiple subjects or researching multiple dimensions at once, "
+                            "use deep_research instead."
                         ),
                         "parameters": {
                             "type": "object",
@@ -501,6 +844,32 @@ async def chat_stream_generator(
                                 }
                             },
                             "required": ["query"],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "deep_research",
+                        "description": (
+                            "Run multiple parallel web searches simultaneously for complex comparative, "
+                            "multi-topic, or multi-dimensional queries. "
+                            "Use this whenever the user asks to compare subjects (phones, products, policies, people), "
+                            "requests info across multiple dimensions/aspects/ramifications, or needs a structured research report. "
+                            "Pass a list of 2-6 specific, targeted search strings — one per subject or dimension. "
+                            "Results from all queries are merged and returned together. "
+                            "PREFER this over calling search_web multiple times."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "queries": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "List of 2-6 precise, targeted Google search strings",
+                                    "minItems": 2,
+                                    "maxItems": 6,
+                                }
+                            },
+                            "required": ["queries"],
                         },
                     },
                     {
@@ -839,12 +1208,90 @@ async def chat_stream_generator(
                                     })
                                     + "\n\n"
                                 )
-                                tool_outputs.append(google_context)
+                                # Cap raw search context injected into local loop history.
+                                # Full context is still used for this turn's synthesis,
+                                # but we store a condensed version to avoid token bloat on
+                                # subsequent iterations. The sources list is always complete.
+                                _MAX_SEARCH_CTX = 8000
+                                if len(google_context) > _MAX_SEARCH_CTX:
+                                    truncated_ctx = google_context[:_MAX_SEARCH_CTX]
+                                    # Trim to last complete sentence/line boundary
+                                    last_nl = truncated_ctx.rfind('\n')
+                                    if last_nl > 1000:
+                                        truncated_ctx = truncated_ctx[:last_nl]
+                                    google_context_for_history = (
+                                        truncated_ctx
+                                        + f"\n\n[... search result truncated for context efficiency — "
+                                        f"{len(sources)} source(s) retrieved in total ...]"
+                                    )
+                                else:
+                                    google_context_for_history = google_context
+
+                                tool_outputs.append(google_context_for_history)
                             else:
                                 tool_outputs.append("Search query was empty.")
                         except Exception as e:
                             logger.error(f"Agent search_web failed: {e}")
                             tool_outputs.append(f"Web search error: {str(e)}")
+
+                    elif t_name == "deep_research":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            sub_queries: List[str] = args.get("queries", [])
+                            if sub_queries:
+                                # Emit one search_activity event per sub-query so UI shows progress
+                                for q in sub_queries:
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "search_activity",
+                                            "status": "searching",
+                                            "label": f"Researching: {q}",
+                                        })
+                                        + "\n\n"
+                                    )
+
+                                research_result = await _perform_parallel_searches(
+                                    sub_queries,
+                                    deployment=deployment,
+                                    history=local_messages,
+                                )
+                                merged_ctx = research_result.get("merged_context", "")
+                                all_sources = research_result.get("sources", [])
+                                q_count = research_result.get("query_count", 0)
+
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "done",
+                                        "label": f"Deep research complete — {q_count}/{len(sub_queries)} queries succeeded, {len(all_sources)} source(s)",
+                                        "sources": all_sources,
+                                    })
+                                    + "\n\n"
+                                )
+
+                                # Cap merged context for history injection (larger budget than single search)
+                                _MAX_RESEARCH_CTX = 12000
+                                if len(merged_ctx) > _MAX_RESEARCH_CTX:
+                                    truncated = merged_ctx[:_MAX_RESEARCH_CTX]
+                                    last_nl = truncated.rfind("\n")
+                                    if last_nl > 4000:
+                                        truncated = truncated[:last_nl]
+                                    merged_ctx_for_history = (
+                                        truncated
+                                        + f"\n\n[... research context truncated — "
+                                        f"{q_count} queries, {len(all_sources)} sources total ...]"
+                                    )
+                                else:
+                                    merged_ctx_for_history = merged_ctx
+
+                                tool_outputs.append(merged_ctx_for_history)
+                            else:
+                                tool_outputs.append("deep_research: queries list was empty.")
+                        except Exception as e:
+                            logger.error(f"Agent deep_research failed: {e}")
+                            tool_outputs.append(f"Deep research error: {str(e)}")
 
                     elif t_name == "execute_code":
                         try:
@@ -1471,6 +1918,11 @@ async def stream_chat(
     except Exception as e:
         logger.error(f"Failed to save user message to database (non-fatal, stream continues): {e}")
 
+    # Trigger compaction check if not a brand new conversation
+    compaction_summary = None
+    if not is_new_conversation:
+        compaction_summary = await compact_conversation_history(conversation_id)
+
     # 5. Build context from active database messages (ignores archived/compacted ones)
     db_context_messages = await build_llm_context(conversation_id)
 
@@ -1492,6 +1944,7 @@ async def stream_chat(
             previous_response_id,
             user_timezone=payload.get("timezone"),
             viewport=payload.get("viewport"),  # "mobile" | "desktop" | None
+            compaction_summary=compaction_summary,
         ),
         media_type="text/event-stream"
     )

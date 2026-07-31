@@ -1,0 +1,17 @@
+{
+  "name": "agent-ochuko-excel-addin",
+  "version": "1.0.0",
+  "description": "Agent Ochuko Excel Add-in — Enterprise AI assistant inside Microsoft Excel",
+  "scripts": {
+    "start":    "node server.js",
+    "dev":      "node server.js",
+    "validate": "office-addin-manifest validate manifest.xml",
+    "validate:prod": "office-addin-manifest validate manifest.production.xml",
+    "deploy":   "powershell -ExecutionPolicy Bypass -File ..\\agent-ochuko\\infra\\build\\deploy_addin.ps1"
+  },
+  "devDependencies": {
+    "office-addin-dev-certs": "^1.10.0",
+    "office-addin-manifest": "^1.7.0"
+  },
+  "dependencies": {}
+}

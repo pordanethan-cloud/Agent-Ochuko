@@ -99,7 +99,12 @@ origins = list(combined_origins)
 # Auto-include production deployed storage static website domains
 prod_origins = [
     "https://agentochukostore.z1.web.core.windows.net",
-    "https://agentochukoadmin.z1.web.core.windows.net"
+    "https://agentochukoadmin.z1.web.core.windows.net",
+    # Excel Add-in — production (Azure Blob Storage)
+    "https://agentochukostore.blob.core.windows.net",
+    # Excel Add-in — local dev server (office-addin-dev-certs HTTPS)
+    "https://localhost:3000",
+    "http://localhost:3000",
 ]
 for po in prod_origins:
     if po not in origins:

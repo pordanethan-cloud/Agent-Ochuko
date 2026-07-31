@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Ochuko</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
+  <link rel="stylesheet" href="taskpane.css" />
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════
+     AUTH SCREEN
+══════════════════════════════════════════════ -->
+<div id="auth-screen" class="screen active">
+  <div class="auth-wrap">
+
+    <div class="auth-logo">
+      <img src="../../assets/icon-80.png" alt="Ochuko" class="brand-icon"
+           onerror="this.style.display='none'" />
+      <div class="brand-text">
+        <span class="brand-name">Agent Ochuko<span class="logo-dot">.</span></span>
+        <span class="brand-sub">Excel Add-in</span>
+      </div>
+    </div>
+
+    <div class="card auth-card">
+      <p class="auth-hint">Sign in to your workspace</p>
+
+      <div id="auth-err" class="err-banner hidden"></div>
+
+      <button id="btn-google-login" class="btn-google">
+        <svg class="google-icon" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+          <path fill="none" d="M0 0h48v48H0z"/>
+        </svg>
+        <span id="btn-google-text">Continue with Google</span>
+        <span id="btn-google-spin" class="spin hidden">...</span>
+      </button>
+
+      <p class="auth-footer">Secured via Supabase Auth and Row-Level Security</p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     MAIN CHAT SCREEN
+══════════════════════════════════════════════ -->
+<div id="app-screen" class="screen hidden">
+
+  <!-- top bar -->
+  <header class="bar">
+    <div class="bar-left">
+      <img src="../../assets/icon-80.png" alt="" class="bar-icon"
+           onerror="this.style.display='none'" />
+      <span class="bar-title">Agent Ochuko<span class="logo-dot">.</span></span>
+      <span class="bar-dot"></span>
+    </div>
+
+    <!-- Teacher / Solver mode segmented toggle -->
+    <div class="mode-toggle" id="mode-toggle" role="group" aria-label="Mode">
+      <button class="mode-seg" data-mode="teacher" id="seg-teacher">Teacher</button>
+      <button class="mode-seg" data-mode="solver"  id="seg-solver">Solver</button>
+    </div>
+    <div class="bar-right">
+      <label class="toggle-wrap" title="Enable / disable web search">
+        <span class="toggle-label">Web</span>
+        <div class="toggle-track" id="toggle-search-track">
+          <div class="toggle-thumb"></div>
+        </div>
+        <input type="checkbox" id="toggle-search" hidden />
+      </label>
+      <button id="btn-settings-open" class="icon-btn" title="Settings" aria-label="Settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- quick action buttons — populated dynamically by renderQuickActions() -->
+  <div class="quick-actions" id="quick-actions"></div>
+
+  <!-- messages -->
+  <div id="messages" class="messages" aria-live="polite">
+    <div class="welcome" id="welcome-block">
+      <div class="welcome-avatar">
+        <img src="../../assets/icon-80.png" alt="Ochuko"
+             onerror="this.style.display='none'; this.parentElement.textContent='AI'" />
+      </div>
+      <p class="welcome-msg">Hi, I'm Ochuko.</p>
+      <p class="welcome-tip">Select cells in your sheet, then ask me anything about them.</p>
+    </div>
+  </div>
+
+  <!-- input area -->
+  <div class="input-area">
+    <!-- selection awareness pill -->
+    <div id="selection-pill" class="sel-pill hidden">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+      <span id="sel-address">A1</span>
+      <span id="sel-dims" class="sel-dims"></span>
+      <button id="sel-dismiss" class="sel-close" title="Dismiss selection context" aria-label="Dismiss">
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="3" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <!-- web search pill -->
+    <div id="search-pill" class="search-pill hidden">Web search on</div>
+    <!-- text input row -->
+    <div class="input-row">
+      <textarea id="chat-input" class="chat-ta" rows="1"
+                placeholder="Message Ochuko..." aria-label="Message"></textarea>
+      <button id="btn-send" class="send-btn" aria-label="Send" title="Send (Ctrl+Enter)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════════════════════════════════════════
+     SETTINGS DRAWER
+══════════════════════════════════════════════ -->
+<div id="settings-overlay" class="overlay hidden" role="dialog" aria-modal="true">
+  <div class="drawer">
+    <div class="drawer-header">
+      <span class="drawer-title">Settings</span>
+      <button id="btn-settings-close" class="icon-btn" aria-label="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="field">
+      <label>Signed in as</label>
+      <input id="s-email" type="text" class="input" readonly />
+    </div>
+
+    <hr class="divider" />
+
+    <button id="btn-new-chat" class="btn-secondary">New Chat</button>
+    <button id="btn-signout" class="btn-danger">Sign Out</button>
+  </div>
+</div>
+
+<!-- toast -->
+<div id="toast" class="toast hidden" role="alert"></div>
+
+<script src="markdown.js"></script>
+<script src="taskpane.js"></script>
+</body>
+</html>

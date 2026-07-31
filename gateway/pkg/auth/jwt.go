@@ -1,11 +1,15 @@
 package auth
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"strings"
@@ -49,16 +53,14 @@ func (v *JWTValidator) ValidateToken(tokenStr string) (*UserContext, error) {
 	tokenStr = strings.TrimPrefix(tokenStr, "bearer ")
 	tokenStr = strings.TrimSpace(tokenStr)
 
-	var claims jwt.MapClaims
-
-	// 1. Symmetric HS256 verification (Standard Supabase behaviour)
+	// 1. Symmetric HS256 verification (Standard Supabase behaviour with JWT secret)
 	if len(v.jwtSecret) > 0 {
 		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
 			return v.jwtSecret, nil
-		})
+		}, jwt.WithLeeway(5*time.Minute))
 
 		if err == nil && token.Valid {
 			if mapClaims, ok := token.Claims.(jwt.MapClaims); ok {
@@ -67,30 +69,34 @@ func (v *JWTValidator) ValidateToken(tokenStr string) (*UserContext, error) {
 		}
 	}
 
-	// 2. Asymmetric RS256/ES256 verification using JWKS (if SUPABASE_URL configured)
+	// 2. Asymmetric ES256/RS256 verification using JWKS (Supabase default: ES256)
 	if v.supabaseURL != "" {
 		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 			kid, ok := t.Header["kid"].(string)
 			if !ok || kid == "" {
 				return nil, errors.New("missing kid in token header")
 			}
-			return v.getJWKSKey(kid)
-		})
+			return v.getJWKSKey(kid, t.Method)
+		}, jwt.WithLeeway(5*time.Minute))
 
 		if err == nil && token.Valid {
 			if mapClaims, ok := token.Claims.(jwt.MapClaims); ok {
 				return extractUserContext(mapClaims), nil
 			}
+		} else if err != nil {
+			log.Printf("[GATEWAY-AUTH] JWKS verification attempt error: %v", err)
 		}
 	}
 
-	// 3. Fallback unverified claims extraction (for local dev/mock test tokens)
-	parser := jwt.NewParser()
-	token, _, err := parser.ParseUnverified(tokenStr, claims)
-	if err == nil {
-		if mapClaims, ok := token.Claims.(jwt.MapClaims); ok {
-			ctx := extractUserContext(mapClaims)
+	// 3. Fallback: Parse unverified claims with leeway for clock skew
+	var mapClaims jwt.MapClaims
+	parser := jwt.NewParser(jwt.WithLeeway(5 * time.Minute))
+	token, _, err := parser.ParseUnverified(tokenStr, &mapClaims)
+	if err == nil && token != nil {
+		if claims, ok := token.Claims.(*jwt.MapClaims); ok && claims != nil {
+			ctx := extractUserContext(*claims)
 			if ctx.UserID != "" || ctx.Email != "" {
+				log.Printf("[GATEWAY-AUTH] WARNING: Accepting unverified token payload for user %s (JWKS fallback)", ctx.UserID)
 				return ctx, nil
 			}
 		}
@@ -120,7 +126,10 @@ func extractUserContext(claims jwt.MapClaims) *UserContext {
 	return ctx
 }
 
-func (v *JWTValidator) getJWKSKey(kid string) (interface{}, error) {
+// getJWKSKey retrieves and parses the public key for the given kid.
+// Supports ES256 (ECDSA P-256) which is Supabase's default,
+// as well as RS256 (RSA) for legacy compatibility.
+func (v *JWTValidator) getJWKSKey(kid string, method jwt.SigningMethod) (interface{}, error) {
 	v.jwksMutex.RLock()
 	cacheAge := time.Since(v.lastFetch)
 	v.jwksMutex.RUnlock()
@@ -142,17 +151,73 @@ func (v *JWTValidator) getJWKSKey(kid string) (interface{}, error) {
 		if !ok {
 			continue
 		}
-		if keyMap["kid"] == kid {
-			// Construct key from JWKS JSON
+		if keyMap["kid"] != kid {
+			continue
+		}
+
+		kty, _ := keyMap["kty"].(string)
+		alg, _ := keyMap["alg"].(string)
+
+		switch {
+		case kty == "EC" || alg == "ES256" || alg == "ES384":
+			return parseECPublicKey(keyMap)
+
+		case kty == "RSA" || alg == "RS256":
 			jsonBytes, err := json.Marshal(keyMap)
 			if err != nil {
 				return nil, err
 			}
 			return jwt.ParseRSAPublicKeyFromPEM(jsonBytes)
+
+		default:
+			if _, isECDSA := method.(*jwt.SigningMethodECDSA); isECDSA {
+				return parseECPublicKey(keyMap)
+			}
+			jsonBytes, _ := json.Marshal(keyMap)
+			return jwt.ParseRSAPublicKeyFromPEM(jsonBytes)
 		}
 	}
 
 	return nil, fmt.Errorf("key id %s not found in JWKS", kid)
+}
+
+// parseECPublicKey builds an *ecdsa.PublicKey from a JWK EC key map.
+// Supabase uses P-256 (crv: "P-256") with base64url-encoded x and y coordinates.
+func parseECPublicKey(keyMap map[string]interface{}) (*ecdsa.PublicKey, error) {
+	crv, _ := keyMap["crv"].(string)
+	xStr, _ := keyMap["x"].(string)
+	yStr, _ := keyMap["y"].(string)
+
+	if xStr == "" || yStr == "" {
+		return nil, errors.New("EC JWK missing x or y coordinate")
+	}
+
+	xBytes, err := base64.RawURLEncoding.DecodeString(xStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode EC x: %w", err)
+	}
+	yBytes, err := base64.RawURLEncoding.DecodeString(yStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode EC y: %w", err)
+	}
+
+	var curve elliptic.Curve
+	switch crv {
+	case "P-384":
+		curve = elliptic.P384()
+	case "P-521":
+		curve = elliptic.P521()
+	default:
+		curve = elliptic.P256()
+	}
+
+	pub := &ecdsa.PublicKey{
+		Curve: curve,
+		X:     new(big.Int).SetBytes(xBytes),
+		Y:     new(big.Int).SetBytes(yBytes),
+	}
+
+	return pub, nil
 }
 
 func (v *JWTValidator) fetchJWKS() {

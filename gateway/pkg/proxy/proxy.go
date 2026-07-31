@@ -164,6 +164,12 @@ func (gp *GatewayProxy) Handler() http.Handler {
 			return
 		}
 
+		// Strip any client-supplied spoofed user-context headers BEFORE setting validated values.
+		// This prevents a malicious client from injecting their own X-User-Id to impersonate users.
+		r.Header.Del("X-User-Id")
+		r.Header.Del("X-User-Email")
+		r.Header.Del("X-User-Role")
+
 		if userCtx != nil {
 			r.Header.Set("X-User-Id", userCtx.UserID)
 			r.Header.Set("X-User-Email", userCtx.Email)

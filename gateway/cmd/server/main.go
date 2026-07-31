@@ -63,8 +63,8 @@ func main() {
 		log.Fatalf("[SUPERVISOR] Failed to initialize Gateway Proxy: %v", err)
 	}
 
-	// Wrap middleware chain: CORS -> RateLimiter -> Proxy Handler
-	handler := corsMW.Handler(rateLimiter.Handler(gatewayProxy.Handler()))
+	// Wrap middleware chain: SecurityHeaders -> CORS -> RateLimiter -> Proxy Handler
+	handler := middleware.SecurityHeaders(corsMW.Handler(rateLimiter.Handler(gatewayProxy.Handler())))
 
 	server := &http.Server{
 		Addr:         ":" + gatewayPort,

@@ -48,8 +48,11 @@ async def verify_jwt(
     verification using SUPABASE_JWT_SECRET, and asymmetric (RS256) using JWKS.
     Returns the parsed token payload if valid, otherwise raises 401.
     """
-    # Fast path: check for pre-validated user context forwarded from Go Edge Gateway
-    if request and request.headers.get("X-User-Id"):
+    # Fast path: check for pre-validated user context forwarded from Go Edge Gateway.
+    # SECURITY: Only trust this header if the request came from loopback (Go gateway on 127.0.0.1).
+    # This prevents external callers from spoofing X-User-Id if port 8001 is ever accidentally exposed.
+    client_host = request.client.host if request and request.client else ""
+    if client_host in ("127.0.0.1", "::1") and request and request.headers.get("X-User-Id"):
         payload = {
             "sub": request.headers.get("X-User-Id"),
             "email": request.headers.get("X-User-Email", ""),

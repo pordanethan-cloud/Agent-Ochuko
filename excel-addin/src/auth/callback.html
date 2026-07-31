@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Signing in...</title>
+  <!--
+    OAuth Callback Page — Agent Ochuko Excel Add-in
+    ─────────────────────────────────────────────────
+    Supabase redirects here after Google OAuth completes.
+    This page runs inside an Office.js dialog popup, extracts the
+    access_token from the URL hash, and sends it back to the task
+    pane via Office.context.ui.messageParent().
+  -->
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"
+          type="text/javascript"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, sans-serif;
+      background: #0d1117;
+      color: #8b949e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      text-align: center;
+    }
+    .msg { font-size: 14px; }
+    .err { color: #f85149; }
+  </style>
+</head>
+<body>
+  <div class="msg" id="status">Completing sign-in...</div>
+
+  <script>
+    Office.onReady(() => {
+      const hash   = new URLSearchParams(window.location.hash.substring(1));
+      const search = new URLSearchParams(window.location.search);
+
+      // Check for OAuth error from Supabase / Google
+      const error     = hash.get('error')             || search.get('error');
+      const errorDesc = hash.get('error_description') || search.get('error_description');
+      if (error) {
+        document.getElementById('status').textContent = errorDesc || error;
+        document.getElementById('status').className   = 'msg err';
+        Office.context.ui.messageParent(JSON.stringify({
+          type: 'error',
+          error: errorDesc || error,
+        }));
+        return;
+      }
+
+      const access_token  = hash.get('access_token')  || search.get('access_token');
+      const refresh_token = hash.get('refresh_token') || search.get('refresh_token');
+
+      if (!access_token) {
+        const msg = 'No token received. Please try again.';
+        document.getElementById('status').textContent = msg;
+        document.getElementById('status').className   = 'msg err';
+        Office.context.ui.messageParent(JSON.stringify({ type: 'error', error: msg }));
+        return;
+      }
+
+      // Decode email & user info from JWT payload
+      let email = '';
+      try {
+        const parts   = access_token.split('.');
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+        email = payload.email || payload.user_metadata?.email || '';
+      } catch (_) {}
+
+      document.getElementById('status').textContent = 'Signed in. Returning to Excel...';
+
+      Office.context.ui.messageParent(JSON.stringify({
+        type:          'success',
+        access_token,
+        refresh_token: refresh_token || '',
+        email,
+      }));
+    });
+  </script>
+</body>
+</html>

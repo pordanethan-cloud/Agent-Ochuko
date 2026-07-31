@@ -39,9 +39,25 @@ _COMPLEX_VERBS = re.compile(
 _PLANNER_SYSTEM = (
     "You are a task planning assistant. Given a user's goal and conversation history, "
     "decompose it into a clear, numbered execution plan of 2-6 steps. "
-    "Each step should be an atomic, actionable instruction — one tool call or one reasoning step. "
+    "Each step should be an atomic, actionable instruction — one tool call or one reasoning step.\n\n"
+    "CRITICAL RULE for comparative or multi-topic queries:\n"
+    "If the goal asks to compare multiple subjects (phones, products, people, policies, etc.) "
+    "or requests information across multiple dimensions/aspects/ramifications, your plan MUST include "
+    "a step like:\n"
+    "  2. Call deep_research with queries: [<list of 3-6 specific, narrow sub-queries — one per subject or dimension>]\n"
+    "Each sub-query must be a precise Google search string, NOT a vague description.\n\n"
     "Write the plan as a plain numbered list. No explanations, no preamble. "
     "If the goal can be answered in a single step without tool calls, respond with: SINGLE_STEP"
+)
+
+
+# Patterns that signal research-intensive prompts (always plan, even if _is_complex returns False)
+_RESEARCH_INTENSIVE_RE = re.compile(
+    r"\b(compare|vs\.?|versus|rank(?:ing)?|ramification|all\s+(?:aspect|dimension|ramification)|"
+    r"breakdown|head[\s-]to[\s-]head|side[\s-]by[\s-]side|pros\s+and\s+cons|"
+    r"which\s+is\s+better|should\s+I\s+buy|worth\s+buying|"
+    r"spec(?:ification)?s?\s+of|benchmark|all\s+(?:phone|device|product)s?)\b",
+    re.IGNORECASE,
 )
 
 
@@ -78,7 +94,8 @@ async def generate_plan(
 
     This function is always safe to call — any exception returns None.
     """
-    if not _is_complex(user_message):
+    is_research = bool(_RESEARCH_INTENSIVE_RE.search(user_message))
+    if not _is_complex(user_message) and not is_research:
         logger.debug("Planner skipped — message does not appear complex")
         return None
 

@@ -1,0 +1,128 @@
+name: Deploy Excel Add-in
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "excel-addin/**"
+      - ".github/workflows/addin-deploy.yml"
+
+  # Allow manual trigger from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  validate-and-deploy:
+    name: Validate Manifest and Deploy Add-in to Azure
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Node.js ──────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: excel-addin/package-lock.json
+
+      # ── 3. Install add-in dev dependencies ────────────────────────────
+      - name: Install add-in dependencies
+        working-directory: ./excel-addin
+        run: npm ci
+
+      # ── 4. Validate manifest schema (fail fast) ───────────────────────
+      - name: Validate Office Add-in manifest
+        working-directory: ./excel-addin
+        run: npx office-addin-manifest validate manifest.production.xml
+
+      # ── 5. Stamp the production API URL into the taskpane JS ──────────
+      #       The dev build hard-codes localhost:8000. In production we
+      #       replace it with the actual Azure Container App URL so no
+      #       build tool (webpack/vite) is required.
+      - name: Patch API URL for production
+        run: |
+          sed -i "s|http://localhost:8000|${{ secrets.PROD_API_URL }}|g" \
+            excel-addin/src/taskpane/taskpane.js
+
+      # ── 6. Log in to Azure ─────────────────────────────────────────────
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── 7. Retrieve storage account key ───────────────────────────────
+      - name: Get Storage Account Key
+        id: storage
+        run: |
+          KEY=$(az storage account keys list \
+            --resource-group rg-ochuko \
+            --account-name agentochukostore \
+            --query "[0].value" \
+            --output tsv)
+          echo "::add-mask::$KEY"
+          echo "key=$KEY" >> $GITHUB_OUTPUT
+
+      # ── 8. Create the addin container if it doesn't exist ─────────────
+      - name: Ensure addin blob container exists
+        run: |
+          az storage container create \
+            --account-name agentochukostore \
+            --account-key ${{ steps.storage.outputs.key }} \
+            --name addin \
+            --public-access blob \
+            2>/dev/null || true
+
+      # ── 9. Upload add-in files to Azure Blob Storage ($addin) ────────
+      - name: Upload add-in files
+        run: |
+          az storage blob upload-batch \
+            --account-name agentochukostore \
+            --account-key ${{ steps.storage.outputs.key }} \
+            --source excel-addin/src \
+            --destination addin/src \
+            --overwrite true
+
+          az storage blob upload-batch \
+            --account-name agentochukostore \
+            --account-key ${{ steps.storage.outputs.key }} \
+            --source excel-addin/assets \
+            --destination addin/assets \
+            --overwrite true
+
+          # Upload production manifest
+          az storage blob upload \
+            --account-name agentochukostore \
+            --account-key ${{ steps.storage.outputs.key }} \
+            --container-name addin \
+            --file excel-addin/manifest.production.xml \
+            --name manifest.xml \
+            --overwrite true
+
+      # ── 10. Set correct Content-Type headers for JS and CSS ───────────
+      - name: Set Content-Type for JS files
+        run: |
+          for blob in $(az storage blob list \
+            --account-name agentochukostore \
+            --account-key ${{ steps.storage.outputs.key }} \
+            --container-name addin \
+            --query "[?ends_with(name, '.js')].name" \
+            --output tsv); do
+            az storage blob update \
+              --account-name agentochukostore \
+              --account-key ${{ steps.storage.outputs.key }} \
+              --container-name addin \
+              --name "$blob" \
+              --content-type "application/javascript"
+          done
+
+      # ── 11. Print the hosted add-in URL ────────────────────────────────
+      - name: Print add-in URL
+        run: |
+          echo "Add-in hosted at:"
+          echo "  https://agentochukostore.blob.core.windows.net/addin/src/taskpane/taskpane.html"
+          echo ""
+          echo "Manifest URL (for sideloading / AppSource submission):"
+          echo "  https://agentochukostore.blob.core.windows.net/addin/manifest.xml"

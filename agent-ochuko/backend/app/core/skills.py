@@ -97,11 +97,17 @@ SKILLS: dict[str, str] = {
     ),
 
     "research": (
-        "WEB RESEARCH:\n"
-        "Use search_web for anything requiring current data, live prices, recent news, "
-        "people, organisations, or any fact that may have changed after your training cutoff.\n"
-        "Synthesise across multiple sources. Always surface the most authoritative citation. "
-        "State clearly if information is uncertain or conflicting between sources."
+        "WEB RESEARCH & DEEP RESEARCH:\n"
+        "You have TWO search tools:\n"
+        "  1. `search_web(query)` — single targeted lookup. Use for simple factual queries.\n"
+        "  2. `deep_research(queries=[...])` — fires up to 6 parallel searches simultaneously. "
+        "Use this whenever the user asks to compare multiple subjects, asks about different aspects of a topic, "
+        "or poses a multi-dimensional question (e.g. 'compare X vs Y', 'all ramifications of...', "
+        "'rank these phones on chip, camera, battery...').\n"
+        "ALWAYS prefer `deep_research` over repeated `search_web` calls for comparative or multi-topic prompts. "
+        "Break the prompt into specific, narrow sub-queries — one per subject or dimension. "
+        "Synthesise the merged results into a single structured, cited answer. "
+        "Surface the most authoritative source per claim and flag any conflicting data."
     ),
 
     "analysis": (
@@ -155,7 +161,11 @@ _SKILL_PATTERNS: list[tuple[str, re.Pattern]] = [
         r"\b(latest|current(?:ly)?|today|right\s+now|this\s+week|recent(?:ly)?|"
         r"news(?:\s+about)?|what\s+happened|search\s+(?:for|the\s+web)|"
         r"look\s+(?:it\s+)?up|price\s+of|stock\s+price|weather\s+(?:in|for)|"
-        r"who\s+is\s+(?:the\s+)?(?:current|new)|just\s+(?:announced|released|launched))\b",
+        r"who\s+is\s+(?:the\s+)?(?:current|new)|just\s+(?:announced|released|launched)|"
+        r"compare|vs\.?|versus|rank(?:ing)?|ramification|breakdown|all\s+aspect|"
+        r"dimension|spec(?:ification)?|feature(?:s)?\s+of|benchmark|head[\s-]to[\s-]head|"
+        r"pros\s+and\s+cons\s+of|which\s+is\s+better|best\s+(?:phone|laptop|device|option)|"
+        r"should\s+I\s+buy|worth\s+buying)\b",
         re.IGNORECASE
     )),
     ("analysis", re.compile(

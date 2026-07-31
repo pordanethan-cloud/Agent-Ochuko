@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 
-import { supabase } from '../utils/supabaseClient'
+import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
 import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical } from 'lucide-react'
 
@@ -92,8 +92,8 @@ function getDisplayName(preferredName: string | null, userEmail: string | null):
     const firstName = extractFirstName(userEmail)
     if (firstName) return firstName
   }
-  const honorifics = ['Scholar', 'Strategist', 'Counselor', 'Advisor']
-  return honorifics[Math.floor(Math.random() * honorifics.length)]
+  // Neutral fallback — no career/role titles
+  return 'there'
 }
 
 // ─── Time-Based Greetings & Context ──────────────────────────────────────────
@@ -114,40 +114,91 @@ function getVisitContext(visitData: VisitData, hour: number): string {
 
   // ── First ever visit ─────────────────────────────────────────────────────
   if (visitCount === 1) {
-    const opts = ['Good to have you.', "Let's get started.", 'Ready when you are.']
+    const opts = [
+      "Glad you're here.",
+      "Let's see what we can do.",
+      'You\'re in the right place.',
+      'Something interesting is about to happen.',
+    ]
     return opts[Math.floor(Math.random() * opts.length)]
   }
 
   // ── Long absence (7+ days) ───────────────────────────────────────────────
-  if (daysSinceLast >= 14) return "It's been a while — welcome back."
-  if (daysSinceLast >= 7)  return "Good to see you again."
+  if (daysSinceLast >= 14) {
+    const opts = [
+      "Thought you'd forgotten about me.",
+      'Long time. Good to have you back.',
+      "A lot can happen in two weeks. Let's catch up.",
+    ]
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
+  if (daysSinceLast >= 7) {
+    const opts = [
+      'Been a minute. Good to see you.',
+      'Back after a week — what are we working on?',
+      'Absence makes the work pile up. Let\'s dig in.',
+    ]
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
 
   // ── Same-day return (multiple sessions today) ────────────────────────────
   if (daysSinceLast === 0 && visitCount > 1) {
     const opts = [
-      'Back for more.',
-      'Round two.',
-      'Still at it.',
+      'Again? I like the dedication.',
+      'Still at it — let\'s keep going.',
+      'Round two. What\'s next?',
       'Picking up where we left off.',
+      'You don\'t stop, do you.',
     ]
     return opts[Math.floor(Math.random() * opts.length)]
   }
 
   // ── High streak (daily consistency) ─────────────────────────────────────
-  if (consecutiveDays >= 14) return `${consecutiveDays} days straight. Impressive.`
-  if (consecutiveDays >= 7)  return `${consecutiveDays}-day streak. Keep going.`
-  if (consecutiveDays >= 3)  return `${consecutiveDays} days in a row.`
+  if (consecutiveDays >= 14) {
+    return `${consecutiveDays} days in a row. That kind of consistency compounds.`
+  }
+  if (consecutiveDays >= 7) {
+    return `${consecutiveDays} days straight. You\'re on a proper streak.`
+  }
+  if (consecutiveDays >= 3) {
+    const opts = [
+      `${consecutiveDays} days running. Don't break the chain.`,
+      `${consecutiveDays} days in a row — momentum is building.`,
+    ]
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
 
   // ── Time-of-day cues ─────────────────────────────────────────────────────
-  if (hour >= 5  && hour < 9)  return 'Early start.'
-  if (hour >= 9  && hour < 12) return 'Ready to work.'
-  if (hour >= 12 && hour < 14) return 'Midday check-in.'
-  if (hour >= 14 && hour < 17) return 'Afternoon focus.'
-  if (hour >= 17 && hour < 20) return 'Evening session.'
-  if (hour >= 20 && hour < 22) return 'Late push.'
-  if (hour >= 22 || hour < 5)  return 'Burning the midnight oil.'
+  if (hour >= 5  && hour < 9)  {
+    const opts = ['Early bird.', 'First light. Good start.', 'Up before the world.']
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
+  if (hour >= 9  && hour < 12) {
+    const opts = ['Morning\'s best hours.', 'Good time to get things done.', 'Sharp and ready.']
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
+  if (hour >= 12 && hour < 14) {
+    const opts = ['Deep into the midday.', 'Powering through.', 'No lunch break needed.']
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
+  if (hour >= 14 && hour < 17) {
+    const opts = ['Afternoon momentum.', 'Best part of the day.', 'Still going strong.']
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
+  if (hour >= 17 && hour < 20) {
+    const opts = ['Evening shift.', 'Work doesn\'t clock out.', 'Into the evening.']
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
+  if (hour >= 20 && hour < 22) {
+    const opts = ['Late push.', 'Night mode.', 'The quiet hours.']
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
+  if (hour >= 22 || hour < 5) {
+    const opts = ['Burning the midnight oil.', 'You and the night.', 'Sleep is overrated anyway.']
+    return opts[Math.floor(Math.random() * opts.length)]
+  }
 
-  return 'Welcome back.'
+  return 'Good to have you back.'
 }
 
 function getDynamicGreeting(preferredName: string | null, userEmail: string | null): string {
@@ -190,20 +241,25 @@ function generateAutoTitle(firstUserMessage: string): string {
     .trim()
 
   // Split into words, filter stopwords for a cleaner title
-  const STOP = new Set(['a','an','the','is','are','was','were','be','been',
+  const STOP = new Set([
+    'a','an','the','is','are','was','were','be','been','being',
     'i','me','my','we','our','you','your','it','its','and','or','but',
     'so','if','in','on','at','to','of','for','by','with','from','that',
     'this','how','what','why','when','where','who','can','could','should',
-    'would','will','do','does','did','have','has','had'])
+    'would','will','do','does','did','have','has','had','get','got','make',
+    'use','just','like','also','then','than','as','up','about','which',
+    'some','any','all','not','no','yes','please','help','tell','show',
+    'give','need','want','know','think','feel','look','see','put','take',
+  ])
 
-  const words = text.split(' ').filter(w => w.length > 0)
+  const words = text.split(' ').filter(w => w.length > 1)
   const meaningful = words.filter(w => !STOP.has(w.toLowerCase()))
 
-  // Use meaningful words if enough, else fall back to raw words
-  const chosen = meaningful.length >= 3 ? meaningful : words
+  // Use meaningful words if ≥2 survive, else fall back to raw words (skip stopwords-only inputs)
+  const chosen = meaningful.length >= 2 ? meaningful : words
   const title  = chosen.slice(0, 6).join(' ')
 
-  // Capitalise first letter, truncate
+  // Capitalise first letter, truncate at 50 chars
   const capped = title.charAt(0).toUpperCase() + title.slice(1)
   return capped.length > 52 ? capped.slice(0, 50) + '…' : capped
 }
@@ -304,6 +360,12 @@ interface Message {
   generatedFiles?: { filename: string; download_url: string; size_bytes: number }[]
 
   thinkingContent?: string   // Reasoning text from <thinking> blocks (THINK/SOLVE modes)
+
+  isCompactionMarker?: boolean  // Synthetic message: marks where context was compacted + summarised
+
+  compactionSummary?: string    // The summary text produced during compaction
+
+  isArchived?: boolean          // Indicates if this message was archived due to compaction
 
 }
 
@@ -462,7 +524,7 @@ function FileDownloadCard({
         <p className="text-[12.5px] font-semibold text-brand-text truncate leading-tight">{filename}</p>
         {sizeLabel && <p className="text-[10px] text-[#8e95a2] mt-0.5">{sizeLabel}</p>}
         {!hasUrl && (
-          <p className="text-[10px] text-amber-400/70 mt-0.5">File sync failed — try regenerating</p>
+          <p className="text-[10px] text-amber-400/70 mt-0.5">Sandbox file — ask me to resend it for a download link</p>
         )}
       </div>
 
@@ -494,7 +556,7 @@ function FileDownloadCard({
         ) : (
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center border border-amber-500/20 bg-amber-500/5 text-amber-500/40 cursor-not-allowed"
-            title="File sync failed"
+            title="Sandbox-only file — ask the agent to resend for a downloadable link"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -1083,9 +1145,14 @@ function MermaidBlock({ code }: { code: string }) {
         if (tempEl) tempEl.remove()
 
         if (!cancelled && diagramRef.current) {
-
           diagramRef.current.innerHTML = svg
-
+          const svgEl = diagramRef.current.querySelector('svg')
+          if (svgEl) {
+            svgEl.style.maxWidth = '100%'
+            svgEl.style.width = '100%'
+            svgEl.style.height = 'auto'
+            svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+          }
         }
 
       } catch (err: any) {
@@ -1184,16 +1251,30 @@ function MermaidBlock({ code }: { code: string }) {
     const svgEl = diagramRef.current?.querySelector('svg')
     if (!svgEl) return
     try {
-      // Clone the SVG and add a dark background
+      // Clone the SVG and add responsive full-screen styling with dark background
       const svgClone = svgEl.cloneNode(true) as SVGElement
       svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+      svgClone.style.maxWidth = '100%'
+      svgClone.style.width = '100%'
+      svgClone.style.height = 'auto'
 
-      // Add dark background rectangle
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-      rect.setAttribute('width', '100%')
-      rect.setAttribute('height', '100%')
-      rect.setAttribute('fill', '#0d1117')
-      svgClone.insertBefore(rect, svgClone.firstChild)
+      // Ensure proper viewBox for responsive scaling
+      if (!svgClone.getAttribute('viewBox')) {
+        const bbox = svgEl.getBoundingClientRect()
+        const w = svgEl.viewBox?.baseVal?.width || bbox.width || 800
+        const h = svgEl.viewBox?.baseVal?.height || bbox.height || 600
+        svgClone.setAttribute('viewBox', `0 0 ${w} ${h}`)
+      }
+
+      // Add dark background rectangle if not present
+      if (!svgClone.querySelector('rect.bg-rect')) {
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+        rect.setAttribute('class', 'bg-rect')
+        rect.setAttribute('width', '100%')
+        rect.setAttribute('height', '100%')
+        rect.setAttribute('fill', '#0d1117')
+        svgClone.insertBefore(rect, svgClone.firstChild)
+      }
 
       const svgString = new XMLSerializer().serializeToString(svgClone)
       const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
@@ -1348,10 +1429,10 @@ function MermaidBlock({ code }: { code: string }) {
 
         : <div 
             ref={diagramRef} 
-            className={`p-4 overflow-auto mermaid-diagram-container transition-all duration-300 ${
+            className={`p-4 overflow-auto mermaid-diagram-container flex justify-center items-center transition-all duration-300 [&>svg]:max-w-full [&>svg]:w-full [&>svg]:h-auto ${
               isExpanded 
-                ? 'min-h-[500px] max-h-[800px]' 
-                : 'min-h-[200px] max-h-[400px]'
+                ? 'w-full min-h-[500px] max-h-[85vh]' 
+                : 'w-full min-h-[220px] max-h-[450px]'
             }`}
           />
 
@@ -3715,6 +3796,7 @@ export const Dashboard: React.FC = () => {
   // Messages start empty — hydrated from the user-scoped cache ONLY after
   // getUser() resolves so we never accidentally show another user's data.
   const [messages, setMessages] = useState<Message[]>([])
+  const [expandedCompactionIndices, setExpandedCompactionIndices] = useState<Set<number>>(new Set())
 
   const [input, setInput] = useState('')
 
@@ -4256,9 +4338,7 @@ export const Dashboard: React.FC = () => {
 
     try {
 
-      const session = await supabase.auth.getSession()
-
-      const token = session.data.session?.access_token
+      const token = await getEffectiveToken()
 
       if (!token) return
 
@@ -4307,6 +4387,7 @@ export const Dashboard: React.FC = () => {
     
     // Clear messages and reset conversation ID
     setMessages([])
+    setExpandedCompactionIndices(new Set())
     setActiveConversationId('00000000-0000-0000-0000-000000000000')
     const uid = userIdRef.current
     if (uid) localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), '00000000-0000-0000-0000-000000000000')
@@ -4397,6 +4478,8 @@ export const Dashboard: React.FC = () => {
 
     setIsFetchingHistory(true)
 
+    setExpandedCompactionIndices(new Set())
+
     // --- SWR Cache Read ---
     // Load cached messages first to make switching instant and avoid skeleton/blank screen flash
     const uid = userIdRef.current
@@ -4480,7 +4563,13 @@ export const Dashboard: React.FC = () => {
 
             role: m.role,
 
-            content: m.content,
+            content: m.is_summary ? '' : m.content,
+
+            isCompactionMarker: m.is_summary || undefined,
+
+            compactionSummary: m.is_summary ? m.content.replace(/^Summary of earlier conversation:\n/i, '') : undefined,
+
+            isArchived: m.is_archived_msg || undefined,
 
             routing_mode: m.routing_mode,
 
@@ -4591,40 +4680,44 @@ export const Dashboard: React.FC = () => {
           }
         }
 
-        // Attach generated files to the last assistant message (best-effort)
+        // Attach generated files from the /files endpoint ONLY as a fallback.
+        // If any assistant message already has generatedFiles (from content_parts.generated_files),
+        // those are already correctly placed per-message — skip the /files endpoint to prevent duplication.
+        const anyMsgHasFiles = mapped.some(
+          (m: any) => m.role === 'assistant' && m.generatedFiles && m.generatedFiles.length > 0
+        )
 
-        if (filesRes?.ok) {
-
+        if (!anyMsgHasFiles && filesRes?.ok) {
           const files: any[] = await filesRes.json()
 
           if (files.length > 0) {
-
-            // Find the last assistant message to attach files to
-
+            // Find the last assistant message to attach files to (fallback path)
             const lastAssistIdx = mapped.map((m: any) => m.role).lastIndexOf('assistant')
 
             if (lastAssistIdx >= 0) {
-
               mapped[lastAssistIdx] = {
-
                 ...mapped[lastAssistIdx],
-
                 generatedFiles: files.map((f: any) => ({
-
                   filename: f.filename,
-
                   download_url: f.r2_url,
-
                   size_bytes: f.size_bytes || 0,
-
                 })),
-
               }
-
             }
-
           }
+        }
 
+        // De-duplicate generatedFiles within each message (guard against double SSE events on same turn)
+        for (const m of mapped) {
+          if (m.generatedFiles && m.generatedFiles.length > 1) {
+            const seen = new Set<string>()
+            m.generatedFiles = m.generatedFiles.filter((f: any) => {
+              const key = f.filename + '_' + f.size_bytes
+              if (seen.has(key)) return false
+              seen.add(key)
+              return true
+            })
+          }
         }
 
         // Reconcile database messages with local cache to avoid overwriting complete streamed messages
@@ -5052,17 +5145,7 @@ export const Dashboard: React.FC = () => {
 
     try {
 
-      let token = ''
-      try {
-        const getSessionPromise = supabase.auth.getSession()
-        const timeoutPromise = new Promise<any>((resolve) => setTimeout(() => resolve(null), 2500))
-        const sessionRes = await Promise.race([getSessionPromise, timeoutPromise])
-        if (sessionRes?.data?.session?.access_token) {
-          token = sessionRes.data.session.access_token
-        }
-      } catch (authErr) {
-        console.warn('Failed to retrieve Supabase session token:', authErr)
-      }
+      let token = (await getEffectiveToken()) || ''
 
       const sendStreamRequest = () => fetch(`${API_BASE}/v1/responses/stream`, {
 
@@ -5328,17 +5411,18 @@ export const Dashboard: React.FC = () => {
               // Find the first user message in the current history to build the title.
               // Update the sidebar immediately (optimistic), then patch server in background.
               const convId = data.conversation_id as string
+              const firstUserMsg = userMessageObj.content
+              const defaultServerTitle = firstUserMsg.slice(0, 30) + (firstUserMsg.length > 30 ? '...' : '')
+
               setConversations(prev => {
                 const existing = prev.find(c => c.id === convId)
-                // Only auto-title if this is genuinely a new/untitled conversation
-                if (existing && existing.title) return prev
-                const firstUserMsg = userMessageObj.content
+                const isDefaultTitle = !existing || !existing.title || existing.title === 'New Chat' || existing.title === defaultServerTitle
+                if (existing && !isDefaultTitle) return prev
                 const autoTitle = generateAutoTitle(firstUserMsg)
                 // Optimistic update in sidebar
                 if (existing) {
                   return prev.map(c => c.id === convId ? { ...c, title: autoTitle } : c)
                 }
-                // New convo not yet in list — will appear after fetchConversations
                 return prev
               })
 
@@ -5346,8 +5430,8 @@ export const Dashboard: React.FC = () => {
               setTimeout(async () => {
                 try {
                   const existing = conversations.find(c => c.id === convId)
-                  if (existing?.title) return // already has a real title
-                  const firstUserMsg = userMessageObj.content
+                  const isDefaultTitle = !existing || !existing.title || existing.title === 'New Chat' || existing.title === defaultServerTitle
+                  if (existing && !isDefaultTitle) return // already has a custom user-supplied title
                   const autoTitle = generateAutoTitle(firstUserMsg)
                   const token = (await supabase.auth.getSession()).data.session?.access_token
                   if (!token) return
@@ -5390,7 +5474,8 @@ export const Dashboard: React.FC = () => {
 
                 if (data.sources && data.sources.length > 0) {
 
-                  // Append sources to the streaming message
+                  // Accumulate sources from ALL search iterations (multi-step loop).
+                  // De-duplicate by URL so the same source never appears twice.
 
                   setMessages((prev) => {
 
@@ -5402,7 +5487,15 @@ export const Dashboard: React.FC = () => {
 
                       if (lastMsg.role === 'assistant') {
 
-                        lastMsg.sources = data.sources
+                        const existing: Source[] = lastMsg.sources || []
+                        const existingUrls = new Set(existing.map((s: Source) => s.url))
+                        const incoming: Source[] = (data.sources as Source[]).filter(
+                          (s: Source) => s.url && !existingUrls.has(s.url)
+                        )
+                        updated[updated.length - 1] = {
+                          ...lastMsg,
+                          sources: [...existing, ...incoming],
+                        }
 
                       }
 
@@ -5421,6 +5514,40 @@ export const Dashboard: React.FC = () => {
                 setActivityLabel(data.label || 'Search failed.')
 
               }
+
+            } else if (data.type === 'context_compacted') {
+
+              // Context was compacted by the backend — insert a transparent marker
+              // so the user knows what happened and what was summarised.
+
+              setMessages((prev) => {
+                const activeIndices: number[] = []
+                prev.forEach((m, idx) => {
+                  if (!m.isCompactionMarker && !m.isArchived) {
+                    activeIndices.push(idx)
+                  }
+                })
+                 if (activeIndices.length > 20) {
+                  const indicesToArchive = activeIndices.slice(0, -20)
+                  return prev.map((m, idx) => {
+                    if (indicesToArchive.includes(idx)) {
+                      return { ...m, isArchived: true }
+                    }
+                    return m
+                  }).concat({
+                    role: 'assistant' as const,
+                    content: '',
+                    isCompactionMarker: true,
+                    compactionSummary: data.summary || '',
+                  })
+                }
+                return prev.concat({
+                  role: 'assistant' as const,
+                  content: '',
+                  isCompactionMarker: true,
+                  compactionSummary: data.summary || '',
+                })
+              })
 
             } else if (data.type === 'image_gen_queued') {
 
@@ -5826,9 +5953,14 @@ export const Dashboard: React.FC = () => {
                   const updated = [...prev]
                   if (updated.length > 0) {
                     const last = updated[updated.length - 1]
-                    updated[updated.length - 1] = {
-                      ...last,
-                      generatedFiles: [...(last.generatedFiles || []), ...newFiles],
+                    const existing = last.generatedFiles || []
+                    const existingKeys = new Set(existing.map((f: any) => f.filename + '_' + f.size_bytes))
+                    const filteredNew = newFiles.filter((f: any) => !existingKeys.has(f.filename + '_' + f.size_bytes))
+                    if (filteredNew.length > 0) {
+                      updated[updated.length - 1] = {
+                        ...last,
+                        generatedFiles: [...existing, ...filteredNew],
+                      }
                     }
                   }
                   return updated
@@ -7290,17 +7422,20 @@ export const Dashboard: React.FC = () => {
             </button>
           </div>
 
+          {/* ── Danger zone divider ─────────────────────────────────────── */}
+          <div className="border-t border-[#ffffff]/10 mt-1 mb-2" />
+
           <button
 
             onClick={handleSignOut}
 
-            className="w-full h-10 text-red-400 hover:text-red-300 hover:bg-red-950/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 px-3 border border-red-900/30 hover:border-red-900/50"
+            className="w-full h-10 text-[#c4636a] hover:text-red-300 hover:bg-red-950/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 px-3 border border-red-900/20 hover:border-red-900/50"
 
           >
 
             <LogOut className="w-3.5 h-3.5" />
 
-            <span>Terminate Session</span>
+            <span>Sign Out</span>
 
           </button>
 
@@ -7572,9 +7707,117 @@ export const Dashboard: React.FC = () => {
 
             <div className="max-w-2xl mx-auto space-y-6">
 
-              {messages.map((msg, i) => (
+              {(() => {
+                const getArchivedForMarker = (index: number) => {
+                  const sliceStart = messages.slice(0, index).reduce((acc, m, idx) => {
+                    if (m.isCompactionMarker) return idx + 1;
+                    return acc;
+                  }, 0);
+                  return messages.slice(sliceStart, index).filter(m => m.isArchived);
+                };
 
-                <LazyMessage key={i} estimatedHeight={msg.content.length > 400 ? 200 : 80}>
+                return messages.map((msg, i) => {
+                  if (msg.isArchived) return null;
+
+                  return (
+                    <LazyMessage key={i} estimatedHeight={msg.content.length > 400 ? 200 : 80}>
+
+                      {/* ── Compaction Marker Banner ─────────────────────────────────── */}
+                      {msg.isCompactionMarker ? (
+                        <div className="my-2">
+                          <div className="flex items-start gap-3 py-3 px-4 rounded-xl bg-[#1a1d22] border border-[#2e3542] text-xs text-brand-muted select-none">
+                            <svg className="w-4 h-4 mt-0.5 shrink-0 text-brand-accent/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h12A2.25 2.25 0 0120.25 6v12A2.25 2.25 0 0118 20.25H6A2.25 2.25 0 013.75 18V6z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 9h7.5M8.25 12h5.25" />
+                            </svg>
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-brand-text/70 tracking-wide uppercase text-[10px]">Context summarised</span>
+                                {(() => {
+                                  const archived = getArchivedForMarker(i);
+                                  if (archived.length === 0) return null;
+                                  const isExpanded = expandedCompactionIndices.has(i);
+                                  return (
+                                    <button
+                                      onClick={() => {
+                                        setExpandedCompactionIndices(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(i)) next.delete(i);
+                                          else next.add(i);
+                                          return next;
+                                        });
+                                      }}
+                                      className="flex items-center gap-0.5 text-brand-accent hover:underline text-[10px] font-medium transition cursor-pointer select-none"
+                                    >
+                                      {isExpanded ? (
+                                        <>
+                                          <span>Hide details</span>
+                                          <ChevronUp className="w-3 h-3" />
+                                        </>
+                                      ) : (
+                                        <>
+                                          <span>Show {archived.length} messages</span>
+                                          <ChevronDown className="w-3 h-3" />
+                                        </>
+                                      )}
+                                    </button>
+                                  );
+                                })()}
+                              </div>
+                              {msg.compactionSummary ? (
+                                <p className="text-brand-muted/80 leading-relaxed">{msg.compactionSummary}</p>
+                              ) : (
+                                <p className="text-brand-muted/60 italic">Older messages were condensed to save context space. The full detail is preserved in your conversation history.</p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Collapsible Details */}
+                          {(() => {
+                            const archived = getArchivedForMarker(i);
+                            const isExpanded = expandedCompactionIndices.has(i);
+                            if (!isExpanded || archived.length === 0) return null;
+                            return (
+                              <div className="mt-3 pl-4 border-l border-[#2e3542] space-y-4">
+                                {archived.map((archivedMsg, archIdx) => (
+                                  <div key={`arch-${archIdx}`} className="opacity-90">
+                                    <div className={`flex w-full gap-3 ${archivedMsg.role === 'user' ? 'justify-end' : 'justify-start'} text-xs`}>
+                                      {archivedMsg.role !== 'user' && (
+                                        <div className="w-6 h-6 rounded bg-brand-surface/20 flex items-center justify-center shrink-0 overflow-hidden mt-0.5 select-none border border-white/10">
+                                          <img src="/favicon.png" alt="Ochuko" className="w-full h-full object-cover" />
+                                        </div>
+                                      )}
+                                      <div className={`flex flex-col gap-1 ${archivedMsg.role === 'user' ? 'max-w-[85%] items-end' : 'flex-1 min-w-0'}`}>
+                                        <div className="text-[9px] text-brand-muted/50 font-medium select-none">
+                                          {archivedMsg.role === 'user' ? 'You' : 'Agent Ochuko'}
+                                        </div>
+                                        <div className={`rounded-lg px-3 py-2 text-brand-text/90 ${archivedMsg.role === 'user' ? 'bg-[#1c1e22]/50 border border-[#2b2e35] rounded-tr-none' : 'bg-[#1a1d22]/30 border border-[#2e3542]/50 rounded-tl-none'}`}>
+                                          {archivedMsg.thinkingContent && (
+                                            <div className="mb-2 text-[10px] text-brand-muted/70 italic border-l border-[#2e3542] pl-2 py-0.5 select-none">
+                                              {archivedMsg.thinkingContent}
+                                            </div>
+                                          )}
+                                          <p className="whitespace-pre-wrap leading-relaxed">{archivedMsg.content}</p>
+                                          {archivedMsg.generatedFiles && archivedMsg.generatedFiles.length > 0 && (
+                                            <div className="mt-2 space-y-1">
+                                              {archivedMsg.generatedFiles.map((f, fIdx) => (
+                                                <div key={fIdx} className="flex items-center gap-1.5 text-[10px] text-brand-accent/80">
+                                                  <FileText className="w-3 h-3" />
+                                                  <span>{f.filename}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      ) : (
 
                   <div
 
@@ -8176,10 +8419,11 @@ export const Dashboard: React.FC = () => {
                   </div>
 
                 </div>
-
-                </LazyMessage>
-
-              ))}
+                )}
+                  </LazyMessage>
+                )
+              })
+            })()}
 
               <div ref={messagesEndRef} />
 

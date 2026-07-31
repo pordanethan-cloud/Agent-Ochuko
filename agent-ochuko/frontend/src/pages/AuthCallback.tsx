@@ -8,7 +8,6 @@ export const AuthCallback: React.FC = () => {
   const [errorDesc, setErrorDesc] = useState<string | null>(null)
 
   useEffect(() => {
-    // Parse query and hash parameters for errors
     const params = new URLSearchParams(window.location.search)
     const hashParams = new URLSearchParams(window.location.hash.substring(1))
 
@@ -18,24 +17,90 @@ export const AuthCallback: React.FC = () => {
     if (err) {
       setErrorMsg(err)
       setErrorDesc(desc)
-      return // Stop automatic redirect so the user can see the error
+      return
     }
 
-    // Listen for auth state change which occurs after Supabase parses the session from the URL hash/query
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        navigate('/')
-      } else {
-        // Fallback if session couldn't be established after callback
-        const timer = setTimeout(() => {
-          navigate('/login')
-        }, 3000)
-        return () => clearTimeout(timer)
+    let redirected = false
+
+    const doRedirect = () => {
+      if (redirected) return
+      redirected = true
+      // Clean hash & search params so back button won't re-process OAuth callback
+      window.history.replaceState({}, document.title, window.location.pathname)
+      navigate('/', { replace: true })
+    }
+
+    const access_token = hashParams.get('access_token') || params.get('access_token')
+    const refresh_token = hashParams.get('refresh_token') || params.get('refresh_token')
+    const expires_in = hashParams.get('expires_in') || params.get('expires_in') || '3600'
+
+    if (access_token) {
+      // 1. Persist direct access token to avoid clock skew blocking
+      localStorage.setItem('supabase_token', access_token)
+
+      // 2. Decode payload & populate Supabase SDK storage key directly
+      try {
+        const parts = access_token.split('.')
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
+          if (supabaseUrl) {
+            const host = new URL(supabaseUrl).hostname.split('.')[0]
+            const storageKey = `sb-${host}-auth-token`
+
+            const sessionObj = {
+              access_token,
+              refresh_token: refresh_token || '',
+              token_type: 'bearer',
+              expires_in: parseInt(expires_in, 10),
+              expires_at: Math.floor(Date.now() / 1000) + parseInt(expires_in, 10),
+              user: {
+                id: payload.sub,
+                aud: payload.aud || 'authenticated',
+                role: payload.role || 'authenticated',
+                email: payload.email || '',
+                email_confirmed_at: new Date().toISOString(),
+                phone: payload.phone || '',
+                confirmed_at: new Date().toISOString(),
+                last_sign_in_at: new Date().toISOString(),
+                app_metadata: payload.app_metadata || {},
+                user_metadata: payload.user_metadata || {},
+                identities: [],
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              }
+            }
+            localStorage.setItem(storageKey, JSON.stringify(sessionObj))
+          }
+        }
+      } catch (e) {
+        console.warn('[AuthCallback] Manual session formatting skipped:', e)
       }
+
+      // 3. Update Supabase SDK memory state if refresh token is available
+      if (refresh_token) {
+        supabase.auth.setSession({ access_token, refresh_token }).finally(() => {
+          doRedirect()
+        })
+      } else {
+        doRedirect()
+      }
+      return
+    }
+
+    // Fallback: check existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) doRedirect()
     })
 
+    const fallback = setTimeout(() => {
+      if (!redirected) {
+        navigate('/login', { replace: true })
+      }
+    }, 4000)
+
     return () => {
-      subscription.unsubscribe()
+      clearTimeout(fallback)
     }
   }, [navigate])
 
@@ -69,4 +134,3 @@ export const AuthCallback: React.FC = () => {
     </div>
   )
 }
-
