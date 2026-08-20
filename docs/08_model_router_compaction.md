@@ -26,7 +26,8 @@
   1. Query: `SELECT * FROM messages WHERE conversation_id = :id AND is_archived_msg = FALSE ORDER BY created_at ASC`
   2. This naturally includes: the `[SUMMARY]` message (`is_summary = TRUE`, `is_archived_msg = FALSE`) + all post-compaction messages
   3. Prepend the routing-selected system prompt from `ModelRouter`
-  4. Send this context to Azure OpenAI Responses API
+  4. Preserve and convert image attachments in active turns into structured multimodal `input_image` (Base64 Data URIs) so the vision model retains visual context across turns
+  5. Send this context to Azure OpenAI Responses API
 - [x] Frontend must NOT change — it queries ALL messages (including archived) for scrollable display:
   ```sql
   SELECT * FROM messages WHERE conversation_id = :id ORDER BY created_at ASC

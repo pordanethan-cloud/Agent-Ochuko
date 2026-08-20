@@ -3,6 +3,9 @@ import json
 import asyncio
 import logging
 import re
+import uuid
+import base64
+import httpx
 from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,6 +17,7 @@ from app.core.config import get_config
 from app.core import model_router
 from openai import AsyncAzureOpenAI
 from app.services.supabase_admin import get_supabase_admin
+from app.services.cloudflare_r2 import download_file_bytes
 from app.services.queue_dispatcher import enqueue_job
 from google import genai
 from google.genai import types as genai_types
@@ -368,7 +372,7 @@ async def _perform_google_search(
 
         az_response = await az_client.responses.create(
             model=deploy,
-            input=input_messages,
+            input=[normalize_responses_message(m) for m in input_messages],
         )
 
         answer: str = az_response.output_text or ""
@@ -498,6 +502,78 @@ async def mock_stream_generator():
     yield "data: [DONE]\n\n"
 
 
+def normalize_responses_message(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalizes a message dictionary to be strictly compliant with Azure OpenAI
+    Responses API (EasyInputMessageParam).
+    
+    Ensures:
+      - Valid role: 'system', 'developer', 'user', 'assistant'
+      - Content is either a string OR a list of valid parts:
+        * 'input_text' (for user/system/developer)
+        * 'input_image' with {'image_url': '...', 'detail': 'auto'}
+        * 'input_file'
+      - Pure text part lists are collapsed into clean unified strings.
+      - Converts legacy 'type': 'text' -> 'input_text' / collapsed string.
+      - Converts legacy 'type': 'image_url' -> 'input_image'.
+    """
+    role = msg.get("role", "user")
+    if role not in ("user", "assistant", "system", "developer"):
+        role = "user"
+    
+    raw_content = msg.get("content", "")
+    
+    if isinstance(raw_content, str):
+        return {"role": role, "content": raw_content}
+        
+    if isinstance(raw_content, list):
+        # Check if list contains any media attachments
+        has_media = any(
+            isinstance(part, dict) and part.get("type") in ("image_url", "input_image", "input_file")
+            for part in raw_content
+        )
+        
+        if not has_media:
+            # Collapse text parts into a single string for maximum compatibility
+            texts = []
+            for part in raw_content:
+                if isinstance(part, str):
+                    texts.append(part)
+                elif isinstance(part, dict):
+                    texts.append(str(part.get("text", "")))
+                else:
+                    texts.append(str(part))
+            return {"role": role, "content": "\n\n".join(t for t in texts if t)}
+            
+        norm_parts = []
+        for part in raw_content:
+            if isinstance(part, str):
+                norm_parts.append({"type": "input_text", "text": part})
+            elif isinstance(part, dict):
+                p_type = part.get("type", "")
+                if p_type in ("text", "input_text"):
+                    norm_parts.append({"type": "input_text", "text": str(part.get("text", ""))})
+                elif p_type in ("image_url", "input_image"):
+                    img_val = part.get("image_url", "")
+                    if isinstance(img_val, dict):
+                        img_url_str = img_val.get("url", "")
+                    else:
+                        img_url_str = str(img_val or "")
+                    norm_parts.append({
+                        "type": "input_image",
+                        "image_url": img_url_str,
+                        "detail": part.get("detail", "auto")
+                    })
+                elif p_type == "input_file":
+                    norm_parts.append(part)
+                else:
+                    text_val = part.get("text") or str(part)
+                    norm_parts.append({"type": "input_text", "text": text_val})
+        return {"role": role, "content": norm_parts}
+        
+    return {"role": role, "content": str(raw_content or "")}
+
+
 async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
     """
     Builds the context for the LLM by fetching non-archived messages from the database.
@@ -516,7 +592,7 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
         def fetch_msgs():
             return (
                 supabase.table("messages")
-                .select("role, content, is_summary")
+                .select("role, content, is_summary, content_parts")
                 .eq("conversation_id", conversation_id)
                 .eq("is_archived_msg", False)
                 .order("created_at", desc=False)
@@ -529,6 +605,7 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
             role = msg.get("role")
             content = msg.get("content") or ""
             is_summary = msg.get("is_summary", False)
+            content_parts = msg.get("content_parts") or {}
 
             # System messages from the agent loop (tool outputs) are ephemeral context,
             # not conversational history — skip them to save tokens.
@@ -552,6 +629,41 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
                 content = content.split("[Executed Tool:")[0].strip()
 
             if content:  # Only include non-empty messages
+                if role == "user" and isinstance(content_parts, dict) and content_parts.get("attachments"):
+                    image_atts = [
+                        att for att in content_parts.get("attachments", [])
+                        if att.get("url") and (
+                            att.get("mime_type", "").startswith("image/") or
+                            os.path.splitext(att.get("filename", "").lower())[1]
+                            in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".tiff", ".avif"}
+                        )
+                    ]
+                    if image_atts:
+                        multimodal_content = [{"type": "input_text", "text": content}]
+                        for att in image_atts:
+                            img_src = att.get("url", "")
+                            try:
+                                key = None
+                                for marker in ["uploads/", "generated/"]:
+                                    if marker in img_src:
+                                        key = marker + img_src.split(marker, 1)[1]
+                                        break
+                                if key:
+                                    b = await download_file_bytes(key, "UPLOADS")
+                                    if b:
+                                        b64 = base64.b64encode(b).decode("ascii")
+                                        mime = att.get("mime_type") or "image/png"
+                                        img_src = f"data:{mime};base64,{b64}"
+                            except Exception:
+                                pass
+                            multimodal_content.append({
+                                "type": "input_image",
+                                "image_url": img_src,
+                                "detail": "auto"
+                            })
+                        formatted_messages.append({"role": role, "content": multimodal_content})
+                        continue
+
                 formatted_messages.append({"role": role, "content": content})
 
         return formatted_messages
@@ -763,7 +875,15 @@ async def chat_stream_generator(
             if messages:
                 for m in reversed(messages):
                     if m.get("role") == "user":
-                        last_user_msg = m.get("content", "")
+                        c = m.get("content", "")
+                        if isinstance(c, str):
+                            last_user_msg = c
+                        elif isinstance(c, list):
+                            last_user_msg = " ".join(
+                                p.get("text", "") if isinstance(p, dict) else str(p)
+                                for p in c
+                                if not isinstance(p, dict) or p.get("type") in ("text", "input_text")
+                            )
                         break
             if last_user_msg:
                 plan_text = await generate_plan(
@@ -938,11 +1058,12 @@ async def chat_stream_generator(
             if iteration == 0 and previous_response_id:
                 stream_kwargs["previous_response_id"] = previous_response_id
                 user_messages = [m for m in messages if m.get("role") == "user"]
-                stream_kwargs["input"] = user_messages[-1:] if user_messages else messages
+                target_msgs = user_messages[-1:] if user_messages else messages
+                stream_kwargs["input"] = [normalize_responses_message(m) for m in target_msgs]
             else:
                 # Send full accumulated messages for loop turns
-                input_list = [{"role": "system", "content": full_system}] + local_messages
-                stream_kwargs["input"] = input_list
+                raw_input_list = [{"role": "system", "content": full_system}] + local_messages
+                stream_kwargs["input"] = [normalize_responses_message(m) for m in raw_input_list]
 
             try:
                 async with client.responses.stream(**stream_kwargs) as stream:
@@ -1658,6 +1779,42 @@ def is_code_or_text_file(filename: str, mime_type: str = "") -> bool:
     return False
 
 
+async def _fetch_attachment_bytes(att: Dict[str, Any]) -> Optional[bytes]:
+    """
+    Downloads attachment bytes using httpx with automatic fallback to direct Cloudflare R2 S3 retrieval.
+    """
+    att_url = att.get("url", "")
+    file_id = att.get("file_id") or att.get("fileId")
+
+    # 1. If file_id is provided, try direct R2 download first
+    if file_id:
+        try:
+            return await download_file_bytes(file_id, "UPLOADS")
+        except Exception as e:
+            logger.debug(f"Direct R2 download via file_id '{file_id}' failed: {e}")
+
+    # 2. If att_url is provided, try HTTP GET
+    if att_url and (att_url.startswith("http://") or att_url.startswith("https://")):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(att_url)
+                if r.status_code == 200:
+                    return r.content
+        except Exception as e:
+            logger.debug(f"HTTP GET for '{att_url}' failed: {e}")
+
+        # If HTTP failed (e.g. 401 on private R2 domain), try extracting R2 key from URL
+        try:
+            for marker in ["uploads/", "generated/"]:
+                if marker in att_url:
+                    key = marker + att_url.split(marker, 1)[1]
+                    return await download_file_bytes(key, "UPLOADS")
+        except Exception as e:
+            logger.warning(f"Fallback R2 download from URL '{att_url}' failed: {e}")
+
+    return None
+
+
 _VALID_MODES = {"think", "solve", "discuss"}
 
 
@@ -1708,98 +1865,116 @@ async def stream_chat(
 
     # 1. Resolve or create conversation in the database
     is_new_conversation = False
+    nano_turn_count = 0
+
     if not conversation_id or conversation_id == "00000000-0000-0000-0000-000000000000":
         is_new_conversation = True
-        try:
-            # Generate a title from the user's message (first 30 chars)
-            title = last_user_msg[:30] + "..." if len(last_user_msg) > 30 else last_user_msg
-            if not title:
-                title = "New Chat"
+        title = last_user_msg[:30] + "..." if len(last_user_msg) > 30 else last_user_msg
+        if not title:
+            title = "New Chat"
 
-            conv_insert = {
-                "user_id": user_id,
-                "title": title,
-                "mode": mode,
-                "agent_type": "chat",
-            }
+        conv_insert = {
+            "user_id": user_id,
+            "title": title,
+            "mode": mode,
+            "agent_type": "chat",
+        }
 
-            conv_res = None
-            _modes_to_try = [mode, "think"] if mode != "think" else ["think"]
-            last_exc: Optional[Exception] = None
-            for _attempt_mode in _modes_to_try:
+        conv_res = None
+        _modes_to_try = [mode, "think"] if mode != "think" else ["think"]
+        last_exc: Optional[Exception] = None
+
+        for _attempt_mode in _modes_to_try:
+            conv_insert["mode"] = _attempt_mode
+            # Retry transient network/socket errors with backoff
+            for attempt in range(3):
                 try:
-                    conv_insert["mode"] = _attempt_mode
                     conv_res = await asyncio.to_thread(
                         lambda: supabase.table("conversations").insert(conv_insert).execute()
                     )
-                    if conv_res.data:
+                    if conv_res and conv_res.data:
                         if _attempt_mode != mode:
                             logger.warning(
                                 f"conversations_mode_check blocked mode='{mode}' — "
-                                f"inserted with fallback mode='{_attempt_mode}'. "
-                                f"Apply scripts/016_fix_db_constraints.sql to your Supabase project."
+                                f"inserted with fallback mode='{_attempt_mode}'."
                             )
                             mode = _attempt_mode
-                        break  # success
-                    # PostgREST returned success-status but empty data — unlikely but handle it
-                    last_exc = Exception(f"Insert for mode='{_attempt_mode}' returned no data")
+                        break
                 except Exception as _ins_e:
                     last_exc = _ins_e
                     _err = str(_ins_e).lower()
                     if "mode_check" in _err or "check constraint" in _err or "constraint" in _err:
-                        logger.warning(
-                            f"DB constraint rejected mode='{_attempt_mode}': {_ins_e}. "
-                            f"Trying fallback mode='think'."
-                        )
-                        continue
-                    # Non-constraint error — don't bother retrying
-                    raise
+                        # Constraint error — proceed immediately to fallback mode
+                        break
+                    logger.warning(f"Transient DB insert attempt {attempt + 1} failed: {_ins_e}")
+                    if attempt < 2:
+                        await asyncio.sleep(0.25 * (attempt + 1))
+            if conv_res and conv_res.data:
+                break
 
-            if not (conv_res and conv_res.data):
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        "Failed to create conversation. "
-                        "If mode='discuss' is not accepted, apply "
-                        "scripts/016_fix_db_constraints.sql to your Supabase project. "
-                        f"Last error: {last_exc}"
-                    ),
-                )
-
+        if conv_res and conv_res.data:
             conversation_id = conv_res.data[0]["id"]
             logger.info(f"Created new conversation {conversation_id} for user {user_id}")
-            nano_turn_count = 0
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error creating conversation: {e}")
-            raise HTTPException(status_code=500, detail=f"Database error during conversation creation: {e}")
+        else:
+            # Fallback UUID to guarantee chat stream is NEVER aborted due to transient DB connection
+            fallback_id = str(uuid.uuid4())
+            conversation_id = fallback_id
+            logger.warning(f"Database conversation creation deferred, proceeding with fallback UUID {fallback_id}: {last_exc}")
+        nano_turn_count = 0
     else:
         try:
-            def fetch_conv():
-                return (
-                    supabase.table("conversations")
-                    .select("user_id, mode, nano_turn_count")
-                    .eq("id", conversation_id)
-                    .maybe_single()
-                    .execute()
-                )
-            conv_res = await asyncio.to_thread(fetch_conv)
-            if not conv_res.data:
-                raise HTTPException(status_code=404, detail="Conversation not found.")
-            if conv_res.data.get("user_id") != user_id:
-                raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
+            conv_res = None
+            for attempt in range(3):
+                try:
+                    def fetch_conv():
+                        return (
+                            supabase.table("conversations")
+                            .select("user_id, mode, nano_turn_count")
+                            .eq("id", conversation_id)
+                            .maybe_single()
+                            .execute()
+                        )
+                    conv_res = await asyncio.to_thread(fetch_conv)
+                    break
+                except Exception as fetch_e:
+                    if attempt < 2:
+                        await asyncio.sleep(0.25 * (attempt + 1))
+                    else:
+                        logger.warning(f"Database fetch failed after retries: {fetch_e}")
 
-            # Use the stored mode as the source of truth for routing
-            db_mode = conv_res.data.get("mode")
-            if db_mode:
-                mode = db_mode
-            nano_turn_count = conv_res.data.get("nano_turn_count", 0)
+            if not (conv_res and conv_res.data):
+                # Conversation ID provided but not found in DB — auto-create
+                is_new_conversation = True
+                title = last_user_msg[:30] + "..." if len(last_user_msg) > 30 else last_user_msg
+                conv_insert = {
+                    "id": conversation_id,
+                    "user_id": user_id,
+                    "title": title or "New Chat",
+                    "mode": mode,
+                    "agent_type": "chat",
+                }
+                try:
+                    create_res = await asyncio.to_thread(
+                        lambda: supabase.table("conversations").insert(conv_insert).execute()
+                    )
+                    if create_res and create_res.data:
+                        conversation_id = create_res.data[0]["id"]
+                except Exception as create_e:
+                    logger.warning(f"Auto-creating conversation with explicit ID failed (non-fatal, continuing stream): {create_e}")
+                nano_turn_count = 0
+            else:
+                if conv_res.data.get("user_id") != user_id:
+                    raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
+
+                db_mode = conv_res.data.get("mode")
+                if db_mode:
+                    mode = db_mode
+                nano_turn_count = conv_res.data.get("nano_turn_count", 0)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error fetching conversation {conversation_id}: {e}")
-            raise HTTPException(status_code=500, detail="Database error while fetching conversation details.")
+            logger.warning(f"Non-fatal error resolving conversation {conversation_id}, continuing stream: {e}")
+            nano_turn_count = 0
 
     # 2. Route through the model router
     decision = await model_router.route(
@@ -1810,84 +1985,109 @@ async def stream_chat(
     )
 
     logger.info(
-        f"ModelRouter decision: mode={decision.routing_mode}, "
-        f"deployment={decision.deployment}, "
-        f"reason={decision.routing_reason}"
+        "Routing decision for conversation %s: mode=%s, deployment=%s, reasoning=%s",
+        conversation_id,
+        decision.routing_mode,
+        decision.deployment,
+        decision.routing_reason,
     )
 
-    # Download code/text or binary office/PDF attachments and place them in the sandbox, then inject them into the system prompt
+    # Process and place attachments into active conversation sandbox
     attachments = payload.get("attachments", [])
     injected_code_prompts = []
     injected_binary_files = []
+    injected_image_files = []
+    vision_image_data_uris = []
+
+    # Sandbox directories for code execution & file inspection
+    work_dir = f"/tmp/sandbox_{conversation_id}"
+    data_dir = os.path.join(work_dir, "data")
+    src_dir = os.path.join(work_dir, "src")
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(src_dir, exist_ok=True)
+
     if attachments:
-        import httpx
         for att in attachments:
             att_name = att.get("filename", "")
             att_url = att.get("url", "")
             att_mime = att.get("mime_type", "")
             
-            if att_name and att_url:
+            if att_name:
                 ext = os.path.splitext(att_name.lower())[1]
                 is_code = is_code_or_text_file(att_name, att_mime)
-                is_binary = ext in {".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls"}
+                is_image = ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".ico", ".tiff", ".avif"}
+                is_binary = ext in {".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".zip", ".tar", ".gz", ".7z", ".mp3", ".wav", ".m4a"} or is_image
                 
                 if is_code or is_binary:
                     try:
-                        async with httpx.AsyncClient(timeout=15.0) as client:
-                            r = await client.get(att_url)
-                            if r.status_code == 200:
-                                content_bytes = r.content
+                        content_bytes = await _fetch_attachment_bytes(att)
+                        if content_bytes is not None:
+                            file_path = os.path.join(data_dir, att_name)
+                            with open(file_path, "wb") as f:
+                                f.write(content_bytes)
+                            src_file_path = os.path.join(src_dir, att_name)
+                            with open(src_file_path, "wb") as f:
+                                f.write(content_bytes)
                                 
-                                # Standardize path matching serve_sandbox_file / execute_code_in_sandbox
-                                work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
-                                data_dir = os.path.join(work_dir, "data")
-                                os.makedirs(data_dir, exist_ok=True)
-                                file_path = os.path.join(data_dir, att_name)
-                                with open(file_path, "wb") as f:
-                                    f.write(content_bytes)
+                            logger.info(f"Successfully downloaded and placed file {att_name} in sandbox: {file_path}")
+                            
+                            if is_code:
+                                try:
+                                    content_str = content_bytes.decode("utf-8", errors="replace")
+                                except Exception:
+                                    content_str = "[Binary or non-UTF-8 content]"
                                     
-                                logger.info(f"Successfully downloaded and placed file {att_name} in sandbox: {file_path}")
-                                
-                                if is_code:
-                                    try:
-                                        content_str = content_bytes.decode("utf-8", errors="replace")
-                                    except Exception:
-                                        content_str = "[Binary or non-UTF-8 content]"
-                                        
-                                    # Truncate content to avoid token limits (max 40k chars)
-                                    if len(content_str) > 40000:
-                                        content_str = content_str[:40000] + "\n... [TRUNCATED] ..."
-                                        
-                                    injected_code_prompts.append(
-                                        f"--- START FILE: {att_name} ---\n{content_str}\n--- END FILE: {att_name} ---"
-                                    )
-                                else:
-                                    injected_binary_files.append(att_name)
+                                # Truncate content to avoid token limits (max 40k chars)
+                                if len(content_str) > 40000:
+                                    content_str = content_str[:40000] + "\n... [TRUNCATED] ..."
+                                    
+                                injected_code_prompts.append(
+                                    f"--- START FILE: {att_name} ---\n{content_str}\n--- END FILE: {att_name} ---"
+                                )
+                            elif is_image:
+                                b64_img = base64.b64encode(content_bytes).decode("ascii")
+                                mime = att_mime or "image/png"
+                                data_uri = f"data:{mime};base64,{b64_img}"
+                                vision_image_data_uris.append(data_uri)
+                                injected_image_files.append(f"- `{att_name}`")
+                                injected_binary_files.append(att_name)
+                            else:
+                                injected_binary_files.append(att_name)
                     except Exception as e:
                         logger.error(f"Failed to process attachment {att_name}: {e}")
                         
-    if injected_code_prompts or injected_binary_files:
+    # Check all files currently present in the sandbox data directory
+    current_sandbox_files = []
+    if os.path.exists(data_dir):
+        try:
+            current_sandbox_files = [f for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f))]
+        except Exception:
+            current_sandbox_files = []
+
+    if injected_code_prompts or injected_binary_files or injected_image_files or current_sandbox_files:
         context_parts = []
         if injected_code_prompts:
             context_parts.append(
                 "Here are the contents of the attached code/text files:\n" +
                 "\n\n".join(injected_code_prompts)
             )
-        if injected_binary_files:
-            file_list = ", ".join(injected_binary_files)
+        if injected_image_files:
             context_parts.append(
-                f"The following binary documents have been saved to your active sandbox at `/tmp/sandbox_{conversation_id}/data/`:\n"
-                f"[{file_list}]\n"
-                "You cannot read them directly as text. However, you can write Python code using `execute_code` "
-                "with libraries like `fitz` (PyMuPDF), `python-docx`, `docx`, `pdf2image`, `openpyxl`, or `Pillow` to "
-                "manipulate them, extract visual elements/images/signatures, overlay layers (e.g. letterheads), "
-                "or write new documents. Any generated/modified files will automatically be uploaded and returned as download links."
+                "Attached Images in this turn:\n" +
+                "\n".join(injected_image_files)
+            )
+        if current_sandbox_files:
+            all_files_list = ", ".join(f"`{f}`" for f in current_sandbox_files)
+            context_parts.append(
+                f"The following user files/images are currently available in your active sandbox workspace:\n"
+                f"[{all_files_list}]\n"
+                "You have full execution access to inspect and analyze these files using Python in `execute_code` "
+                "(e.g. `PIL.Image.open('filename')`, `fitz.open('filename')`, `openpyxl`, `docx`, `easyocr`, `cv2`, etc.) "
+                "or describe them directly to answer the user's questions."
             )
             
         code_context_str = (
-            "\n\n[System Context: The user has attached files to this conversation. "
-            "These files have been temporarily saved to your active sandbox workspace directory data/ folder. "
-            "You can run, test, read, edit, or modify them using your execute_code tool.\n\n" +
+            "\n\n[System Context: User attached files and sandbox workspace state:\n" +
             "\n\n".join(context_parts) +
             "\n]\n\n"
         )
@@ -1912,6 +2112,8 @@ async def stream_chat(
             "role": "user",
             "content": last_user_msg,
         }
+        if payload.get("attachments"):
+            user_msg_insert["content_parts"] = {"attachments": payload.get("attachments")}
         await asyncio.to_thread(
             lambda: supabase.table("messages").insert(user_msg_insert).execute()
         )
@@ -1926,7 +2128,59 @@ async def stream_chat(
     # 5. Build context from active database messages (ignores archived/compacted ones)
     db_context_messages = await build_llm_context(conversation_id)
 
-    # Extract the estimated tokens that were pre-deducted by the middleware
+    # 5a. If the current turn has image attachments, inject them as multimodal image_url
+    #     content parts into the LAST user message so the vision model can actually see them.
+    #     We prioritize base64 Data URIs so the model receives the image bytes inline without
+    #     relying on external public domain reachability.
+    if (vision_image_data_uris or any(
+        att.get("url") and (
+            att.get("mime_type", "").startswith("image/") or
+            os.path.splitext(att.get("filename", "").lower())[1] in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".tiff", ".avif"}
+        )
+        for att in payload.get("attachments", [])
+    )) and db_context_messages:
+        resolved_images = []
+        if vision_image_data_uris:
+            resolved_images = vision_image_data_uris
+        else:
+            resolved_images = [
+                att.get("url", "")
+                for att in payload.get("attachments", [])
+                if att.get("url") and (
+                    att.get("mime_type", "").startswith("image/") or
+                    os.path.splitext(att.get("filename", "").lower())[1] in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".tiff", ".avif"}
+                )
+            ]
+
+        # Find the last user message and upgrade it to multimodal
+        for idx in range(len(db_context_messages) - 1, -1, -1):
+            msg = db_context_messages[idx]
+            if msg.get("role") == "user":
+                raw_c = msg.get("content", "")
+                text_part = ""
+                if isinstance(raw_c, str):
+                    text_part = raw_c
+                elif isinstance(raw_c, list):
+                    text_part = "\n\n".join(
+                        p.get("text", "") if isinstance(p, dict) else str(p)
+                        for p in raw_c
+                        if not isinstance(p, dict) or p.get("type") in ("text", "input_text")
+                    )
+                multimodal_content: List[Any] = [{"type": "input_text", "text": text_part or last_user_msg or "Please analyze this image."}]
+                for img_src in resolved_images:
+                    multimodal_content.append({
+                        "type": "input_image",
+                        "image_url": img_src,
+                        "detail": "auto"
+                    })
+                db_context_messages[idx] = {**msg, "content": multimodal_content}
+                logger.info(
+                    "Injected %d image(s) as multimodal vision content into user message for conversation %s",
+                    len(resolved_images), conversation_id
+                )
+                break
+
+
     estimated_tokens = getattr(request.state, "estimated_tokens", 0) or 0
 
     # Stream from Azure OpenAI Responses API

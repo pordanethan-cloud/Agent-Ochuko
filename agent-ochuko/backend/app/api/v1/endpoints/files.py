@@ -351,27 +351,33 @@ async def serve_sandbox_file(
     """
     Serves a generated file from the local workspace sandbox directory.
     """
-    # Standardize path matching execute_code_in_sandbox
-    work_dir = os.path.abspath(os.path.join("/tmp", f"sandbox_{conversation_id}")).replace("\\", "/")
+    import tempfile
+    tmp_base = tempfile.gettempdir()
+    work_dir = os.path.abspath(os.path.join(tmp_base, f"sandbox_{conversation_id}")).replace("\\", "/")
     data_dir = os.path.join(work_dir, "data")
+    src_dir = os.path.join(work_dir, "src")
     file_path = os.path.join(data_dir, filename)
 
     if not os.path.exists(file_path):
-        # Check case-insensitive fallback in data_dir
-        for f in os.listdir(data_dir) if os.path.exists(data_dir) else []:
-            if f.lower() == filename.lower():
-                file_path = os.path.join(data_dir, f)
-                break
+        # Check src_dir
+        if os.path.exists(os.path.join(src_dir, filename)):
+            file_path = os.path.join(src_dir, filename)
         else:
-            # Fallback to root work_dir
-            file_path = os.path.join(work_dir, filename)
-            if not os.path.exists(file_path):
-                for f in os.listdir(work_dir) if os.path.exists(work_dir) else []:
-                    if f.lower() == filename.lower():
-                        file_path = os.path.join(work_dir, f)
-                        break
-                else:
-                    raise HTTPException(status_code=404, detail="File not found in sandbox.")
+            # Check case-insensitive fallback in data_dir
+            for f in os.listdir(data_dir) if os.path.exists(data_dir) else []:
+                if f.lower() == filename.lower():
+                    file_path = os.path.join(data_dir, f)
+                    break
+            else:
+                # Fallback to root work_dir
+                file_path = os.path.join(work_dir, filename)
+                if not os.path.exists(file_path):
+                    for f in os.listdir(work_dir) if os.path.exists(work_dir) else []:
+                        if f.lower() == filename.lower():
+                            file_path = os.path.join(work_dir, f)
+                            break
+                    else:
+                        raise HTTPException(status_code=404, detail="File not found in sandbox.")
 
     import mimetypes
     mime_type, _ = mimetypes.guess_type(file_path)

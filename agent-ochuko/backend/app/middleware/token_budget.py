@@ -77,19 +77,10 @@ class TokenBudgetMiddleware(BaseHTTPMiddleware):
                 with _lock:
                     _ENSURED_BUDGET_ROWS[user_id] = today
 
-            # 2. Read the body to estimate tokens (cache for downstream)
-            body = await request.body()
-
-            import json as _json
-            try:
-                payload = _json.loads(body) if body else {}
-            except Exception:
-                payload = {}
-
-            messages = payload.get("messages", [])
-            estimated_tokens = _estimate_tokens(messages)
-
-            # Store estimate on request state for post-stream reconciliation
+            # Estimate a base token reservation (100 tokens) to pre-deduct safely
+            # without consuming the request stream body in BaseHTTPMiddleware (which deadlocks Starlette).
+            # The exact token count is reconciled post-stream in chat.py.
+            estimated_tokens = 100
             request.state.estimated_tokens = estimated_tokens
 
             # 3. Atomic pre-deduction

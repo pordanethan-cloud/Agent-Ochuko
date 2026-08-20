@@ -239,3 +239,30 @@ The roadmap references `docs/05_load_test_results.md` and `docs/06_cost_validati
 ### `Azure Application Insights` Must Be Linked Before Logging
 
 Application Insights (`agent-ochuko-insights`) is created in Phase 0 setup but needs to be **linked to the Container App** via the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable. Set this in the Container App's environment variables using the Key Vault reference pattern before deploying the observability changes in 7.1.
+
+---
+
+## 7.10 — Runtime Resilience & Multimodal Transport Hardening
+
+Key production hardening upgrades implemented across the backend chat streaming and media pipeline:
+
+### A. Windows Socket Non-Blocking Concurrency (`[WinError 10035]`)
+- **Problem**: Synchronous HTTP calls on a shared default connection pool inside `asyncio.to_thread` encountered Winsock non-blocking socket contention (`WSAEWOULDBLOCK`).
+- **Hardening**: Configured dedicated `ClientOptions` with explicit `httpx.Client(http2=False, limits=Limits(max_keepalive_connections=20, max_connections=50), timeout=Timeout(connect=10.0, read=30.0, write=10.0, pool=30.0))` in `supabase_admin.py`.
+- **Stream Guarantee**: Added 3-attempt exponential backoff with a fallback UUID generator (`uuid.uuid4()`) so that transient database connection blips never abort the SSE chat stream with a 500 error.
+
+### B. Starlette Streaming Middleware Deadlock Prevention
+- **Problem**: Calling `body = await request.body()` inside Starlette's `BaseHTTPMiddleware.dispatch()` consumed the ASGI receive stream, causing downstream FastAPI endpoints declaring `payload: Dict[str, Any]` to deadlock indefinitely waiting for request bytes.
+- **Hardening**: Removed `await request.body()` from `TokenBudgetMiddleware`. Pre-deducts a baseline reservation (100 tokens) and reconciles exact token counts post-stream via `reconcile_token_budget` RPC, restoring instant token streaming.
+
+### C. Multimodal Inline Vision Delivery & R2 Direct Authentication
+- **Problem**: External LLM providers cannot resolve private Cloudflare R2 bucket URLs directly (returning 401 Unauthorized), and legacy OpenAI schema (`type: "image_url"`) triggered 400 errors against Azure OpenAI Responses API.
+- **Hardening**:
+  - Implemented `_fetch_attachment_bytes` in `chat.py` with automatic Cloudflare S3 credential fallback (`download_file_bytes`).
+  - Converts downloaded image bytes into self-contained **Base64 Data URIs** (`data:{mime};base64,...`) and passes them inline under strict `EasyInputMessageParam` schemas (`type: "input_image"` with `detail: "auto"` and `type: "input_text"`).
+  - Automatically mounts uploaded attachments into `/tmp/sandbox_{conversation_id}/data/` and `/tmp/sandbox_{conversation_id}/src/` so in-sandbox Python tools (`PIL.Image`, `fitz`, `openpyxl`, `docx`, `easyocr`) can inspect and manipulate them within the same turn.
+
+### D. Agent Planner Direct Responses API & Strict Timeout
+- **Problem**: Calling `chat.completions.create` on Azure OpenAI Responses deployments added up to 60s gateway timeout latency before falling back.
+- **Hardening**: Updated `agent_planner.py` to directly invoke `openai_client.responses.create` with an explicit 2.5s maximum timeout (`asyncio.wait_for(..., timeout=2.5)`), ensuring planner analysis never introduces user-perceptible streaming delays.
+

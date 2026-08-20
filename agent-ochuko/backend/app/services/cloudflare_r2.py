@@ -99,3 +99,37 @@ async def upload_file_bytes(
 
     await asyncio.to_thread(_do_upload)
     return f"{public_domain}/{r2_key}"
+
+
+def generate_r2_download_url(filename: str, expiry_seconds: int = 3600, bucket_type: str = "UPLOADS") -> str:
+    """
+    Generates a presigned GET URL allowing clients to download files directly from Cloudflare R2.
+    """
+    try:
+        s3_client, bucket_name, _ = get_r2_client(bucket_type)
+        presigned_url = s3_client.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={
+                "Bucket": bucket_name,
+                "Key": filename,
+            },
+            ExpiresIn=expiry_seconds
+        )
+        return presigned_url
+    except Exception as e:
+        logger.error(f"Failed to generate R2 download URL for {bucket_type}: {e}", exc_info=True)
+        raise
+
+
+async def download_file_bytes(key: str, bucket_type: str = "UPLOADS") -> bytes:
+    """
+    Downloads file bytes directly from the specified R2 bucket.
+    """
+    s3_client, bucket_name, _ = get_r2_client(bucket_type)
+
+    def _do_download():
+        response = s3_client.get_object(Bucket=bucket_name, Key=key)
+        return response["Body"].read()
+
+    return await asyncio.to_thread(_do_download)
+

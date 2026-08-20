@@ -3014,113 +3014,62 @@ function parseMarkdownToBlocks(text: string): ASTBlock[] {
 // ─── Block markdown renderer ──────────────────────────────────────────────────
 
 export function renderMarkdown(text: string, generatedFiles?: any[]): React.ReactNode {
-
   const blocks = parseMarkdownToBlocks(text)
 
   return (
-
-    <div className="space-y-4">
-
+    <div className="space-y-3">
       {blocks.map((block, index) => {
-
         const key = `block-${index}`
 
         switch (block.type) {
-
           case 'heading': {
-
             const level = block.level || 1
-
             const content = renderInline(block.content || '', key, generatedFiles)
 
             switch (level) {
-
               case 1:
-
                 return (
-
-                  <h1 key={key} className="text-base font-bold text-[#f0ece4] mt-6 mb-2 tracking-tight">
-
+                  <h1 key={key} className="text-[17.5px] font-bold text-white mt-3.5 mb-1.5 tracking-tight">
                     {content}
-
                   </h1>
-
                 )
-
               case 2:
-
                 return (
-
-                  <h2 key={key} className="text-sm font-bold text-[#f0ece4] mt-5 mb-2 tracking-tight">
-
+                  <h2 key={key} className="text-[15.5px] font-semibold text-white mt-3 mb-1.5 tracking-tight">
                     {content}
-
                   </h2>
-
                 )
-
               case 3:
-
                 return (
-
-                  <h3 key={key} className="text-[13px] font-bold text-[#f0ece4] mt-4 mb-1.5 tracking-tight">
-
+                  <h3 key={key} className="text-[14.5px] font-semibold text-[#f4f4f5] mt-2.5 mb-1 tracking-tight">
                     {content}
-
                   </h3>
-
                 )
-
               case 4:
-
                 return (
-
-                  <h4 key={key} className="text-[12.5px] font-bold text-[#f0ece4] mt-3.5 mb-1.5 tracking-tight">
-
+                  <h4 key={key} className="text-[13.5px] font-semibold text-[#e4e4e7] mt-2 mb-1 tracking-tight">
                     {content}
-
                   </h4>
-
                 )
-
               case 5:
-
                 return (
-
-                  <h5 key={key} className="text-[12px] font-bold text-[#f0ece4] mt-3 mb-1 tracking-tight">
-
+                  <h5 key={key} className="text-[13px] font-semibold text-[#e4e4e7] mt-1.5 mb-0.5 tracking-tight">
                     {content}
-
                   </h5>
-
                 )
-
               case 6:
-
                 return (
-
-                  <h6 key={key} className="text-[11.5px] font-bold text-[#f0ece4] mt-2.5 mb-1 tracking-tight">
-
+                  <h6 key={key} className="text-[12.5px] font-semibold text-[#e4e4e7] mt-1.5 mb-0.5 tracking-tight">
                     {content}
-
                   </h6>
-
                 )
-
               default:
-
                 return (
-
-                  <h1 key={key} className="text-base font-bold text-[#f0ece4] mt-6 mb-2 tracking-tight">
-
+                  <h1 key={key} className="text-[17.5px] font-bold text-white mt-3.5 mb-1.5 tracking-tight">
                     {content}
-
                   </h1>
-
                 )
-
             }
-
           }
 
           case 'code': {
@@ -3142,19 +3091,12 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
             }
 
             return (
-
               <CodeBlock
-
                 key={key}
-
                 language={block.language || 'text'}
-
                 content={content}
-
               />
-
             )
-
           }
 
           case 'blockquote': {
@@ -3169,167 +3111,90 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
           }
 
           case 'table': {
-
             return (
-
-              <div key={key} className="overflow-x-auto my-5 border border-[#1a1d20]/50 rounded-xl bg-black/20">
-
-                <table className="min-w-full divide-y divide-[#1a1d20]/30 text-left text-[12.5px]">
-
-                  <thead className="bg-[#1c1e22]/50 text-[#f0ece4]">
-
+              <div key={key} className="overflow-x-auto my-3 border border-white/10 rounded-xl bg-[#0e1013]/60 shadow-sm">
+                <table className="min-w-full divide-y divide-white/10 text-left text-[13px]">
+                  <thead className="bg-[#1c1e22]/60 text-white">
                     <tr>
-
                       {block.headers?.map((header, hIdx) => (
-
                         <th
-
                           key={hIdx}
-
-                          className="px-4 py-3 font-semibold border-b border-[#1a1d20]/30 tracking-wider text-[11px] uppercase text-[#ffffff]/80"
-
+                          className="px-3.5 py-2.5 font-semibold border-b border-white/10 tracking-wider text-[11px] uppercase text-white/70"
                         >
-
                           {renderInline(header, `${key}-th-${hIdx}`, generatedFiles)}
-
                         </th>
-
                       ))}
-
                     </tr>
-
                   </thead>
-
-                  <tbody className="divide-y divide-[#1a1d20]/20">
-
+                  <tbody className="divide-y divide-white/[0.06]">
                     {block.rows?.map((row, rIdx) => (
-
                       <tr
-
                         key={rIdx}
-
                         className={rIdx % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.02]'}
-
                       >
-
                         {row.map((cell, cIdx) => (
-
-                          <td key={cIdx} className="px-4 py-3 text-brand-text/85">
-
+                          <td key={cIdx} className="px-3.5 py-2 text-white/85">
                             {renderInline(cell, `${key}-td-${rIdx}-${cIdx}`, generatedFiles)}
-
                           </td>
-
                         ))}
-
                       </tr>
-
                     ))}
-
                   </tbody>
-
                 </table>
-
               </div>
-
             )
-
           }
 
           case 'list': {
-
             if (block.ordered) {
-
               return (
-
-                <ol key={key} className="my-3 space-y-2 pl-1">
-
+                <ol key={key} className="my-2 space-y-1.5 pl-0.5">
                   {block.items?.map((item, j) => (
-
                     <li key={j} className="flex gap-2.5 leading-relaxed items-start">
-
-                      <span className="text-[#ffffff] font-semibold text-[11.5px] shrink-0 min-w-[1.25rem] mt-[1.5px]">
-
+                      <span className="text-white/50 font-mono text-[12px] shrink-0 min-w-[1.25rem] mt-[1.5px]">
                         {j + 1}.
-
                       </span>
-
-                      <span className="text-[13px] text-brand-text/85">
-
+                      <span className="text-[14px] text-[#e4e4e7] leading-[1.65]">
                         {renderInline(item, `${key}-oli-${j}`, generatedFiles)}
-
                       </span>
-
                     </li>
-
                   ))}
-
                 </ol>
-
               )
-
             } else {
-
               return (
-
-                <ul key={key} className="my-3 space-y-2 pl-1">
-
+                <ul key={key} className="my-2 space-y-1.5 pl-0.5">
                   {block.items?.map((item, j) => (
-
                     <li key={j} className="flex gap-2.5 leading-relaxed items-start">
-
-                      <span className="text-[#ffffff] text-[8px] mt-[6.5px] shrink-0 select-none">◆</span>
-
-                      <span className="text-[13px] text-brand-text/85">
-
+                      <span className="text-white/40 text-[7px] mt-[7.5px] shrink-0 select-none">◆</span>
+                      <span className="text-[14px] text-[#e4e4e7] leading-[1.65]">
                         {renderInline(item, `${key}-uli-${j}`, generatedFiles)}
-
                       </span>
-
                     </li>
-
                   ))}
-
                 </ul>
-
               )
-
             }
-
           }
 
           case 'hr': {
-
-            return <hr key={key} className="border-[#1a1d20]/30 my-5" />
-
+            return <hr key={key} className="border-white/10 my-3.5" />
           }
 
           case 'paragraph': {
-
             return (
-
-              <p key={key} className="text-[13.5px] text-brand-text/88 leading-[1.78] tracking-[0.01em]">
-
+              <p key={key} className="text-[14px] sm:text-[14.5px] text-[#e4e4e7] leading-[1.68] tracking-[-0.005em]">
                 {renderInline(block.content || '', key, generatedFiles)}
-
               </p>
-
             )
-
           }
 
           default:
-
             return null
-
         }
-
       })}
-
     </div>
-
   )
-
 }
 
 function getFriendlyErrorMessage(message: string): string {
@@ -3586,30 +3451,29 @@ const FileAttachmentChip: React.FC<{
     }))
   }
 
-  // ── Image thumbnail (vision jobs) ─────────────────────────────────────────
+  // ── Image thumbnail (vision jobs) — clean, no background frame ──────────────
   if (isImage) {
     return (
       <div
         onClick={handlePreview}
         title={attachment.url ? `Preview ${attachment.name}` : attachment.name}
-        className={`relative group/img w-full max-w-sm rounded-xl overflow-hidden border border-[#ffffff]/15 bg-[#111316]/40 shrink-0 ${
-          attachment.url ? 'cursor-pointer hover:border-[#ffffff]/35' : 'cursor-default'
+        className={`relative group/img w-full max-w-sm rounded-2xl overflow-hidden shrink-0 ${
+          attachment.url ? 'cursor-pointer' : 'cursor-default'
         } transition`}
       >
         {attachment.url ? (
           <img
             src={attachment.url}
             alt={attachment.name}
-            className="w-full h-auto max-h-64 object-contain"
+            className="w-full h-auto max-h-72 object-cover rounded-2xl"
           />
         ) : (
-          /* Placeholder skeleton while URL resolves */
-          <div className="w-full h-40 flex items-center justify-center">
+          <div className="w-full h-40 flex items-center justify-center rounded-2xl bg-white/5">
             <FileText className="w-6 h-6 text-[#ffffff]/30" />
           </div>
         )}
-        {/* Hover overlay with file name */}
-        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2">
+        {/* Subtle hover overlay with filename */}
+        <div className="absolute inset-0 rounded-2xl bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2.5">
           <span className="text-[11px] text-white font-semibold leading-tight truncate w-full">{attachment.name}</span>
         </div>
       </div>
@@ -4063,6 +3927,8 @@ export const Dashboard: React.FC = () => {
     type: string
     blobUrl: string
     fileId: string
+    localObjectUrl?: string
+    sizeBytes?: number
   }
 
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
@@ -4071,8 +3937,13 @@ export const Dashboard: React.FC = () => {
     name: string
     type: string
     url?: string
+    localObjectUrl?: string
     content?: string
+    sizeBytes?: number
   } | null>(null)
+
+  const [loadedPreviewContent, setLoadedPreviewContent] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   useEffect(() => {
     const handleOpenPreview = (e: Event) => {
@@ -4082,6 +3953,41 @@ export const Dashboard: React.FC = () => {
     window.addEventListener('open-file-preview', handleOpenPreview)
     return () => window.removeEventListener('open-file-preview', handleOpenPreview)
   }, [])
+
+  useEffect(() => {
+    if (!previewingFile) {
+      setLoadedPreviewContent(null)
+      setPreviewLoading(false)
+      return
+    }
+    if (previewingFile.content) {
+      setLoadedPreviewContent(previewingFile.content)
+      setPreviewLoading(false)
+      return
+    }
+    const targetUrl = previewingFile.localObjectUrl || previewingFile.url
+    if (!targetUrl) return
+
+    const nameLower = previewingFile.name.toLowerCase()
+    const isImage = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
+    const isPdf = previewingFile.type === 'application/pdf' || nameLower.endsWith('.pdf')
+    const isBinaryDoc = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin)$/i.test(nameLower)
+
+    if (!isImage && !isPdf && !isBinaryDoc) {
+      setPreviewLoading(true)
+      fetch(targetUrl)
+        .then(res => res.text())
+        .then(text => {
+          setLoadedPreviewContent(text)
+          setPreviewLoading(false)
+        })
+        .catch(err => {
+          console.warn('Failed to load text preview:', err)
+          setLoadedPreviewContent('Unable to fetch file preview.')
+          setPreviewLoading(false)
+        })
+    }
+  }, [previewingFile])
 
   const [pastedText, setPastedText] = useState<{
 
@@ -4236,13 +4142,26 @@ export const Dashboard: React.FC = () => {
         xhr.send(file)
       })
 
+      let inferredType = file.type
+      if (!inferredType) {
+        const extLower = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
+        if (extLower === '.pdf') inferredType = 'application/pdf'
+        else if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'].includes(extLower)) inferredType = `image/${extLower === '.jpg' ? 'jpeg' : extLower.slice(1)}`
+        else if (['.txt', '.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.md', '.html', '.css', '.sql', '.csv', '.yaml', '.yml'].includes(extLower)) inferredType = 'text/plain'
+        else inferredType = 'application/octet-stream'
+      }
+
+      const localUrl = URL.createObjectURL(file)
+
       setAttachedFiles(prev => [
         ...prev,
         {
           name: file.name,
-          type: file.type,
+          type: inferredType,
           blobUrl: blob_url,
-          fileId: file_id
+          fileId: file_id,
+          localObjectUrl: localUrl,
+          sizeBytes: file.size
         }
       ])
     } catch (err: any) {
@@ -4602,49 +4521,41 @@ export const Dashboard: React.FC = () => {
           }
 
           if (m.role === 'user') {
+            if (m.content_parts?.attachments && Array.isArray(m.content_parts.attachments) && m.content_parts.attachments.length > 0) {
+              msgObj.fileAttachments = m.content_parts.attachments.map((att: any) => {
+                const isPdf = att.mime_type === 'application/pdf' || att.filename?.toLowerCase().endsWith('.pdf')
+                const isImg = att.mime_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(att.filename || '')
+                const jobType = isPdf ? 'ocr' : (isImg ? 'vision' : 'code')
+                return {
+                  name: att.filename,
+                  jobType,
+                  url: att.url,
+                }
+              })
+            } else {
+              const isOcr = m.content.startsWith('[Document Analysis:')
+              const isVision = m.content.startsWith('[Image Analysis:')
+              const isMulti = m.content.startsWith('[Analysis for:')
 
-            const isOcr = m.content.startsWith('[Document Analysis:')
-
-            const isVision = m.content.startsWith('[Image Analysis:')
-
-            const isMulti = m.content.startsWith('[Analysis for:')
-
-            if (isOcr || isVision) {
-
-              const jobType = isOcr ? 'ocr' : 'vision'
-
-              const nameMatch = m.content.match(/^\[(?:Document|Image) Analysis:\s*([^\]]+)\]/)
-
-              const name = nameMatch ? nameMatch[1] : (isOcr ? 'document.pdf' : 'image.png')
-
-              msgObj.fileAttachment = { name, jobType }
-
-            } else if (isMulti) {
-
-              const namesMatch = m.content.match(/^\[Analysis for:\s*([^\]]+)\]/)
-
-              if (namesMatch) {
-
-                const names = namesMatch[1].split(',').map((n: string) => n.trim())
-
-                msgObj.fileAttachments = names.map((name: string) => {
-
-                  const isPdf = name.toLowerCase().endsWith('.pdf')
-
-                  return {
-
-                    name,
-
-                    jobType: isPdf ? 'ocr' : 'vision'
-
-                  }
-
-                })
-
+              if (isOcr || isVision) {
+                const jobType = isOcr ? 'ocr' : 'vision'
+                const nameMatch = m.content.match(/^\[(?:Document|Image) Analysis:\s*([^\]]+)\]/)
+                const name = nameMatch ? nameMatch[1] : (isOcr ? 'document.pdf' : 'image.png')
+                msgObj.fileAttachment = { name, jobType }
+              } else if (isMulti) {
+                const namesMatch = m.content.match(/^\[Analysis for:\s*([^\]]+)\]/)
+                if (namesMatch) {
+                  const names = namesMatch[1].split(',').map((n: string) => n.trim())
+                  msgObj.fileAttachments = names.map((name: string) => {
+                    const isPdf = name.toLowerCase().endsWith('.pdf')
+                    return {
+                      name,
+                      jobType: isPdf ? 'ocr' : 'vision'
+                    }
+                  })
+                }
               }
-
             }
-
           }
 
           mapped.push(msgObj)
@@ -6139,7 +6050,7 @@ export const Dashboard: React.FC = () => {
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
-    if (!files || files.length === 0) return
+    if (!files || files.length == 0) return
     for (let i = 0; i < files.length; i++) {
       await uploadFile(files[i])
     }
@@ -6149,26 +6060,14 @@ export const Dashboard: React.FC = () => {
   }
 
   const triggerAgentJobs = async (files: AttachedFile[], promptText?: string) => {
-
     const historyBeforeJobs = [...messages]
-
     setIsStreaming(true)
 
-    let convoId = activeConversationId
+    const convoId = activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000'
+      ? activeConversationId
+      : undefined
 
-    const isNewConvo = !convoId || convoId === '00000000-0000-0000-0000-000000000000'
-
-    if (isNewConvo) {
-
-      convoId = crypto.randomUUID()
-
-      setActiveConversationId(convoId)
-
-      const uidA = userIdRef.current
-      if (uidA) localStorage.setItem(userCacheKey(uidA, 'active_conversation_id'), convoId)
-
-    }
-
+    const binaryDocExts = ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt']
     const codeExts = [
       '.txt', '.html', '.css', '.js', '.ts', '.tsx', '.jsx', '.java',
       '.py', '.c', '.cpp', '.h', '.cs', '.sh', '.json', '.md',
@@ -6177,19 +6076,13 @@ export const Dashboard: React.FC = () => {
       '.bat', '.cmd', '.ps1'
     ]
 
-    // Binary office/document files — routed to the Python sandbox (execute_code)
-    // so the model can use python-docx, PyMuPDF, Pillow to manipulate them.
-    // These must NOT go to the OCR queue (which only extracts flat text).
-    const binaryDocExts = ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt']
-
     const attachments = files.map(f => {
       const nameLower = f.name.toLowerCase()
       const isPdf = f.type === 'application/pdf' || nameLower.endsWith('.pdf')
       const isDocxFamily = binaryDocExts.some(ext => nameLower.endsWith(ext))
       const isCode = codeExts.some(ext => nameLower.endsWith(ext))
-      // PDFs: still run OCR for text context, AND placed in sandbox for binary manipulation
-      // DOCX/binary office: go directly to sandbox path (skip OCR queue)
-      const jobType = isPdf ? 'ocr' : (isDocxFamily || isCode ? 'code' : 'vision')
+      const isImg = f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(nameLower)
+      const jobType = isPdf ? 'ocr' : (isImg ? 'vision' : (isDocxFamily || isCode ? 'code' : 'vision'))
 
       return {
         name: f.name,
@@ -6199,247 +6092,29 @@ export const Dashboard: React.FC = () => {
     })
 
     const fileNames = files.map(f => f.name).join(', ')
-
     const userMsgText = promptText
-
-      ? `[Analysis for: ${fileNames}] ${promptText}`
-
-      : `[Analysis for: ${fileNames}]`
-
-    const ocrVisionFiles = files.filter(f => {
-      const nameLower = f.name.toLowerCase()
-      const isPdf = f.type === 'application/pdf' || nameLower.endsWith('.pdf')
-      const isDocxFamily = binaryDocExts.some(ext => nameLower.endsWith(ext))
-      const isCode = codeExts.some(ext => nameLower.endsWith(ext))
-      // Only PDF and pure images go to the OCR/vision queue.
-      // DOCX and code/text files are handled directly in the sandbox.
-      return isPdf || (!isCode && !isDocxFamily)
-    })
-
-    const initialAssistantText = ocrVisionFiles.length > 0
-      ? 'Cognitive model preparing backend analysis tasks...'
-      : 'Analyzing attached code/text files...'
+      ? promptText
+      : (files.length === 1 ? `Please analyze and describe this attached file: ${fileNames}` : `Please analyze and describe these attached files: ${fileNames}`)
 
     setMessages((prev) => [
-
       ...prev,
-
       { role: 'user', content: userMsgText, fileAttachments: attachments },
-
-      { role: 'assistant', content: initialAssistantText }
-
+      { role: 'assistant', content: '' }
     ])
 
     try {
-
-      const session = await supabase.auth.getSession()
-
-      const token = session.data.session?.access_token
-
-      if (!token) throw new Error('Authentication session not found.')
-
-      // 1. Launch jobs ONLY for OCR/Vision files
-
-      const jobPromises = ocrVisionFiles.map(async (file) => {
-
-        const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-
-        const jobType = isPdf ? 'ocr' : 'vision'
-
-        const endpoint = isPdf ? '/v1/agents/ocr' : '/v1/agents/vision'
-
-        const requestBody = isPdf
-
-          ? { conversation_id: convoId, blob_url: file.blobUrl }
-
-          : { conversation_id: convoId, blob_url: file.blobUrl, prompt: promptText || 'Describe the content in this image.' }
-
-        const res = await fetch(`${API_BASE}${endpoint}`, {
-
-          method: 'POST',
-
-          headers: {
-
-            'Content-Type': 'application/json',
-
-            Authorization: `Bearer ${token}`
-
-          },
-
-          body: JSON.stringify(requestBody)
-
-        })
-
-        if (!res.ok) {
-
-          let errDetail = `The document analysis service failed for ${file.name}.`
-
-          try {
-
-            const errBody = await res.json()
-
-            errDetail = errBody?.detail || errBody?.message || errDetail
-
-          } catch (_) {
-
-            try {
-
-              errDetail = (await res.text()) || errDetail
-
-            } catch (_) {}
-
-          }
-
-          throw new Error(errDetail)
-
-        }
-
-        const { job_id } = await res.json()
-
-        return { file, job_id, jobType }
-
-      })
-
-      const queuedJobs = await Promise.all(jobPromises)
-
-      const results: { file: AttachedFile; text: string; success: boolean }[] = []
-
-      if (queuedJobs.length > 0) {
-
-        const pollJobs = queuedJobs.map(async ({ file, job_id }) => {
-
-        return new Promise<void>((resolve) => {
-
-          // Stall timer per job (90 seconds)
-
-          const stallTimer = setTimeout(() => {
-
-            channel.unsubscribe()
-
-            results.push({ file, text: 'Analysis job timeout.', success: false })
-
-            resolve()
-
-          }, 90_000)
-
-          const channel = supabase
-
-            .channel(`job-${job_id}`)
-
-            .on(
-
-              'postgres_changes',
-
-              { event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${job_id}` },
-
-              async (payload) => {
-
-                const updatedJob = payload.new
-
-                if (updatedJob.status === 'processing') {
-
-                   setMessages((prev) => {
-
-                     const next = [...prev]
-
-                     next[next.length - 1] = {
-
-                       role: 'assistant',
-
-                       content: `Analyzing ${file.name}: processing layouts and extracting content...`
-
-                     }
-
-                     return next
-
-                   })
-
-                } else if (updatedJob.status === 'done') {
-
-                  clearTimeout(stallTimer)
-
-                  const textResult = updatedJob.result?.text || 'No result data returned by the agent.'
-
-                  channel.unsubscribe()
-
-                  try {
-
-                    await supabase.from('messages').insert([
-
-                      {
-
-                        conversation_id: convoId,
-
-                        role: 'system',
-
-                        content: `[System Context: The user has attached a file. File URL: ${file.blobUrl}. Analysis result: ${textResult}]`,
-
-                        routing_mode: 'discuss'
-
-                      }
-
-                    ])
-
-                  } catch (dbErr) {
-
-                    console.error('Failed to commit system context to history:', dbErr)
-
-                  }
-
-                  results.push({ file, text: textResult, success: true })
-
-                  resolve()
-
-                } else if (updatedJob.status === 'failed') {
-
-                  clearTimeout(stallTimer)
-
-                  channel.unsubscribe()
-
-                  results.push({ file, text: updatedJob.error || 'Background analysis encountered an error.', success: false })
-
-                  resolve()
-
-                }
-
-              }
-
-            )
-
-          channel.subscribe()
-
-        })
-
-      })
-
-        // Wait for all analyses to complete
-
-        await Promise.all(pollJobs)
-
-        const failedJobs = results.filter(r => !r.success)
-
-        if (failedJobs.length > 0) {
-
-          console.warn('Some file analysis jobs failed:', failedJobs)
-
-        }
-
-      }
-
-      // 3. Trigger the LLM stream response
-
       const backendAttachments = attachments.map(a => {
         const nameLower = a.name.toLowerCase()
         let mime = 'text/plain'
-        if (a.jobType === 'ocr') {
+        if (a.jobType === 'ocr' || nameLower.endsWith('.pdf')) {
           mime = 'application/pdf'
-        } else if (a.jobType === 'vision') {
+        } else if (a.jobType === 'vision' || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(nameLower)) {
           mime = nameLower.endsWith('.png') ? 'image/png'
             : nameLower.endsWith('.gif') ? 'image/gif'
             : nameLower.endsWith('.webp') ? 'image/webp'
+            : nameLower.endsWith('.svg') ? 'image/svg+xml'
             : 'image/jpeg'
         } else {
-          // code / binary-doc path
           if (nameLower.endsWith('.docx')) mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
           else if (nameLower.endsWith('.doc')) mime = 'application/msword'
           else if (nameLower.endsWith('.xlsx')) mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -6455,47 +6130,27 @@ export const Dashboard: React.FC = () => {
       })
 
       await triggerStream(historyBeforeJobs, {
-
         role: 'user',
-
         content: userMsgText,
-
         fileAttachments: attachments
-
       }, convoId, backendAttachments)
 
     } catch (err: any) {
-
-      console.error('Agent job trigger failed:', err)
-
+      console.error('Agent file trigger failed:', err)
       const explanation = err.message && !err.message.startsWith('{') && !err.message.startsWith('Error:')
-
         ? err.message
-
         : getFriendlyErrorMessage(err.message || 'unknown')
-
       setMessages((prev) => {
-
         const next = [...prev]
-
         next[next.length - 1] = {
-
           role: 'assistant',
-
           content: explanation
-
         }
-
         return next
-
       })
-
       setIsStreaming(false)
-
       setTimeout(() => inputRef.current?.focus(), 0)
-
     }
-
   }
 
   // ── Hybrid Search (Google grounding + Azure synthesis) ───────────────────
@@ -6790,6 +6445,11 @@ export const Dashboard: React.FC = () => {
       const promptText = input.trim()
 
       setInput('')
+
+      // Revoke local object URLs to free memory before clearing state
+      filesToProcess.forEach(f => {
+        if (f.localObjectUrl) URL.revokeObjectURL(f.localObjectUrl)
+      })
 
       setAttachedFiles([])
 
@@ -7624,7 +7284,7 @@ export const Dashboard: React.FC = () => {
 
               onScroll={handleScroll}
 
-              className="flex-1 overflow-y-auto overflow-x-hidden pt-8 pb-24 px-5 md:px-10 relative z-10"
+              className="flex-1 overflow-y-auto overflow-x-hidden pt-8 pb-4 px-5 md:px-10 relative z-10"
 
             >
 
@@ -7919,12 +7579,12 @@ export const Dashboard: React.FC = () => {
 
                         ) : (msg.fileAttachment || (msg.fileAttachments && msg.fileAttachments.length > 0)) ? (
 
-                          /* Agent job — render as file chip(s) + optional prompt text */
+                          /* Agent job — file chip(s) stacked above the prompt text */
 
-                          <div className="space-y-2">
+                          <div className="space-y-2.5">
 
-                            {/* Chips / thumbnails in a compact wrap row */}
-                            <div className="flex flex-wrap gap-2">
+                            {/* File thumbnails / chips */}
+                            <div className="flex flex-col gap-2">
 
                               {msg.fileAttachment && (
 
@@ -7940,17 +7600,16 @@ export const Dashboard: React.FC = () => {
 
                             </div>
 
-                            {/* Show any prompt text the user typed alongside the file */}
-
-                            {msg.content.includes('] ') && (
-
-                              <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
-
-                                {msg.content.replace(/^(\[.*?\]\s*)+/, '')}
-
-                              </p>
-
-                            )}
+                            {/* Always show user's prompt text below the file(s), unless it is a default analyse message */}
+                            {(() => {
+                              const stripped = msg.content.replace(/^(Please (analyze|analyse) and describe (this|these) attached files?: [^\n]+)/i, '').trim()
+                              if (!stripped) return null
+                              return (
+                                <p className="text-[14px] sm:text-[14.5px] text-[#f4f4f5] leading-[1.65] font-normal whitespace-pre-wrap">
+                                  {stripped}
+                                </p>
+                              )
+                            })()}
 
                           </div>
 
@@ -7970,7 +7629,7 @@ export const Dashboard: React.FC = () => {
 
                                   {parsed.textPrefix && (
 
-                                    <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
+                                    <p className="text-[14px] sm:text-[14.5px] text-[#f4f4f5] leading-[1.65] font-normal whitespace-pre-wrap">
 
                                       {parsed.textPrefix}
 
@@ -8072,7 +7731,7 @@ export const Dashboard: React.FC = () => {
 
                             if (msg.content && msg.content.trim().length > 0) {
                               return (
-                                <p className="text-[13.5px] text-brand-text/90 leading-[1.7] font-medium whitespace-pre-wrap">
+                                <p className="text-[14px] sm:text-[14.5px] text-[#f4f4f5] leading-[1.65] font-normal whitespace-pre-wrap">
                                   {msg.content}
                                 </p>
                               )
@@ -8433,8 +8092,8 @@ export const Dashboard: React.FC = () => {
 
         </div>
 
-        {/* Pinned Input Area (Unified Console Card) */}
-        <div className="absolute bottom-6 left-0 right-0 px-5 md:px-10 z-20">
+        {/* Pinned Input Area (Unified Console Card) — sits as a natural flex child below messages, glued to keyboard on mobile */}
+        <div className="shrink-0 w-full px-2.5 sm:px-5 md:px-10 pb-[env(safe-area-inset-bottom,0px)] pt-1.5 sm:pt-2 md:pt-3 z-20">
           <div className="max-w-2xl mx-auto">
             <form
               ref={formRef}
@@ -8472,6 +8131,129 @@ export const Dashboard: React.FC = () => {
               </div>
             )}
 
+            {/* Claude-style Attached Files Deck — positioned prominently above textarea */}
+            {(attachedFiles.length > 0 || pastedText) && (
+              <div className="flex flex-wrap items-center gap-2.5 px-1 py-1.5 border-b border-white/[0.08] mb-1">
+                {attachedFiles.map((file, idx) => {
+                  const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)
+                  const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE'
+                  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+                  const sizeLabel = file.sizeBytes ? (
+                    file.sizeBytes > 1024 * 1024 ? `${(file.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                    : file.sizeBytes > 1024 ? `${(file.sizeBytes / 1024).toFixed(0)} KB`
+                    : `${file.sizeBytes} B`
+                  ) : ''
+
+                  if (isImg) {
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => setPreviewingFile({
+                          name: file.name,
+                          type: file.type,
+                          url: file.blobUrl,
+                          localObjectUrl: file.localObjectUrl,
+                          sizeBytes: file.sizeBytes
+                        })}
+                        className="relative group w-28 h-20 sm:w-32 sm:h-24 rounded-xl overflow-hidden border border-white/15 bg-[#121418] cursor-pointer hover:border-white/35 transition shrink-0 shadow-md animate-fadeIn select-none"
+                        title="Click to preview image"
+                      >
+                        <img
+                          src={file.localObjectUrl || file.blobUrl}
+                          alt={file.name}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end p-1.5 pointer-events-none">
+                          <span className="text-[10px] text-white/90 font-medium truncate w-full">{file.name}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
+                            setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
+                          }}
+                          className="absolute top-1 right-1 p-1 rounded-full bg-black/70 hover:bg-red-500 text-white/80 hover:text-white transition shadow z-10"
+                          title="Remove image"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )
+                  }
+
+                  const extBadgeBg = isPdf ? 'bg-red-500/15 text-red-400 border-red-500/30'
+                    : 'bg-white/10 text-white/80 border-white/15'
+
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => setPreviewingFile({
+                        name: file.name,
+                        type: file.type,
+                        url: file.blobUrl,
+                        localObjectUrl: file.localObjectUrl,
+                        sizeBytes: file.sizeBytes
+                      })}
+                      className="relative group flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
+                      title="Click to preview file"
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[9px] tracking-tight border ${extBadgeBg} shrink-0`}>
+                        {ext.slice(0, 4)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{file.name}</p>
+                        <p className="text-[10px] text-white/50 mt-0.5">{sizeLabel || (isPdf ? 'PDF document' : 'File')}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
+                          setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
+                        }}
+                        className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
+                        title="Remove file"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+                {pastedText && (
+                  <div
+                    onClick={() => setPreviewingFile({
+                      name: pastedText.name,
+                      type: 'text/plain',
+                      content: pastedText.content,
+                      sizeBytes: pastedText.sizeBytes
+                    })}
+                    className="relative group flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
+                    title="Click to preview pasted text"
+                  >
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-[9px] tracking-tight border bg-blue-500/15 text-blue-400 border-blue-500/30 shrink-0">
+                      TXT
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{pastedText.name}</p>
+                      <p className="text-[10px] text-white/50 mt-0.5">Pasted snippet</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setPastedText(null)
+                      }}
+                      className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
+                      title="Remove pasted text"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Middle Row: Textarea input */}
             <div className="relative flex-1">
               <textarea
@@ -8482,14 +8264,15 @@ export const Dashboard: React.FC = () => {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    formRef.current?.requestSubmit()
+                    if (!uploading) {
+                      formRef.current?.requestSubmit()
+                    }
                   }
                 }}
                 onChange={(e) => {
                   setInput(e.target.value)
                   if (voice.isRecording) voice.clearTranscript()
                 }}
-                disabled={uploading}
                 placeholder={
                   voice.isRecording ? 'Listening...' :
                   attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
@@ -8501,7 +8284,7 @@ export const Dashboard: React.FC = () => {
 
             {/* Bottom Row: Attachments status & action buttons */}
             <div className="flex items-center justify-between pt-2">
-              {/* Left Side: Attach File, File previews */}
+              {/* Left Side: Attach File, Voice, Mode selector */}
               <div className="flex items-center gap-2">
 
                 <button
@@ -8520,7 +8303,7 @@ export const Dashboard: React.FC = () => {
                     id="voice-mic-button"
                     type="button"
                     onClick={toggleVoice}
-                    disabled={isStreaming || uploading}
+                    disabled={isStreaming}
                     className={`p-1.5 transition-all duration-150 active:scale-95 rounded disabled:opacity-20 ${
                       voice.isRecording
                         ? 'text-[#ffffff] voice-pulse-ring'
@@ -8557,81 +8340,6 @@ export const Dashboard: React.FC = () => {
                     )
                   })}
                 </div>
-
-                {/* Inline File Previews */}
-                {(attachedFiles.length > 0 || pastedText) && (
-                  <div className="flex flex-wrap items-center gap-2 ml-2">
-                    {attachedFiles.map((file, idx) => (
-                      file.type.startsWith('image/') ? (
-                        <div 
-                          key={idx} 
-                          className="relative w-8 h-8 rounded border border-brand-border shrink-0 animate-fadeIn group"
-                        >
-                          <img 
-                            src={file.blobUrl} 
-                            alt={file.name} 
-                            onClick={() => setPreviewingFile({ name: file.name, type: file.type, url: file.blobUrl })}
-                            className="w-full h-full object-cover cursor-pointer rounded" 
-                            title="Click to view image"
-                          />
-                          <button 
-                            type="button" 
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
-                            }} 
-                            className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-red-500 hover:bg-red-600 text-white shadow-md transition z-20 flex items-center justify-center"
-                            title="Delete image"
-                          >
-                            <X className="w-2.5 h-2.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div 
-                          key={idx} 
-                          onClick={() => setPreviewingFile({ name: file.name, type: file.type, url: file.blobUrl })}
-                          className="flex items-center gap-1 pl-2 pr-6 py-1 rounded bg-brand-bg/50 border border-brand-border animate-fadeIn cursor-pointer hover:bg-[#ffffff]/5 transition relative group"
-                          title="Click to view document"
-                        >
-                          <FileText className="w-3.5 h-3.5 text-brand-muted" />
-                          <span className="text-[10px] text-brand-text max-w-[80px] truncate">{file.name}</span>
-                          <button 
-                            type="button" 
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
-                            }} 
-                            className="absolute right-1 text-brand-muted hover:text-red-400 p-0.5 hover:bg-[#ffffff]/10 rounded-full transition z-20 flex items-center justify-center"
-                            title="Delete file"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )
-                    ))}
-                    {pastedText && (
-                      <div 
-                        onClick={() => setPreviewingFile({ name: pastedText.name, type: 'text/plain', content: pastedText.content })}
-                        className="flex items-center gap-1 pl-2 pr-6 py-1 rounded bg-brand-bg/50 border border-brand-border animate-fadeIn cursor-pointer hover:bg-[#ffffff]/5 transition relative group"
-                        title="Click to view pasted text"
-                      >
-                        <FileText className="w-3.5 h-3.5 text-brand-muted" />
-                        <span className="text-[10px] text-brand-text max-w-[80px] truncate">{pastedText.name}</span>
-                        <button 
-                          type="button" 
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setPastedText(null)
-                          }} 
-                          className="absolute right-1 text-brand-muted hover:text-red-400 p-0.5 hover:bg-[#ffffff]/10 rounded-full transition z-20 flex items-center justify-center"
-                          title="Delete pasted text"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
 
               {/* Right Side: Stop/Send Actions */}
@@ -8651,8 +8359,17 @@ export const Dashboard: React.FC = () => {
                   disabled={uploading || (!input.trim() && attachedFiles.length === 0 && !pastedText)}
                   className="px-3.5 py-1.5 bg-brand-text text-brand-bg text-[12px] font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow"
                 >
-                  <span>Send</span>
-                  <Send className="w-3 h-3" />
+                  {uploading ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span className="text-[11px]">Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Send</span>
+                      <Send className="w-3 h-3" />
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -9259,10 +8976,11 @@ export const Dashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={async () => {
+                    const svgSrc = previewingFile.localObjectUrl || previewingFile.url || ''
                     let width = 800
                     let height = 600
                     try {
-                      const res = await fetch(previewingFile.url || '')
+                      const res = await fetch(svgSrc)
                       const svgText = await res.text()
                       if (svgText) {
                         const parser = new DOMParser()
@@ -9311,7 +9029,7 @@ export const Dashboard: React.FC = () => {
                         document.body.removeChild(downloadLink);
                       }
                     }
-                    img.src = previewingFile.url || ''
+                    img.src = svgSrc
                   }}
                   className="px-3 py-1.5 rounded-lg bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[11px] font-bold text-brand-text border border-[#ffffff]/10 transition flex items-center gap-1.5"
                 >
@@ -9348,33 +9066,89 @@ export const Dashboard: React.FC = () => {
             className="flex-1 w-full h-full flex items-center justify-center overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            {previewingFile.type.startsWith('image/') ? (
-              <img 
-                src={previewingFile.url} 
-                alt={previewingFile.name} 
-                className="w-auto h-auto max-w-full max-h-[88vh] object-contain rounded-xl border border-[#ffffff]/10 shadow-2xl animate-scaleIn"
-              />
-            ) : (previewingFile.type === 'text/html' || previewingFile.type === 'html' || previewingFile.name.endsWith('.html')) ? (
-              <div className="w-full h-full min-h-[85vh] bg-white rounded-xl border border-[#ffffff]/10 overflow-hidden shadow-2xl">
-                <iframe 
-                  srcDoc={previewingFile.content || undefined} 
-                  src={previewingFile.url} 
-                  className="w-full h-full border-0" 
-                  sandbox="allow-scripts allow-popups allow-forms allow-modals" 
-                  title={previewingFile.name}
-                />
-              </div>
-            ) : previewingFile.type === 'application/pdf' ? (
-              <embed 
-                src={previewingFile.url} 
-                type="application/pdf" 
-                className="w-full h-full max-h-[88vh] rounded-xl border border-[#ffffff]/10 shadow-2xl bg-[#0b0c0e]" 
-              />
-            ) : (
-              <pre className="w-full h-full max-h-[88vh] bg-[#0b0c0f] border border-[#1e2025] rounded-xl p-6 text-[#8b949e] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
-                {previewingFile.content || "No text content available to display."}
-              </pre>
-            )}
+            {(() => {
+              const nameLower = previewingFile.name.toLowerCase()
+              const isImg = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
+              const isHtml = previewingFile.type === 'text/html' || previewingFile.type === 'html' || nameLower.endsWith('.html')
+              const isPdf = previewingFile.type === 'application/pdf' || nameLower.endsWith('.pdf')
+              const isBinary = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(nameLower)
+              const fileUrl = previewingFile.localObjectUrl || previewingFile.url
+
+              if (isImg) {
+                return (
+                  <img 
+                    src={fileUrl} 
+                    alt={previewingFile.name} 
+                    className="w-auto h-auto max-w-full max-h-[85vh] object-contain rounded-xl border border-white/10 shadow-2xl animate-scaleIn select-none"
+                  />
+                )
+              }
+
+              if (isHtml) {
+                return (
+                  <div className="w-full h-full min-h-[85vh] bg-white rounded-xl border border-white/10 overflow-hidden shadow-2xl">
+                    <iframe 
+                      srcDoc={loadedPreviewContent || previewingFile.content || undefined} 
+                      src={!previewingFile.content && fileUrl ? fileUrl : undefined} 
+                      className="w-full h-full border-0" 
+                      sandbox="allow-scripts allow-popups allow-forms allow-modals" 
+                      title={previewingFile.name}
+                    />
+                  </div>
+                )
+              }
+
+              if (isPdf) {
+                return (
+                  <div className="w-full h-full min-h-[85vh] flex flex-col rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-[#181a20]">
+                    <iframe 
+                      src={fileUrl} 
+                      className="w-full h-full flex-1 border-0 bg-white" 
+                      title={previewingFile.name}
+                    />
+                  </div>
+                )
+              }
+
+              if (isBinary) {
+                return (
+                  <div className="flex flex-col items-center justify-center max-w-md p-8 rounded-2xl bg-[#111317] border border-white/15 text-center shadow-2xl space-y-4">
+                    <div className="w-16 h-16 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center text-white/90">
+                      <FileText className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-white">{previewingFile.name}</h4>
+                      <p className="text-xs text-white/50 mt-1">{previewingFile.type || 'Binary Document'}</p>
+                    </div>
+                    <p className="text-xs text-white/70">This binary file format cannot be rendered directly in the web previewer. You can download or open it in your browser.</p>
+                    {fileUrl && (
+                      <a
+                        href={fileUrl}
+                        download={previewingFile.name}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-4 py-2 rounded-xl bg-white text-black font-bold text-xs hover:bg-white/90 transition flex items-center gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Download / Open File</span>
+                      </a>
+                    )}
+                  </div>
+                )
+              }
+
+              // Text / Code / Markdown / JSON / etc.
+              return previewLoading ? (
+                <div className="flex flex-col items-center justify-center p-12 gap-3 text-white/70">
+                  <Loader2 className="w-7 h-7 animate-spin text-white/80" />
+                  <span className="text-xs font-mono">Loading file contents...</span>
+                </div>
+              ) : (
+                <pre className="w-full h-full max-h-[85vh] bg-[#0b0c0f] border border-[#1e2025] rounded-xl p-6 text-[#c9d1d9] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
+                  {loadedPreviewContent || previewingFile.content || "No text content available to display."}
+                </pre>
+              )
+            })()}
           </div>
 
 

@@ -89,7 +89,9 @@ Supabase PostgreSQL stores only metadata rows (file records, job rows, message r
 | Component | File | Role |
 | :--- | :--- | :--- |
 | Presigned upload URL generator | `backend/app/services/cloudflare_r2.py` | Issues time-limited PUT URLs for direct client → R2 uploads |
+| Direct R2 binary download helper | `backend/app/services/cloudflare_r2.py` | Authenticated S3 client retrieval (`download_file_bytes`) for backend operations |
 | Download URL construction | `backend/app/api/v1/endpoints/files.py` | Builds public CDN URLs using `R2_PUBLIC_DOMAIN` env var |
+| Multimodal vision & sandbox mount | `backend/app/api/v1/endpoints/chat.py` | Fetches attachments, mounts into sandbox `/data/` & `/src/`, and encodes Base64 for inline vision |
 | Sandbox output upload | `backend/app/services/code_sandbox.py` | Uploads generated files (charts, CSVs, ZIPs) after code execution |
 | AI image upload | `backend/app/api/v1/endpoints/agents.py` | Uploads FLUX-generated images after job completion |
 

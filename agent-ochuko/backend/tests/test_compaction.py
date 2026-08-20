@@ -29,7 +29,7 @@ async def test_build_llm_context_filtering():
 
         # Verify database interaction
         mock_supabase.table.assert_any_call("messages")
-        mock_table.select.assert_any_call("role, content, is_summary")
+        mock_table.select.assert_any_call("role, content, is_summary, content_parts")
 
         # Verify output formats only role and content fields
         assert len(context) == 3

@@ -19,6 +19,7 @@ Design principles:
   - Safe: any exception returns None (never blocks the main request)
 """
 
+import asyncio
 import re
 import logging
 from typing import Optional, List, Dict, Any
@@ -123,25 +124,29 @@ async def generate_plan(
             planner_input.append({"role": "user", "content": user_message})
 
         try:
-            if hasattr(openai_client, "chat") and hasattr(openai_client.chat, "completions"):
-                response = await openai_client.chat.completions.create(
-                    model=nano_deployment,
-                    messages=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
+            if hasattr(openai_client, "responses") and hasattr(openai_client.responses, "create"):
+                response = await asyncio.wait_for(
+                    openai_client.responses.create(
+                        model=nano_deployment,
+                        input=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
+                    ),
+                    timeout=2.5
+                )
+                plan_text = (getattr(response, "output_text", "") or "").strip()
+            elif hasattr(openai_client, "chat") and hasattr(openai_client.chat, "completions"):
+                response = await asyncio.wait_for(
+                    openai_client.chat.completions.create(
+                        model=nano_deployment,
+                        messages=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
+                    ),
+                    timeout=2.5
                 )
                 plan_text = (response.choices[0].message.content or "").strip()
             else:
-                response = await openai_client.responses.create(
-                    model=nano_deployment,
-                    input=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
-                )
-                plan_text = (getattr(response, "output_text", "") or "").strip()
+                plan_text = ""
         except Exception as api_err:
-            logger.debug(f"Primary planner API call attempt: {api_err}, trying fallback")
-            response = await openai_client.responses.create(
-                model=nano_deployment,
-                input=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
-            )
-            plan_text = (getattr(response, "output_text", "") or "").strip()
+            logger.debug(f"Planner API call skipped (non-fatal): {api_err}")
+            return None
 
 
         if not plan_text or plan_text == "SINGLE_STEP":

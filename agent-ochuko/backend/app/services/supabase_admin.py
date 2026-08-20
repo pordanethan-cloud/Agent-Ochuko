@@ -33,6 +33,21 @@ def get_supabase_admin() -> Client:
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in the environment."
         )
 
-    _supabase_client = create_client(url, key)
-    logger.info("Supabase admin client initialised.")
+    import httpx
+    from supabase.client import ClientOptions
+
+    custom_http_client = httpx.Client(
+        timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=30.0),
+        limits=httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=30.0),
+        http2=False,
+    )
+
+    options = ClientOptions(
+        httpx_client=custom_http_client,
+        postgrest_client_timeout=30,
+        storage_client_timeout=30,
+    )
+
+    _supabase_client = create_client(url, key, options=options)
+    logger.info("Supabase admin client initialised with custom HTTP transport.")
     return _supabase_client

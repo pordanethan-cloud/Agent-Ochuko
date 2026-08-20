@@ -68,6 +68,38 @@ os.makedirs(NODE_LIBS_DIR, exist_ok=True)
 
 
 
+def _run_subprocess_sync(cmd: List[str], cwd: str, env: dict, timeout_seconds: int) -> Tuple[int, str, str]:
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            env=env
+        )
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout_seconds)
+        stdout_str = stdout_bytes.decode("utf-8", errors="replace")
+        stderr_str = stderr_bytes.decode("utf-8", errors="replace")
+        return proc.returncode, stdout_str, stderr_str
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return -1, "", f"Execution Timeout (exceeded {timeout_seconds}s limit)"
+    except Exception as e:
+        return -1, "", str(e)
+
+
+def _normalize_sandbox_code_paths(code: str) -> str:
+    normalized = re.sub(r'(?i)/tmp/sandbox_[^/\s"\']+/data/?', '../data/', code)
+    normalized = re.sub(r'(?i)/tmp/sandbox_[^/\s"\']+/src/?', './', normalized)
+    normalized = re.sub(r'(?i)/tmp/sandbox_[^/\s"\']/?', '../', normalized)
+    normalized = re.sub(r'(?i)/mnt/data/?', '../data/', normalized)
+    normalized = re.sub(r'(?i)/workspace/?', '../data/', normalized)
+    return normalized
+
+
 async def mount_conversation_files(user_id: str, conversation_id: str, work_dir: str) -> List[str]:
     """
     Lists files uploaded by the user under uploads/{user_id}/{conversation_id}/
@@ -216,58 +248,40 @@ async def execute_code_in_sandbox(
         if language in ("bash", "shell", "sh"):
             # Bash/Shell execution path
             script_path = os.path.join(src_dir, "command.sh")
-            # Normalize /mnt/data and /workspace paths to relative data directory (../data/)
-            # Use case-insensitive regex substitution to robustly handle capitalization variations
-            normalized_code = re.sub(r'(?i)/mnt/data/?', '../data/', code)
-            normalized_code = re.sub(r'(?i)/workspace/?', '../data/', normalized_code)
+            normalized_code = _normalize_sandbox_code_paths(code)
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
                 
             bash_executable = _find_bash_executable()
-            proc = await asyncio.create_subprocess_exec(
-                bash_executable, "command.sh",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                cwd=src_dir
+            ret_code, stdout_str, stderr_str = await asyncio.to_thread(
+                _run_subprocess_sync,
+                [bash_executable, "command.sh"],
+                src_dir,
+                env,
+                timeout_seconds
             )
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-            except asyncio.TimeoutError:
-                proc.kill()
+            if ret_code == -1 and "Timeout" in stderr_str:
                 return "Execution Timeout (exceeded 45s limit)", []
-                
-            stdout_str = stdout_bytes.decode("utf-8", errors="replace")
-            stderr_str = stderr_bytes.decode("utf-8", errors="replace")
 
         elif language == "javascript" or language == "js" or language == "node":
             # JS execution path
             script_path = os.path.join(src_dir, "script.js")
-            # Normalize /mnt/data and /workspace paths to relative data directory (../data/)
-            # Use case-insensitive regex substitution to robustly handle capitalization variations
-            normalized_code = re.sub(r'(?i)/mnt/data/?', '../data/', code)
-            normalized_code = re.sub(r'(?i)/workspace/?', '../data/', normalized_code)
+            normalized_code = _normalize_sandbox_code_paths(code)
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
                 
             for attempt in range(3):
-                proc = await asyncio.create_subprocess_exec(
-                    "node", script_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                    cwd=src_dir
+                ret_code, stdout_str, stderr_str = await asyncio.to_thread(
+                    _run_subprocess_sync,
+                    ["node", script_path],
+                    src_dir,
+                    env,
+                    timeout_seconds
                 )
-                try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-                except asyncio.TimeoutError:
-                    proc.kill()
+                if ret_code == -1 and "Timeout" in stderr_str:
                     return "Execution Timeout (exceeded 45s limit)", []
                     
-                stdout_str = stdout_bytes.decode("utf-8", errors="replace")
-                stderr_str = stderr_bytes.decode("utf-8", errors="replace")
-                
-                if proc.returncode == 0:
+                if ret_code == 0:
                     break
                     
                 # Auto-install missing node packages if possible
@@ -275,63 +289,62 @@ async def execute_code_in_sandbox(
                     m = re.search(r"Cannot find module ['\"](.*?)['\"]", stderr_str)
                     if m:
                         missing_pkg = m.group(1)
-                        # Avoid trying to install relative paths/local imports
                         if not missing_pkg.startswith((".", "/")):
                             logger.info(f"Auto-installing JS package: {missing_pkg}")
-                            install_proc = await asyncio.create_subprocess_exec(
-                                "npm", "install", "--prefix", GLOBAL_LIBS_DIR, missing_pkg,
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.PIPE
+                            await asyncio.to_thread(
+                                _run_subprocess_sync,
+                                ["npm", "install", "--prefix", GLOBAL_LIBS_DIR, missing_pkg],
+                                src_dir,
+                                env,
+                                60
                             )
-                            await install_proc.communicate()
                             continue
                 break
         else:
             # Python execution path
             script_path = os.path.join(src_dir, "script.py")
-            # Normalize /mnt/data and /workspace paths to relative data directory (../data/)
-            # Use case-insensitive regex substitution to robustly handle capitalization variations
-            normalized_code = re.sub(r'(?i)/mnt/data/?', '../data/', code)
-            normalized_code = re.sub(r'(?i)/workspace/?', '../data/', normalized_code)
+            normalized_code = _normalize_sandbox_code_paths(code)
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(normalized_code)
                 
             for attempt in range(3):
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable, script_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                    cwd=src_dir
+                ret_code, stdout_str, stderr_str = await asyncio.to_thread(
+                    _run_subprocess_sync,
+                    [sys.executable, script_path],
+                    src_dir,
+                    env,
+                    timeout_seconds
                 )
-                try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-                except asyncio.TimeoutError:
-                    proc.kill()
+                if ret_code == -1 and "Timeout" in stderr_str:
                     return "Execution Timeout (exceeded 45s limit)", []
                     
-                stdout_str = stdout_bytes.decode("utf-8", errors="replace")
-                stderr_str = stderr_bytes.decode("utf-8", errors="replace")
-                
-                if proc.returncode == 0:
+                if ret_code == 0:
                     break
                     
                 # Auto-install missing Python packages if possible
-                if "ModuleNotFoundError" in stderr_str:
+                if "ModuleNotFoundError" in stderr_str or "ImportError" in stderr_str:
                     m = re.search(r"No module named ['\"](.*?)['\"]", stderr_str)
                     if m:
                         missing_pkg = m.group(1)
-                        # Map common module imports to their actual PyPI package names
-                        pkg_map = {"yaml": "pyyaml", "PIL": "Pillow", "docx": "python-docx"}
+                        pkg_map = {
+                            "yaml": "pyyaml",
+                            "PIL": "Pillow",
+                            "docx": "python-docx",
+                            "fitz": "PyMuPDF",
+                            "cv2": "opencv-python-headless",
+                            "sklearn": "scikit-learn",
+                            "bs4": "beautifulsoup4",
+                        }
                         install_name = pkg_map.get(missing_pkg, missing_pkg)
                         
                         logger.info(f"Auto-installing Python package: {install_name}")
-                        install_proc = await asyncio.create_subprocess_exec(
-                            sys.executable, "-m", "pip", "install", "--target", PYTHON_LIBS_DIR, install_name,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE
+                        await asyncio.to_thread(
+                            _run_subprocess_sync,
+                            [sys.executable, "-m", "pip", "install", "--target", PYTHON_LIBS_DIR, install_name],
+                            src_dir,
+                            env,
+                            60
                         )
-                        await install_proc.communicate()
                         continue
                 break
 
