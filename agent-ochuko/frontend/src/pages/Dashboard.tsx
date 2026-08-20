@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Sparkles } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -3579,6 +3579,28 @@ export const Dashboard: React.FC = () => {
   const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
 
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024)
+  const [viewportHeight, setViewportHeight] = useState<number | null>(() => {
+    return typeof window !== 'undefined' && window.visualViewport ? window.visualViewport.height : null
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.visualViewport) return
+
+    const handleViewportResize = () => {
+      if (window.visualViewport) {
+        setViewportHeight(window.visualViewport.height)
+      }
+    }
+
+    window.visualViewport.addEventListener('resize', handleViewportResize)
+    window.visualViewport.addEventListener('scroll', handleViewportResize)
+    handleViewportResize()
+
+    return () => {
+      window.visualViewport?.removeEventListener('resize', handleViewportResize)
+      window.visualViewport?.removeEventListener('scroll', handleViewportResize)
+    }
+  }, [])
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('sidebar_width')
     if (saved) return parseInt(saved, 10)
@@ -5044,7 +5066,7 @@ export const Dashboard: React.FC = () => {
 
     setWebSearchStatus('idle')
 
-    setActivityLabel(null)
+    setActivityLabel('')
 
     let currentConvoId = overrideConvoId || activeConversationId
 
@@ -6547,7 +6569,10 @@ export const Dashboard: React.FC = () => {
 
   return (
 
-    <div className="flex h-screen bg-brand-bg text-brand-text font-sans antialiased overflow-hidden relative">
+    <div
+      style={viewportHeight ? { height: `${viewportHeight}px`, maxHeight: `${viewportHeight}px` } : undefined}
+      className="flex h-screen h-[100dvh] max-h-[100dvh] bg-brand-bg text-brand-text font-sans antialiased overflow-hidden relative selection:bg-brand-accent/20"
+    >
 
       {/* Left-edge hover zone */}
 

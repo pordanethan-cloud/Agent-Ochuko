@@ -3,13 +3,16 @@
 @tailwind utilities;
 
 @layer base {
-  html {
+  html, body, #root {
+    height: 100%;
+    height: 100dvh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
     overscroll-behavior-y: none;
   }
   body {
     @apply bg-brand-bg text-brand-text font-sans antialiased selection:bg-brand-accent/30 selection:text-white;
-    margin: 0;
-    overscroll-behavior-y: none;
   }
 }
 
