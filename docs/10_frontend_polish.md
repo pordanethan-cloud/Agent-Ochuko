@@ -150,10 +150,26 @@ The R2 bucket must have a CORS rule allowing `PUT` from the frontend origin:
   "MaxAgeSeconds": 3600
 }]
 ```
-Set via Cloudflare Dashboard â†’ R2 â†’ Bucket â†’ Settings â†’ CORS, or via `wrangler r2 bucket cors put`.
+Set via Cloudflare Dashboard → R2 → Bucket → Settings → CORS, or via `wrangler r2 bucket cors put`.
 
-### Agent Memory Column â€” Supabase RLS
+### Agent Memory Column — Supabase RLS
 
-The `conversations.agent_memory` column is written by the backend service role (bypasses RLS). Ensure the column is **not** exposed to the Supabase anon key via the API schema â€” the agent_memory is internal state and should never be readable by the frontend directly.
+The `conversations.agent_memory` column is written by the backend service role (bypasses RLS). Ensure the column is **not** exposed to the Supabase anon key via the API schema — the agent_memory is internal state and should never be readable by the frontend directly.
 
+---
 
+## 10.5 — Typography & High-Density Compact Layout Overhaul (2026-08)
+
+- [x] **Editorial Reading Typography**:
+  - Replaced wide geometric display font (`Outfit`) for body prose with **`Source Serif 4`** (`font-serif`), providing crisp, high-contrast, editorial reading ergonomics.
+  - Configured **`Inter`** (`font-sans`) for dense UI chrome, sidebars, buttons, and user message bubbles.
+- [x] **Compact Attachment Previews**:
+  - Streamlined user vision upload cards from `max-w-sm max-h-72` (384px) to compact thumbnail chips (`w-36 h-24` / `rounded-xl object-cover border border-white/10 bg-black/40`) tucked neatly inside user message bubbles.
+  - Compacted document badges (`PDF`, `DOCX`, `Code`) to `max-w-[210px]` with subtle padding.
+- [x] **Turn Spacing & List Density**:
+  - Reduced conversation turn voids from `space-y-6` to `space-y-4` at `max-w-3xl`.
+  - Replaced bulky diamond glyphs with minimalist circular bullets (`•`) at `space-y-1` and `leading-[1.6]`.
+  - Compacted user message bubble padding to `px-3.5 py-2.5 rounded-2xl rounded-tr-sm bg-[#23272d]`.
+- [x] **Ultra-Minimalist Loading State**:
+  - Streamlined response loading indicator to a quiet, elegant pulsing dot (`w-2 h-2 rounded-full bg-white/40 animate-pulse`), matching Claude / ChatGPT aesthetics.
+  - Live blinking caret (`▋`) attached to active token streaming.

@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Sparkles } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -1657,9 +1657,15 @@ export function renderRichContent(
 
 ): React.ReactNode {
 
-  // During streaming, skip block parsing — use the fast prose renderer
-
-  if (isCurrentlyStreaming) return renderMarkdown(text)
+  // During streaming, skip block parsing — use the fast prose renderer with active cursor
+  if (isCurrentlyStreaming) {
+    return (
+      <div className="relative">
+        {renderMarkdown(text)}
+        <span className="inline-block w-1.5 h-3.5 bg-white/70 animate-pulse ml-1 align-baseline rounded-sm" />
+      </div>
+    )
+  }
 
   const blocks = parseBlocks(text)
 
@@ -3017,7 +3023,7 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
   const blocks = parseMarkdownToBlocks(text)
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2.5 font-serif">
       {blocks.map((block, index) => {
         const key = `block-${index}`
 
@@ -3029,43 +3035,43 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
             switch (level) {
               case 1:
                 return (
-                  <h1 key={key} className="text-[17.5px] font-bold text-white mt-3.5 mb-1.5 tracking-tight">
+                  <h1 key={key} className="text-[17px] font-bold text-white mt-3 mb-1 tracking-tight font-sans">
                     {content}
                   </h1>
                 )
               case 2:
                 return (
-                  <h2 key={key} className="text-[15.5px] font-semibold text-white mt-3 mb-1.5 tracking-tight">
+                  <h2 key={key} className="text-[15px] font-semibold text-white mt-2.5 mb-1 tracking-tight font-sans">
                     {content}
                   </h2>
                 )
               case 3:
                 return (
-                  <h3 key={key} className="text-[14.5px] font-semibold text-[#f4f4f5] mt-2.5 mb-1 tracking-tight">
+                  <h3 key={key} className="text-[14px] font-semibold text-[#f4f4f5] mt-2 mb-0.5 tracking-tight font-sans">
                     {content}
                   </h3>
                 )
               case 4:
                 return (
-                  <h4 key={key} className="text-[13.5px] font-semibold text-[#e4e4e7] mt-2 mb-1 tracking-tight">
+                  <h4 key={key} className="text-[13px] font-semibold text-[#e4e4e7] mt-1.5 mb-0.5 tracking-tight font-sans">
                     {content}
                   </h4>
                 )
               case 5:
                 return (
-                  <h5 key={key} className="text-[13px] font-semibold text-[#e4e4e7] mt-1.5 mb-0.5 tracking-tight">
+                  <h5 key={key} className="text-[12.5px] font-semibold text-[#e4e4e7] mt-1 mb-0.5 tracking-tight font-sans">
                     {content}
                   </h5>
                 )
               case 6:
                 return (
-                  <h6 key={key} className="text-[12.5px] font-semibold text-[#e4e4e7] mt-1.5 mb-0.5 tracking-tight">
+                  <h6 key={key} className="text-[12px] font-semibold text-[#e4e4e7] mt-1 mb-0.5 tracking-tight font-sans">
                     {content}
                   </h6>
                 )
               default:
                 return (
-                  <h1 key={key} className="text-[17.5px] font-bold text-white mt-3.5 mb-1.5 tracking-tight">
+                  <h1 key={key} className="text-[17px] font-bold text-white mt-3 mb-1 tracking-tight font-sans">
                     {content}
                   </h1>
                 )
@@ -3112,14 +3118,14 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
 
           case 'table': {
             return (
-              <div key={key} className="overflow-x-auto my-3 border border-white/10 rounded-xl bg-[#0e1013]/60 shadow-sm">
+              <div key={key} className="overflow-x-auto my-2.5 border border-white/10 rounded-xl bg-[#0e1013]/60 shadow-sm font-sans">
                 <table className="min-w-full divide-y divide-white/10 text-left text-[13px]">
                   <thead className="bg-[#1c1e22]/60 text-white">
                     <tr>
                       {block.headers?.map((header, hIdx) => (
                         <th
                           key={hIdx}
-                          className="px-3.5 py-2.5 font-semibold border-b border-white/10 tracking-wider text-[11px] uppercase text-white/70"
+                          className="px-3 py-2 font-semibold border-b border-white/10 tracking-wider text-[11px] uppercase text-white/70"
                         >
                           {renderInline(header, `${key}-th-${hIdx}`, generatedFiles)}
                         </th>
@@ -3133,7 +3139,7 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
                         className={rIdx % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.02]'}
                       >
                         {row.map((cell, cIdx) => (
-                          <td key={cIdx} className="px-3.5 py-2 text-white/85">
+                          <td key={cIdx} className="px-3 py-1.5 text-white/85">
                             {renderInline(cell, `${key}-td-${rIdx}-${cIdx}`, generatedFiles)}
                           </td>
                         ))}
@@ -3148,13 +3154,13 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
           case 'list': {
             if (block.ordered) {
               return (
-                <ol key={key} className="my-2 space-y-1.5 pl-0.5">
+                <ol key={key} className="my-1.5 space-y-1 pl-0.5">
                   {block.items?.map((item, j) => (
-                    <li key={j} className="flex gap-2.5 leading-relaxed items-start">
-                      <span className="text-white/50 font-mono text-[12px] shrink-0 min-w-[1.25rem] mt-[1.5px]">
+                    <li key={j} className="flex gap-2 leading-normal items-start">
+                      <span className="text-white/50 font-sans font-medium text-[13px] shrink-0 min-w-[1.25rem] mt-[1px]">
                         {j + 1}.
                       </span>
-                      <span className="text-[14px] text-[#e4e4e7] leading-[1.65]">
+                      <span className="text-[15px] text-[#e4e4e7] leading-[1.6]">
                         {renderInline(item, `${key}-oli-${j}`, generatedFiles)}
                       </span>
                     </li>
@@ -3163,11 +3169,11 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
               )
             } else {
               return (
-                <ul key={key} className="my-2 space-y-1.5 pl-0.5">
+                <ul key={key} className="my-1.5 space-y-1 pl-0.5">
                   {block.items?.map((item, j) => (
-                    <li key={j} className="flex gap-2.5 leading-relaxed items-start">
-                      <span className="text-white/40 text-[7px] mt-[7.5px] shrink-0 select-none">◆</span>
-                      <span className="text-[14px] text-[#e4e4e7] leading-[1.65]">
+                    <li key={j} className="flex gap-2.5 leading-normal items-start">
+                      <span className="text-white/60 text-[11px] mt-[5px] shrink-0 select-none">•</span>
+                      <span className="text-[15px] text-[#e4e4e7] leading-[1.6]">
                         {renderInline(item, `${key}-uli-${j}`, generatedFiles)}
                       </span>
                     </li>
@@ -3178,12 +3184,12 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
           }
 
           case 'hr': {
-            return <hr key={key} className="border-white/10 my-3.5" />
+            return <hr key={key} className="border-white/10 my-3" />
           }
 
           case 'paragraph': {
             return (
-              <p key={key} className="text-[14px] sm:text-[14.5px] text-[#e4e4e7] leading-[1.68] tracking-[-0.005em]">
+              <p key={key} className="text-[15px] text-[#e4e4e7] leading-[1.65] tracking-normal font-serif">
                 {renderInline(block.content || '', key, generatedFiles)}
               </p>
             )
@@ -3451,30 +3457,30 @@ const FileAttachmentChip: React.FC<{
     }))
   }
 
-  // ── Image thumbnail (vision jobs) — clean, no background frame ──────────────
+  // ── Image thumbnail (vision jobs) — compact, elegant thumbnail ──────────────
   if (isImage) {
     return (
       <div
         onClick={handlePreview}
         title={attachment.url ? `Preview ${attachment.name}` : attachment.name}
-        className={`relative group/img w-full max-w-sm rounded-2xl overflow-hidden shrink-0 ${
-          attachment.url ? 'cursor-pointer' : 'cursor-default'
-        } transition`}
+        className={`relative group/img w-36 sm:w-40 h-24 sm:h-28 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-black/40 shadow-sm ${
+          attachment.url ? 'cursor-pointer hover:border-white/30' : 'cursor-default'
+        } transition-all duration-200`}
       >
         {attachment.url ? (
           <img
             src={attachment.url}
             alt={attachment.name}
-            className="w-full h-auto max-h-72 object-cover rounded-2xl"
+            className="w-full h-full object-cover rounded-xl"
           />
         ) : (
-          <div className="w-full h-40 flex items-center justify-center rounded-2xl bg-white/5">
-            <FileText className="w-6 h-6 text-[#ffffff]/30" />
+          <div className="w-full h-full flex items-center justify-center rounded-xl bg-white/5">
+            <FileText className="w-5 h-5 text-white/30" />
           </div>
         )}
         {/* Subtle hover overlay with filename */}
-        <div className="absolute inset-0 rounded-2xl bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2.5">
-          <span className="text-[11px] text-white font-semibold leading-tight truncate w-full">{attachment.name}</span>
+        <div className="absolute inset-0 rounded-xl bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2">
+          <span className="text-[10px] text-white font-medium leading-tight truncate w-full">{attachment.name}</span>
         </div>
       </div>
     )
@@ -3488,20 +3494,20 @@ const FileAttachmentChip: React.FC<{
     <div
       onClick={handlePreview}
       title={attachment.url ? `Preview ${attachment.name}` : attachment.name}
-      className={`flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[#ffffff]/8 border border-[#ffffff]/20 max-w-[240px] ${
-        attachment.url ? 'cursor-pointer hover:bg-[#ffffff]/14 hover:border-[#ffffff]/30' : 'cursor-default'
+      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white/[0.06] border border-white/15 max-w-[210px] ${
+        attachment.url ? 'cursor-pointer hover:bg-white/[0.12] hover:border-white/25' : 'cursor-default'
       } transition`}
     >
-      <div className="w-8 h-8 rounded-lg bg-[#ffffff]/10 flex items-center justify-center shrink-0">
-        <FileText className="w-4 h-4 text-[#ffffff]/80" />
+      <div className="w-6 h-6 rounded-md bg-white/10 flex items-center justify-center shrink-0">
+        <FileText className="w-3.5 h-3.5 text-white/80" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[9px] font-bold text-[#ffffff]/50 uppercase tracking-widest leading-none mb-0.5">{displayLabel}</p>
-        <p className="text-[12px] text-brand-text/90 font-semibold truncate">{attachment.name}</p>
+        <p className="text-[8.5px] font-bold text-white/50 uppercase tracking-wider leading-none mb-0.5">{displayLabel}</p>
+        <p className="text-[11.5px] text-brand-text/90 font-medium truncate">{attachment.name}</p>
       </div>
       {attachment.url && (
-        <div className="shrink-0 text-[#ffffff]/40">
-          <ExternalLink className="w-3 h-3" />
+        <div className="shrink-0 text-white/40">
+          <ExternalLink className="w-2.5 h-2.5" />
         </div>
       )}
     </div>
@@ -5038,6 +5044,8 @@ export const Dashboard: React.FC = () => {
 
     setWebSearchStatus('idle')
 
+    setActivityLabel(null)
+
     let currentConvoId = overrideConvoId || activeConversationId
 
     const userMessageObj: Message = typeof newUserMessage === 'string'
@@ -5362,6 +5370,10 @@ export const Dashboard: React.FC = () => {
                   console.warn('Background conversation sync failed:', err)
                 })
               }, 0)
+
+            } else if (data.type === 'activity_status') {
+
+              setActivityLabel(data.label || 'Generating task...')
 
             } else if (data.type === 'web_search_status') {
 
@@ -7365,7 +7377,7 @@ export const Dashboard: React.FC = () => {
 
           ) : (
 
-            <div className="max-w-2xl mx-auto space-y-6">
+            <div className="max-w-3xl mx-auto space-y-4 sm:space-y-5 px-1 sm:px-2">
 
               {(() => {
                 const getArchivedForMarker = (index: number) => {
@@ -7443,15 +7455,15 @@ export const Dashboard: React.FC = () => {
                                   <div key={`arch-${archIdx}`} className="opacity-90">
                                     <div className={`flex w-full gap-3 ${archivedMsg.role === 'user' ? 'justify-end' : 'justify-start'} text-xs`}>
                                       {archivedMsg.role !== 'user' && (
-                                        <div className="w-6 h-6 rounded bg-brand-surface/20 flex items-center justify-center shrink-0 overflow-hidden mt-0.5 select-none border border-white/10">
+                                        <div className="w-5 h-5 rounded bg-brand-surface/20 flex items-center justify-center shrink-0 overflow-hidden mt-0.5 select-none border border-white/10">
                                           <img src="/favicon.png" alt="Ochuko" className="w-full h-full object-cover" />
                                         </div>
                                       )}
-                                      <div className={`flex flex-col gap-1 ${archivedMsg.role === 'user' ? 'max-w-[85%] items-end' : 'flex-1 min-w-0'}`}>
+                                      <div className={`flex flex-col gap-1 ${archivedMsg.role === 'user' ? 'max-w-[80%] items-end' : 'flex-1 min-w-0'}`}>
                                         <div className="text-[9px] text-brand-muted/50 font-medium select-none">
                                           {archivedMsg.role === 'user' ? 'You' : 'Agent Ochuko'}
                                         </div>
-                                        <div className={`rounded-lg px-3 py-2 text-brand-text/90 ${archivedMsg.role === 'user' ? 'bg-[#1c1e22]/50 border border-[#2b2e35] rounded-tr-none' : 'bg-[#1a1d22]/30 border border-[#2e3542]/50 rounded-tl-none'}`}>
+                                        <div className={`rounded-xl px-3 py-2 text-brand-text/90 ${archivedMsg.role === 'user' ? 'bg-[#23272d] border border-white/10 rounded-tr-sm' : 'bg-[#1a1d22]/30 border border-[#2e3542]/50 rounded-tl-sm'}`}>
                                           {archivedMsg.thinkingContent && (
                                             <div className="mb-2 text-[10px] text-brand-muted/70 italic border-l border-[#2e3542] pl-2 py-0.5 select-none">
                                               {archivedMsg.thinkingContent}
@@ -7481,7 +7493,7 @@ export const Dashboard: React.FC = () => {
 
                   <div
 
-                    className={`group relative flex w-full gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    className={`group relative flex w-full gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
 
                   >
 
@@ -7489,7 +7501,7 @@ export const Dashboard: React.FC = () => {
 
                   {msg.role !== 'user' && (
 
-                    <div className="w-8 h-8 rounded-lg border border-[#ffffff]/15 bg-brand-surface/30 flex items-center justify-center shrink-0 overflow-hidden mt-1 select-none">
+                    <div className="w-6 h-6 rounded-md border border-white/10 bg-brand-surface/40 flex items-center justify-center shrink-0 overflow-hidden mt-1 select-none">
 
                       <img
 
@@ -7507,19 +7519,19 @@ export const Dashboard: React.FC = () => {
 
                   {/* Right/Left side container: Bubble + Actions */}
 
-                  <div className={`flex flex-col gap-1.5 ${msg.role === 'user' ? 'max-w-[85%] items-end' : 'flex-1 min-w-0'}`}>
+                  <div className={`flex flex-col gap-1.5 ${msg.role === 'user' ? 'max-w-[80%] items-end' : 'flex-1 min-w-0'}`}>
 
                     {/* Bubble */}
 
                     <div
 
-                      className={`relative rounded-xl min-w-0 ${
+                      className={`relative rounded-2xl min-w-0 ${
 
                         msg.role === 'user'
 
-                          ? 'bg-[#1c1e22]/50 border border-[#2b2e35] text-brand-text/90 rounded-tr-none px-5 py-4'
+                          ? 'bg-[#23272d] border border-white/10 text-brand-text rounded-tr-sm px-3.5 py-2.5 shadow-sm'
 
-                          : 'bg-transparent border-transparent md:px-2 py-1'
+                          : 'bg-transparent border-transparent py-0.5'
 
                       }`}
 
@@ -7581,10 +7593,10 @@ export const Dashboard: React.FC = () => {
 
                           /* Agent job — file chip(s) stacked above the prompt text */
 
-                          <div className="space-y-2.5">
+                          <div className="flex flex-col items-end gap-2">
 
                             {/* File thumbnails / chips */}
-                            <div className="flex flex-col gap-2">
+                            <div className="flex flex-col items-end gap-1.5">
 
                               {msg.fileAttachment && (
 
@@ -7605,7 +7617,7 @@ export const Dashboard: React.FC = () => {
                               const stripped = msg.content.replace(/^(Please (analyze|analyse) and describe (this|these) attached files?: [^\n]+)/i, '').trim()
                               if (!stripped) return null
                               return (
-                                <p className="text-[14px] sm:text-[14.5px] text-[#f4f4f5] leading-[1.65] font-normal whitespace-pre-wrap">
+                                <p className="text-[14px] text-[#f4f4f5] leading-relaxed font-normal whitespace-pre-wrap font-sans">
                                   {stripped}
                                 </p>
                               )
@@ -7759,7 +7771,7 @@ export const Dashboard: React.FC = () => {
 
                           )}
 
-                          <div className="flex items-center gap-2 h-6">
+                          <div className="flex items-center gap-2 py-1">
 
                             {msg.agentStep && msg.agentStep > 0 ? (
 
@@ -7777,25 +7789,25 @@ export const Dashboard: React.FC = () => {
 
                             ) : webSearchStatus === 'searching' ? (
 
-                              <>
+                              <div className="inline-flex items-center gap-2 py-1 text-xs text-white/60 select-none">
 
-                                <Globe className="w-3.5 h-3.5 text-[#ffffff] animate-pulse" />
+                                <Globe className="w-3.5 h-3.5 text-white/70 animate-pulse" />
 
-                                <span className="text-[11px] text-[#ffffff]/70 font-semibold tracking-wide">
+                                <span className="text-[12px] font-sans font-normal text-white/70">
 
                                   {activityLabel || 'Searching the web...'}
 
                                 </span>
 
-                              </>
+                              </div>
 
                             ) : activityLabel ? (
 
-                              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#12151c] border border-white/[0.08] text-xs animate-fadeIn">
+                              <div className="inline-flex items-center gap-2 py-1 text-xs text-white/60 select-none">
 
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8e95a2] animate-pulse" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-white/50 animate-pulse" />
 
-                                <span className="text-[11.5px] font-mono font-medium text-[#a0a6b2] tracking-wide">
+                                <span className="text-[12px] font-sans font-normal text-white/70">
 
                                   {activityLabel}
 
@@ -7805,19 +7817,9 @@ export const Dashboard: React.FC = () => {
 
                             ) : (
 
-                              <div className="flex items-center gap-1.5 h-6 px-1">
+                              <div className="flex items-center gap-1.5 py-1.5 px-0.5 select-none">
 
-                                {[0, 150, 300].map((delay, d) => (
-
-                                  <span
-
-                                    key={d}
-
-                                    className={`w-1.5 h-1.5 rounded-full bg-[#8e95a2]/70 animate-bounce dot-bounce-${delay}`}
-
-                                  />
-
-                                ))}
+                                <span className="w-2 h-2 rounded-full bg-white/40 animate-pulse" />
 
                               </div>
 
