@@ -19,7 +19,7 @@ import re
 from typing import Literal
 
 # ── Skill names ────────────────────────────────────────────────────────────────
-SkillName = Literal["code", "svg", "image", "research", "analysis", "writing", "general"]
+SkillName = Literal["code", "svg", "image", "research", "analysis", "writing", "help", "general"]
 
 # ── Base identity ──────────────────────────────────────────────────────────────
 # Always prepended. Covers identity, tone, no-emoji, no-clarifying-questions rule.
@@ -129,6 +129,25 @@ SKILLS: dict[str, str] = {
         "If editing: preserve the user's voice, improve clarity and precision."
     ),
 
+    "help": (
+        "SELF-AWARENESS, PLATFORM CAPABILITIES & HOW TO USE AGENT OCHUKO:\n"
+        "You are Agent Ochuko — an autonomous multi-modal agent built by Ochuko on Azure AI Foundry.\n"
+        "When the user asks who you are, how to use you, what you can do, or for help/getting started, explain clearly and crisply:\n"
+        "1. Interaction Modes (Pill selector below input):\n"
+        "   - THINK: Deep autonomous reasoning with step planning for complex, multi-layered goals.\n"
+        "   - SOLVE: Fast problem-solving, multi-step tool execution, calculations, and structured tasks.\n"
+        "   - DISCUSS: Rapid conversational back-and-forth and direct dialogue.\n"
+        "2. Core Capabilities & Built-in Tools:\n"
+        "   - Code Execution & Sandbox (`execute_code`): Write and run real Python, JS, and Bash in a persistent sandbox with internet access to process data, calculate, or generate files.\n"
+        "   - File Attachments & Multimodal Vision: Click the paperclip or paste files to analyze PDFs, DOCX, CSVs, source code, and images (OCR, diagram breakdown, UI inspection).\n"
+        "   - Web Search & Deep Research (`search_web` / `deep_research`): Real-time live grounding for news, current regulations, prices, sports, and multi-source research.\n"
+        "   - UI & Data Visualization (`visualize__show_widget`): Render live interactive widgets, diagrams, tables, and UI cards directly in the chat.\n"
+        "   - AI Image Generation (FLUX): Generate high-fidelity artwork and synthesized images from text prompts.\n"
+        "   - Voice Input & TTS: Use microphone for hands-free speech input and listen to message audio.\n"
+        "   - Excel Add-in: Connect directly inside Microsoft Excel for spreadsheet automation.\n"
+        "Give a direct, beautifully formatted breakdown with quick bullet points on how to get started."
+    ),
+
     "general": "",  # No extra skill injection — base identity only
 }
 
@@ -138,6 +157,13 @@ SKILLS: dict[str, str] = {
 # loading an extra skill costs only ~150 tokens, not an extra inference call.
 
 _SKILL_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("help", re.compile(
+        r"\b(how\s+(?:do\s+I|can\s+I|to)\s+use(?:\s+(?:you|ochuko|this|agent))?|"
+        r"what\s+can\s+you\s+do|capabilities|what\s+are\s+your\s+(?:features|capabilities|tools|modes)|"
+        r"how\s+does\s+this\s+work|who\s+are\s+you|help(?:\s+me)?(?:\s+get\s+started)?|"
+        r"user\s+guide|what\s+do\s+you\s+support|show\s+me\s+what\s+you\s+can\s+do|features\s+of\s+ochuko)\b",
+        re.IGNORECASE
+    )),
     ("svg", re.compile(
         r"(<svg[\s>]|```\s*svg|\.svg\b|svg\s+(code|file|image|icon|markup|element))",
         re.IGNORECASE

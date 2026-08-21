@@ -8413,6 +8413,13 @@ export const Dashboard: React.FC = () => {
               <div className="input-loading-bar" />
             )}
           </form>
+
+          {/* Mysterious One-Line Micro-Footer */}
+          <div className="pt-2 pb-0.5 text-center select-none pointer-events-none">
+            <p className="text-[11px] font-mono text-brand-muted/40 tracking-[0.22em] uppercase transition-colors duration-300">
+              Beyond the prompt lies the pattern.
+            </p>
+          </div>
           </div>
         </div>
 

@@ -166,7 +166,7 @@ async def route(
         )
 
     # ── Layer 1: Silent Nano Interceptor ──────────────────────────────────────
-    if _is_trivial(user_message) and nano_turn_count < nano_max_turns:
+    if skill != "help" and _is_trivial(user_message) and nano_turn_count < nano_max_turns:
         return RoutingDecision(
             deployment=nano_deployment,
             system_prompt=nano_prompt,
