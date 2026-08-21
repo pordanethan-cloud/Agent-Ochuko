@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import load_config, get_config, _CONFIG_CACHE, start_config_polling, stop_config_polling
 from app.api.v1.endpoints.chat import router as chat_router
+from app.api.v1.endpoints.agent_tasks import router as agent_tasks_router
 from app.api.v1.endpoints.admin import router as admin_router
 from app.api.v1.endpoints.admin_appcfg import router as admin_appcfg_router
 from app.api.v1.endpoints.conversations import router as conversations_router
@@ -130,6 +131,7 @@ app.add_middleware(
 
 # Include API routers
 app.include_router(chat_router, prefix="/v1", tags=["chat"])
+app.include_router(agent_tasks_router, prefix="/v1/agent-tasks", tags=["agent-tasks"])
 app.include_router(admin_router, prefix="/v1/admin", tags=["admin"])
 app.include_router(admin_appcfg_router, prefix="/v1/admin", tags=["admin"])
 app.include_router(conversations_router, prefix="/v1/conversations", tags=["conversations"])

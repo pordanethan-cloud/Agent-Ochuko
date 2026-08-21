@@ -1,30 +1,19 @@
 # app/core/agent_planner.py
 """
-Agent Planner — pre-loop task decomposition for complex multi-step goals.
-
-The planner fires a SINGLE cheap gpt-5.4-nano call before the main OODA loop
-to decompose the user's goal into a numbered execution plan. This plan is then
-injected into the system prompt so the main model knows:
-  1. What the end goal is
-  2. What order to call tools in
-  3. When to declare itself done
-
-The planner is gated by complexity signals — short/trivial messages bypass it
-entirely (the model router already handles those with nano).
-
-Design principles:
-  - Cheap: always uses nano, never burns a full gpt-5.4 call for planning alone
-  - Fast: single non-streaming call, target < 1s
-  - Opt-out: returns None for simple messages so caller ignores the plan
-  - Safe: any exception returns None (never blocks the main request)
+Agent Planner — task decomposition for complex multi-step goals.
+Provides structured plan generation (List[PlanStep]) with risk classification
+and tool hint mapping for Agent Mode, alongside backward-compatible prompt injection.
 """
 
 import asyncio
+import json
 import re
 import logging
 from typing import Optional, List, Dict, Any
 
 from openai import AsyncAzureOpenAI
+from app.core.agent_task_models import PlanStep, StepStatus, RiskLevel
+from app.core.hitl_gates import HITLGate
 
 logger = logging.getLogger("app.core.agent_planner")
 
@@ -51,8 +40,28 @@ _PLANNER_SYSTEM = (
     "If the goal can be answered in a single step without tool calls, respond with: SINGLE_STEP"
 )
 
+_STRUCTURED_PLANNER_SYSTEM = (
+    "You are an expert autonomous agent task architect. Decompose the user's goal into 2 to 6 atomic, sequential steps.\n"
+    "Output ONLY valid JSON containing an array of step objects with the following schema:\n"
+    "[\n"
+    "  {\n"
+    "    \"index\": 1,\n"
+    "    \"description\": \"Specific step action description (e.g. Search for 2026 Nigerian tax act changes)\",\n"
+    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"execute_code\" | \"generate_image\" | \"visualize__show_widget\" | null,\n"
+    "    \"risk_level\": \"low\" | \"medium\" | \"high\"\n"
+    "  }\n"
+    "]\n\n"
+    "Risk Level Guidelines:\n"
+    "- 'low': Reading / research (search_web, deep_research, reading context)\n"
+    "- 'medium': Safe computation (execute_code without file writes, widget rendering)\n"
+    "- 'high': Deliverable generation (execute_code with PDF/Excel/file generation, generate_image, mutations)\n\n"
+    "Rules:\n"
+    "1. Keep descriptions crisp and actionable.\n"
+    "2. If the goal is a simple greeting or direct single question, return a 1-step plan with tool_name=null and risk_level='low'.\n"
+    "3. Output strictly valid JSON."
+)
 
-# Patterns that signal research-intensive prompts (always plan, even if _is_complex returns False)
+# Patterns that signal research-intensive prompts
 _RESEARCH_INTENSIVE_RE = re.compile(
     r"\b(compare|vs\.?|versus|rank(?:ing)?|ramification|all\s+(?:aspect|dimension|ramification)|"
     r"breakdown|head[\s-]to[\s-]head|side[\s-]by[\s-]side|pros\s+and\s+cons|"
@@ -63,20 +72,14 @@ _RESEARCH_INTENSIVE_RE = re.compile(
 
 
 def _is_complex(message: str) -> bool:
-    """
-    Heuristic: returns True if the message likely requires multiple steps.
-    Simple heuristics to avoid planning overhead on trivial messages.
-    """
+    """Heuristic: returns True if the message likely requires multiple steps."""
     if not message:
         return False
     stripped = message.strip()
-    # Short messages are almost never multi-step
     if len(stripped) < 20:
         return False
-    # Single question with no action verb → single-step
     if stripped.endswith("?") and not _COMPLEX_VERBS.search(stripped):
         return False
-    # Contains action verbs → likely complex
     return bool(_COMPLEX_VERBS.search(stripped))
 
 
@@ -86,32 +89,21 @@ async def generate_plan(
     openai_client: Optional[AsyncAzureOpenAI] = None,
     nano_deployment: str = "gpt-5.4-nano",
 ) -> Optional[str]:
-    """
-    Generates a numbered execution plan for complex multi-step goals.
-
-    Returns:
-        str: Numbered plan to inject into the system prompt, or
-        None: if the message is simple (bypass planning entirely).
-
-    This function is always safe to call — any exception returns None.
-    """
+    """Generates a numbered text execution plan for chat system prompt injection."""
     is_research = bool(_RESEARCH_INTENSIVE_RE.search(user_message))
     if not _is_complex(user_message) and not is_research:
-        logger.debug("Planner skipped — message does not appear complex")
         return None
 
     if openai_client is None:
-        logger.debug("Planner skipped — no OpenAI client provided")
         return None
 
     try:
-        # Build context: last 4 messages + current query (keep it cheap)
         history_snippet = ""
         if conversation_history:
             recent = conversation_history[-4:]
             for msg in recent:
                 role = msg.get("role", "")
-                content = (msg.get("content") or "")[:200]  # truncate long messages
+                content = (msg.get("content") or "")[:200]
                 history_snippet += f"{role}: {content}\n"
 
         planner_input = []
@@ -148,35 +140,189 @@ async def generate_plan(
             logger.debug(f"Planner API call skipped (non-fatal): {api_err}")
             return None
 
-
         if not plan_text or plan_text == "SINGLE_STEP":
-            logger.debug("Planner returned SINGLE_STEP — no plan injected")
             return None
 
-        logger.info(
-            "Planner generated %d-line plan for message: %.60s",
-            plan_text.count("\n") + 1,
-            user_message,
-        )
         return plan_text
-
-    except Exception as exc:
-        # Non-fatal — main loop continues without a plan
-        logger.warning("Agent planner failed (non-fatal): %s", exc)
+    except Exception as e:
+        logger.warning(f"Plan generation failed (non-fatal): {e}")
         return None
 
 
-def format_plan_for_system_prompt(plan: str) -> str:
+async def generate_structured_plan(
+    goal: str,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+    openai_client: Optional[AsyncAzureOpenAI] = None,
+    nano_deployment: str = "gpt-5.4-nano",
+    auto_approve_level: str = "low",
+) -> List[PlanStep]:
     """
-    Wraps the raw plan in a clearly-delimited block for injection into the system prompt.
-    The model is instructed to follow the plan sequentially and record progress
-    in its thinking block before moving to the next step.
+    Generates a structured List[PlanStep] for Agent Mode with risk levels and approval requirements.
+    Falls back to a safe default 2-step plan if the planner call fails.
     """
+    if not goal or not goal.strip():
+        return [
+            PlanStep(
+                index=1,
+                description="Process user request and formulate answer",
+                tool_name=None,
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+            )
+        ]
+
+    if openai_client is None:
+        # Default programmatic decomposition
+        return [
+            PlanStep(
+                index=1,
+                description=f"Analyze and retrieve facts for: {goal[:80]}",
+                tool_name="search_web",
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+            ),
+            PlanStep(
+                index=2,
+                description="Synthesize final findings and deliverables",
+                tool_name=None,
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+            ),
+        ]
+
+    try:
+        history_snippet = ""
+        if conversation_history:
+            for msg in conversation_history[-3:]:
+                role = msg.get("role", "")
+                content = (msg.get("content") or "")[:200]
+                history_snippet += f"{role}: {content}\n"
+
+        user_content = f"GOAL: {goal}"
+        if history_snippet:
+            user_content = f"CONTEXT:\n{history_snippet.strip()}\n\n{user_content}"
+
+        prompt_input = [
+            {"role": "system", "content": _STRUCTURED_PLANNER_SYSTEM},
+            {"role": "user", "content": user_content},
+        ]
+
+        raw_json = ""
+        if hasattr(openai_client, "responses") and hasattr(openai_client.responses, "create"):
+            response = await asyncio.wait_for(
+                openai_client.responses.create(
+                    model=nano_deployment,
+                    input=prompt_input,
+                ),
+                timeout=3.5,
+            )
+            raw_json = (getattr(response, "output_text", "") or "").strip()
+        elif hasattr(openai_client, "chat") and hasattr(openai_client.chat, "completions"):
+            response = await asyncio.wait_for(
+                openai_client.chat.completions.create(
+                    model=nano_deployment,
+                    messages=prompt_input,
+                ),
+                timeout=3.5,
+            )
+            raw_json = (response.choices[0].message.content or "").strip()
+
+        # Clean JSON markdown formatting if present
+        if raw_json.startswith("```"):
+            lines = raw_json.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_json = "\n".join(lines).strip()
+
+        parsed = json.loads(raw_json)
+        if isinstance(parsed, dict) and "steps" in parsed:
+            parsed = parsed["steps"]
+
+        if isinstance(parsed, list) and len(parsed) > 0:
+            plan_steps = []
+            for idx, item in enumerate(parsed, start=1):
+                desc = str(item.get("description", f"Step {idx}")).strip()
+                tool = item.get("tool_name")
+                raw_risk = str(item.get("risk_level", "low")).lower()
+
+                risk = RiskLevel.LOW
+                if raw_risk == "high":
+                    risk = RiskLevel.HIGH
+                elif raw_risk == "medium":
+                    risk = RiskLevel.MEDIUM
+
+                step = PlanStep(
+                    index=idx,
+                    description=desc,
+                    tool_name=tool if tool else None,
+                    risk_level=risk,
+                    status=StepStatus.PENDING,
+                )
+                # Check HITL approval policy
+                HITLGate.requires_approval(step, auto_approve_level=auto_approve_level)
+                plan_steps.append(step)
+
+            if plan_steps:
+                return plan_steps
+
+    except Exception as err:
+        logger.warning(f"Structured plan generation failed, using robust fallback: {err}")
+
+    # Robust fallback plan
+    fallback_steps = [
+        PlanStep(
+            index=1,
+            description=f"Gather data & search facts for: {goal[:70]}",
+            tool_name="search_web",
+            risk_level=RiskLevel.LOW,
+            status=StepStatus.PENDING,
+        ),
+        PlanStep(
+            index=2,
+            description="Process information & execute analysis",
+            tool_name="execute_code",
+            risk_level=RiskLevel.MEDIUM,
+            status=StepStatus.PENDING,
+        ),
+        PlanStep(
+            index=3,
+            description="Synthesize structured deliverables and summary",
+            tool_name=None,
+            risk_level=RiskLevel.LOW,
+            status=StepStatus.PENDING,
+        ),
+    ]
+    for s in fallback_steps:
+        HITLGate.requires_approval(s, auto_approve_level=auto_approve_level)
+    return fallback_steps
+
+
+async def refine_plan(
+    original_plan: List[PlanStep],
+    user_edits: Dict[int, str],
+) -> List[PlanStep]:
+    """Applies user modifications to plan steps while preserving completed execution state."""
+    updated_plan: List[PlanStep] = []
+    for step in original_plan:
+        new_step = step.model_copy()
+        if step.index in user_edits:
+            new_step.description = user_edits[step.index].strip()
+            # Re-evaluate risk for updated description
+            HITLGate.requires_approval(new_step)
+        updated_plan.append(new_step)
+    return updated_plan
+
+
+def format_plan_for_system_prompt(plan_text: str) -> str:
+    """Wraps a generated plan in system prompt instructions."""
+    if not plan_text:
+        return ""
     return (
-        "\n\n--- AGENT EXECUTION PLAN ---\n"
-        "Follow this plan step by step. Call the appropriate tools in order. "
-        "After completing each step, record the result in your thinking block before proceeding.\n"
-        "When all steps are complete, deliver a final, synthesised answer to the user.\n\n"
-        f"{plan}\n"
-        "--- END PLAN ---\n\n"
+        f"\n\n[EXECUTION PLAN]\n"
+        f"You have already decomposed this task into the following steps:\n"
+        f"{plan_text}\n\n"
+        f"Execute these steps in order. Call the appropriate tool for each step. "
+        f"When all steps are complete, synthesize the final response."
     )

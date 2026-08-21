@@ -14,11 +14,11 @@ from app.services.supabase_admin import get_supabase_admin
 logger = logging.getLogger("app.api.v1.endpoints.conversations")
 router = APIRouter()
 
-VALID_MODES = {"think", "solve", "discuss"}
+VALID_MODES = {"think", "solve", "discuss", "agent"}
 
 
 class ConversationUpdate(BaseModel):
-    mode: str | None = Field(None, description="The mode to switch to (think, solve, or discuss)")
+    mode: str | None = Field(None, description="The mode to switch to (think, solve, discuss, or agent)")
     title: str | None = Field(None, min_length=1, max_length=120, description="New conversation title")
     is_shared: bool | None = Field(None, description="Toggle shared status of the conversation")
 

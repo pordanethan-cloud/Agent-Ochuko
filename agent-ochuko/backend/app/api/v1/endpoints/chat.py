@@ -868,6 +868,53 @@ async def chat_stream_generator(
         if routing_mode in ("think", "solve"):
             full_system = full_system + _THINKING_INSTRUCTION
 
+        # ─── AGENT MODE AUTONOMOUS ORCHESTRATION ───────────────────────────
+        if mode == "agent":
+            from app.core.agent_task_models import AgentTask
+            from app.core.agent_task_manager import AgentTaskManager
+            from app.core.agent_config import get_agent_mode_config
+
+            last_user_goal = ""
+            if messages:
+                for m in reversed(messages):
+                    if m.get("role") == "user":
+                        c = m.get("content", "")
+                        if isinstance(c, str):
+                            last_user_goal = c
+                        elif isinstance(c, list):
+                            last_user_goal = " ".join(
+                                p.get("text", "") if isinstance(p, dict) else str(p)
+                                for p in c
+                                if not isinstance(p, dict) or p.get("type") in ("text", "input_text")
+                            )
+                        break
+
+            agent_cfg = await get_agent_mode_config()
+            task = AgentTask(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                goal=last_user_goal or "Execute autonomous task",
+                max_duration_seconds=agent_cfg.get("max_duration_seconds", 300),
+            )
+            manager = AgentTaskManager(
+                task=task,
+                openai_client=client,
+                deployment=deployment,
+                nano_deployment=deployment,
+                config=agent_cfg,
+                supabase_client=get_supabase_admin(),
+            )
+            # Initialize plan and stream execution
+            await manager.init_plan(history=messages[:-1] if len(messages) > 1 else None)
+            async for sse_event in manager.execute_plan_stream(
+                search_fn=_perform_google_search,
+                deep_research_fn=_perform_parallel_searches,
+            ):
+                yield sse_event
+
+            yield "data: [DONE]\n\n"
+            return
+
         # Pre-loop agent task planning for complex multi-step goals
         try:
             from app.core.agent_planner import generate_plan, format_plan_for_system_prompt
@@ -1815,7 +1862,7 @@ async def _fetch_attachment_bytes(att: Dict[str, Any]) -> Optional[bytes]:
     return None
 
 
-_VALID_MODES = {"think", "solve", "discuss"}
+_VALID_MODES = {"think", "solve", "discuss", "agent"}
 
 
 @router.post("/responses/stream")

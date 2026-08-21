@@ -4,11 +4,17 @@ import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
+import {
+  AgentPlanReviewCard,
+  AgentExecutionStepper,
+  AgentHITLApprovalCard,
+} from '../components/AgentModeWidgets'
+import type { PlanStepItem, AgentTaskData } from '../components/AgentModeWidgets'
 
 
 
@@ -366,6 +372,14 @@ interface Message {
   compactionSummary?: string    // The summary text produced during compaction
 
   isArchived?: boolean          // Indicates if this message was archived due to compaction
+
+  agentTaskData?: AgentTaskData // Autonomous Agent Mode task plan and execution data
+
+  agentApprovalRequired?: {     // In-chat HITL safety confirmation gate
+    step: PlanStepItem
+    taskId: string
+    reason?: string
+  }
 
 }
 
@@ -1713,7 +1727,8 @@ function renderMath(tex: string, displayMode: boolean): React.ReactNode {
   const katex = (window as any).katex || (window as any).__katex;
   if (katex) {
     try {
-      const html = katex.renderToString(tex, { displayMode, throwOnError: false })
+      const sanitizedTex = (tex || '').replace(/[\u2010-\u2015\u2212]/g, '-')
+      const html = katex.renderToString(sanitizedTex, { displayMode, throwOnError: false, strict: false })
       return (
         <span
           className={displayMode ? 'block my-3 text-center overflow-x-auto' : 'inline'}
@@ -1728,6 +1743,10 @@ function renderMath(tex: string, displayMode: boolean): React.ReactNode {
 }
 
 function renderInline(text: string, keyBase: string, generatedFiles?: any[]): React.ReactNode {
+  // Normalize LaTeX \[ ... \] to $$...$$ and \( ... \) to $...$ for universal KaTeX math rendering
+  const normalizedText = (text || '')
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$${inner}$$`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${inner}$`)
 
   const pattern = /(\$\$([\s\S]*?)\$\$|\$(?!\s)([^\$]+?)(?<!\s)\$|\*\*(.*?)\*\*|\*(.*?)\*|`(.*?)`|\[(.*?)\]\((.*?)\)|(https?:\/\/[^\s\)<>"]+))/g
 
@@ -1737,11 +1756,11 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
 
   let match: RegExpExecArray | null
 
-  while ((match = pattern.exec(text)) !== null) {
+  while ((match = pattern.exec(normalizedText)) !== null) {
 
     if (match.index > lastIndex) {
 
-      segments.push(<span key={`${keyBase}-t${lastIndex}`}>{text.slice(lastIndex, match.index)}</span>)
+      segments.push(<span key={`${keyBase}-t${lastIndex}`}>{normalizedText.slice(lastIndex, match.index)}</span>)
 
     }
 
@@ -3708,7 +3727,7 @@ export const Dashboard: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState(false)
 
   // Mode also deferred — will be restored in the getUser() useEffect below.
-  const [mode, setMode] = useState<'think' | 'solve' | 'discuss'>('discuss')
+  const [mode, setMode] = useState<'think' | 'solve' | 'discuss' | 'agent'>('discuss')
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
@@ -4722,7 +4741,7 @@ export const Dashboard: React.FC = () => {
 
   }
 
-  const handleModeChange = async (newMode: 'think' | 'solve' | 'discuss') => {
+  const handleModeChange = async (newMode: 'think' | 'solve' | 'discuss' | 'agent') => {
 
     setMode(newMode)
 
@@ -5046,6 +5065,58 @@ export const Dashboard: React.FC = () => {
 
     } catch (_) {}
 
+  }
+
+  const handleApproveTask = async (taskId?: string) => {
+    if (!taskId) return
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token
+      if (!token) return
+      await fetch(`${API_BASE}/v1/agent-tasks/${taskId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ action: 'approve' }),
+      })
+      showToast('Plan approved! Agent executing...', 'info')
+    } catch (e) {
+      console.error('Failed to approve plan:', e)
+    }
+  }
+
+  const handleApproveHITL = async (taskId: string, stepIndex: number, action: 'approve' | 'skip' | 'cancel') => {
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token
+      if (!token) return
+      await fetch(`${API_BASE}/v1/agent-tasks/${taskId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ action, step_index: stepIndex }),
+      })
+      // Clear approval card from message
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.agentApprovalRequired?.taskId === taskId
+            ? { ...m, agentApprovalRequired: undefined }
+            : m
+        )
+      )
+      showToast(
+        action === 'approve'
+          ? 'Action approved! Continuing...'
+          : action === 'skip'
+          ? 'Step skipped.'
+          : 'Task cancelled.',
+        'info'
+      )
+    } catch (e) {
+      console.error('Failed to process approval action:', e)
+    }
   }
 
   const triggerStream = async (history: Message[], newUserMessage: string | Message, overrideConvoId?: string, attachments?: any[]) => {
@@ -5911,6 +5982,128 @@ export const Dashboard: React.FC = () => {
                   return updated
                 })
               }
+
+            } else if (data.type === 'agent_plan') {
+
+              const planData: PlanStepItem[] = data.plan || []
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = { ...updated[updated.length - 1] }
+                  last.agentTaskData = {
+                    id: data.task_id,
+                    task_id: data.task_id,
+                    state: data.state || 'executing',
+                    plan: planData,
+                    current_step: 1,
+                  }
+                  updated[updated.length - 1] = last
+                }
+                return updated
+              })
+
+            } else if (data.type === 'agent_step_start') {
+
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = { ...updated[updated.length - 1] }
+                  if (last.agentTaskData) {
+                    const plan = [...(last.agentTaskData.plan || [])]
+                    const stepIdx = data.step_index
+                    const step = plan.find((s) => s.index === stepIdx)
+                    if (step) {
+                      step.status = 'running'
+                    }
+                    last.agentTaskData = {
+                      ...last.agentTaskData,
+                      current_step: stepIdx,
+                      plan,
+                    }
+                  }
+                  updated[updated.length - 1] = last
+                }
+                return updated
+              })
+
+            } else if (data.type === 'agent_step_complete') {
+
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = { ...updated[updated.length - 1] }
+                  if (last.agentTaskData) {
+                    const plan = [...(last.agentTaskData.plan || [])]
+                    const stepIdx = data.step_index
+                    const step = plan.find((s) => s.index === stepIdx)
+                    if (step) {
+                      step.status = data.status === 'failed' ? 'failed' : 'completed'
+                      step.result_summary = data.result_summary || null
+                      step.duration_ms = data.duration_ms
+                      step.token_spend = data.token_spend
+                      if (data.artifacts) {
+                        step.artifacts = data.artifacts
+                      }
+                    }
+                    const newArtifacts = data.artifacts || []
+                    const currentArtifacts = last.agentTaskData.artifacts || []
+                    last.agentTaskData = {
+                      ...last.agentTaskData,
+                      plan,
+                      artifacts: [...currentArtifacts, ...newArtifacts],
+                      total_token_spend: (last.agentTaskData.total_token_spend || 0) + (data.token_spend || 0),
+                    }
+                  }
+                  updated[updated.length - 1] = last
+                }
+                return updated
+              })
+
+            } else if (data.type === 'agent_approval_required') {
+
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = { ...updated[updated.length - 1] }
+                  last.agentApprovalRequired = {
+                    step: data.step,
+                    taskId: data.task_id,
+                    reason: data.reason,
+                  }
+                  updated[updated.length - 1] = last
+                }
+                return updated
+              })
+
+            } else if (data.type === 'agent_task_complete') {
+
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = { ...updated[updated.length - 1] }
+                  if (last.agentTaskData) {
+                    const plan: PlanStepItem[] = (last.agentTaskData.plan || []).map((s) => ({
+                      ...s,
+                      status: s.status === 'failed' ? ('failed' as const) : ('completed' as const),
+                    }))
+                    last.agentTaskData = {
+                      ...last.agentTaskData,
+                      plan,
+                      state: 'completed',
+                      current_step: plan.length,
+                      total_token_spend: data.total_token_spend || last.agentTaskData.total_token_spend,
+                      artifacts: data.artifacts || last.agentTaskData.artifacts,
+                    }
+                  }
+                  last.agentApprovalRequired = undefined
+                  updated[updated.length - 1] = last
+                }
+                return updated
+              })
+
+            } else if (data.type === 'agent_time_warning') {
+
+              showToast(data.message || 'Approaching task time limit...', 'info')
 
             } else if (data.type === 'error') {
 
@@ -7888,6 +8081,52 @@ export const Dashboard: React.FC = () => {
 
                           )}
 
+                          {/* Autonomous Agent Mode Widgets — rendered ABOVE the streaming text response */}
+                          {msg.agentTaskData?.plan && msg.agentTaskData.plan.length > 0 && (
+                            msg.agentTaskData.state === 'awaiting_approval' ? (
+                              <AgentPlanReviewCard
+                                plan={msg.agentTaskData.plan}
+                                taskId={msg.agentTaskData.id}
+                                isExecuting={isStreaming && i === messages.length - 1}
+                                onApprove={() => handleApproveTask(msg.agentTaskData?.id)}
+                              />
+                            ) : (
+                              <AgentExecutionStepper
+                                task={msg.agentTaskData}
+                              />
+                            )
+                          )}
+
+                          {/* In-chat HITL Approval Card */}
+                          {msg.agentApprovalRequired && (
+                            <AgentHITLApprovalCard
+                              step={msg.agentApprovalRequired.step}
+                              taskId={msg.agentApprovalRequired.taskId}
+                              reason={msg.agentApprovalRequired.reason}
+                              onApprove={() =>
+                                handleApproveHITL(
+                                  msg.agentApprovalRequired!.taskId,
+                                  msg.agentApprovalRequired!.step.index,
+                                  'approve'
+                                )
+                              }
+                              onSkip={() =>
+                                handleApproveHITL(
+                                  msg.agentApprovalRequired!.taskId,
+                                  msg.agentApprovalRequired!.step.index,
+                                  'skip'
+                                )
+                              }
+                              onCancel={() =>
+                                handleApproveHITL(
+                                  msg.agentApprovalRequired!.taskId,
+                                  msg.agentApprovalRequired!.step.index,
+                                  'cancel'
+                                )
+                              }
+                            />
+                          )}
+
                           {msg.content && msg.content.trim().length > 0 && renderRichContent(
 
                             msg.content,
@@ -7961,6 +8200,8 @@ export const Dashboard: React.FC = () => {
                             </div>
 
                           )}
+
+
 
                           {/* Image pending spinner or resolved image — always below file cards */}
 
@@ -8302,6 +8543,7 @@ export const Dashboard: React.FC = () => {
                 }}
                 placeholder={
                   voice.isRecording ? 'Listening...' :
+                  mode === 'agent' ? 'Describe your goal — Agent Ochuko will plan and execute it...' :
                   attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
                   pastedText ? 'Add prompt details for the pasted text...' : "Let's talk"
                 }
@@ -8348,8 +8590,10 @@ export const Dashboard: React.FC = () => {
                     { id: 'think', label: 'Think', icon: Brain },
                     { id: 'solve', label: 'Solve', icon: Cpu },
                     { id: 'discuss', label: 'Discuss', icon: MessageSquare },
+                    { id: 'agent', label: 'Agent', icon: Bot },
                   ] as const).map(({ id, label, icon: Icon }) => {
                     const active = mode === id
+                    const isAgent = id === 'agent'
                     return (
                       <button
                         key={id}
@@ -8357,7 +8601,11 @@ export const Dashboard: React.FC = () => {
                         onClick={() => handleModeChange(id)}
                         className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-bold transition-all duration-150 tracking-wider uppercase ${
                           active
-                            ? 'bg-[#ffffff]/8 text-[#ffffff] shadow-sm'
+                            ? isAgent
+                              ? 'bg-brand-accent/25 text-brand-accent border border-brand-accent/40 shadow-sm shadow-brand-accent/20'
+                              : 'bg-[#ffffff]/8 text-[#ffffff] shadow-sm'
+                            : isAgent
+                            ? 'text-brand-accent/70 hover:text-brand-accent hover:bg-brand-accent/10'
                             : 'text-brand-muted hover:text-brand-text/75'
                         }`}
                       >

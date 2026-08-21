@@ -2,18 +2,12 @@
 """
 Capability self-awareness layer for Agent Ochuko.
 
-This module is the single source of truth for what the agent can render
-and which sub-agents it can route to.
+This module is the single source of truth for what the agent can render,
+which sub-agents it can route to, and Agent Mode autonomous capabilities.
 
 build_capability_section() generates the rendering + sub-agent section
 of the system prompt at request time. It is injected into full_system
 in chat.py AFTER _OCHUKO_RULE (which already covers identity + tone).
-
-To add a capability:
-  1. Add it to CAPABILITY_REGISTRY below.
-  2. Reference it in build_capability_section() if needed.
-  3. Add the frontend renderer in Dashboard.tsx.
-  That's it. The agent knows about it on the next request.
 """
 
 from datetime import datetime, timezone
@@ -108,6 +102,23 @@ CAPABILITY_REGISTRY = {
             "not_for": "Structured diagrams (use Mermaid), data charts (use Code Executor), web search",
         },
     },
+    "agent_mode": {
+        "description": "Autonomous multi-step task execution with structured planning, sub-agent delegation, HITL safety gates, and artifact provenance.",
+        "activation": "User selects Agent mode or submits complex goal",
+        "capabilities": [
+            "Decomposes goals into sequential, actionable plan steps",
+            "Interactive plan review and real-time step modification",
+            "Sub-agent token isolation (absorbs raw tool dumps and returns compressed summaries)",
+            "Human-in-the-loop approval pauses for high-risk deliverable generations",
+            "Real-time execution stepper with duration budgeting and circuit breakers",
+            "Artifact deliverable production with storage and provenance tracking",
+        ],
+        "limits": {
+            "max_steps": 12,
+            "max_duration_seconds": 300,
+            "step_timeout_seconds": 90,
+        },
+    },
     "file_handling": {
         "upload": "Users can upload images, PDFs, CSV, Excel, Word, and text files (max 20 MB)",
         "download": "Generated files appear as download cards in the chat bubble automatically",
@@ -118,8 +129,6 @@ CAPABILITY_REGISTRY = {
 
 
 # ─── CAPABILITY SECTION BUILDER ───────────────────────────────────────────────
-# Generates only the rendering + sub-agent section of the system prompt.
-# Identity + tone are already in _OCHUKO_RULE in chat.py — no duplication.
 
 def build_capability_section() -> str:
     r = CAPABILITY_REGISTRY["rendering"]
