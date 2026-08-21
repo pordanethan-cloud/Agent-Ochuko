@@ -17,6 +17,8 @@ from app.api.v1.endpoints.agents import router as agents_router
 from app.api.v1.endpoints.search import router as search_router
 from app.api.v1.endpoints.audio import router as audio_router
 from app.api.v1.endpoints.shared import router as shared_router
+from app.api.v1.endpoints.hosted_sites import router as hosted_sites_router
+from app.api.v1.endpoints.connectors import router as connectors_router
 from app.middleware import (
     MaintenanceGuardMiddleware,
     BlockGuardMiddleware,
@@ -140,6 +142,8 @@ app.include_router(agents_router, prefix="/v1/agents", tags=["agents"])
 app.include_router(search_router, prefix="/v1/search", tags=["search"])
 app.include_router(audio_router, prefix="/v1/audio", tags=["audio"])  # voice-to-text transcriptions
 app.include_router(shared_router, prefix="/v1/shared", tags=["shared"])
+app.include_router(hosted_sites_router, prefix="/v1/sites", tags=["sites"])
+app.include_router(connectors_router, prefix="/v1", tags=["connectors"])
 
 
 # ── Health & Readiness Probes ─────────────────────────────────────────────

@@ -46,15 +46,26 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "[\n"
     "  {\n"
     "    \"index\": 1,\n"
-    "    \"description\": \"Specific step action description (e.g. Search for 2026 Nigerian tax act changes)\",\n"
-    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"execute_code\" | \"generate_image\" | \"visualize__show_widget\" | null,\n"
+    "    \"description\": \"Specific step action description (e.g. Scrape pricing data from URL, Look up @handle on GitHub, Deploy landing page)\",\n"
+    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"generate_image\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
     "    \"risk_level\": \"low\" | \"medium\" | \"high\"\n"
     "  }\n"
     "]\n\n"
+    "Tool Selection Directives:\n"
+    "- When user provides a URL or asks to scrape/crawl/browse a webpage: use tool_name=\"scrape_web\".\n"
+    "- When user asks to look up a GitHub username or social profile: use tool_name=\"lookup_handle\".\n"
+    "- When user asks to build, deploy, or create a web app, website, landing page, or calculator: use tool_name=\"deploy_site\".\n"
+    "- When user asks to search or read emails: use tool_name=\"gmail_search\" or \"gmail_read\".\n"
+    "- When user asks to send or compose an email: use tool_name=\"gmail_send\" (risk_level=\"high\").\n"
+    "- When user asks to check calendar or availability: use tool_name=\"calendar_list_events\" or \"calendar_check_availability\".\n"
+    "- When user asks to schedule a meeting or create an event: use tool_name=\"calendar_create_event\" (risk_level=\"high\").\n"
+    "- When user asks to find, browse, or fetch photos: use tool_name=\"photos_search\", \"photos_list\", or \"photos_get\".\n"
+    "- When user asks to upload or save a photo to Google Photos: use tool_name=\"photos_upload\" (risk_level=\"high\").\n"
+    "- When user asks for general web data, live facts, or research: use tool_name=\"search_web\".\n\n"
     "Risk Level Guidelines:\n"
-    "- 'low': Reading / research (search_web, deep_research, reading context)\n"
+    "- 'low': Reading / research (search_web, deep_research, scrape_web, lookup_handle, gmail_search, gmail_read, calendar_list_events, calendar_check_availability, photos_search, photos_list, photos_get)\n"
     "- 'medium': Safe computation (execute_code without file writes, widget rendering)\n"
-    "- 'high': Deliverable generation (execute_code with PDF/Excel/file generation, generate_image, mutations)\n\n"
+    "- 'high': External writes & file mutations (deploy_site, gmail_send, calendar_create_event, photos_upload, execute_code with PDF/Excel/file generation, generate_image)\n\n"
     "Rules:\n"
     "1. Keep descriptions crisp and actionable.\n"
     "2. If the goal is a simple greeting or direct single question, return a 1-step plan with tool_name=null and risk_level='low'.\n"
@@ -149,6 +160,88 @@ async def generate_plan(
         return None
 
 
+def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "low") -> List[PlanStep]:
+    """Context-aware programmatic fallback plan generator."""
+    pasted_full = re.search(r"\[Pasted Content:[^\]]*\]\s*```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```", goal, flags=re.IGNORECASE)
+    if pasted_full:
+        prefix = goal[:pasted_full.start()].strip()
+        body = pasted_full.group(1).strip()
+        goal = f"{prefix} {body}".strip() if prefix else body
+    else:
+        pasted_single = re.search(r"\[Pasted Content:\s*([^\]]+)\]", goal, flags=re.IGNORECASE)
+        if pasted_single:
+            goal = pasted_single.group(1).strip()
+
+    needs_deploy = bool(re.search(r"\b(build\s+(?:and\s+)?deploy|deploy|create\s+(?:a\s+)?(?:web\s*app|website|landing\s*page|portfolio|calculator|dashboard)|interactive\s+web\s*app)\b", goal, re.IGNORECASE))
+    needs_scrape = bool(re.search(r"\b(scrape|crawl|visit\s+https?://|extract\s+from\s+https?://|https?://[^\s]+)\b", goal, re.IGNORECASE))
+    needs_profile = bool(re.search(r"\b(github|github\.com|profile\s+@|@\w+)\b", goal, re.IGNORECASE))
+    needs_search = bool(re.search(r"\b(find|search|lookup|look up|research|who|what|when|where|latest|news|today|price|stock|weather)\b", goal, re.IGNORECASE)) or len(goal) > 25
+    needs_code = bool(re.search(r"\b(code|python|script|calculate|compute|math|csv|excel|pdf|docx|file|chart|plot)\b", goal, re.IGNORECASE))
+
+    fallback_steps = []
+    step_idx = 1
+
+    if needs_deploy:
+        fallback_steps.append(PlanStep(
+            index=step_idx,
+            description=f"Design and deploy interactive web app: {goal[:60]}",
+            tool_name="deploy_site",
+            risk_level=RiskLevel.HIGH,
+            status=StepStatus.PENDING,
+        ))
+        step_idx += 1
+    elif needs_scrape:
+        fallback_steps.append(PlanStep(
+            index=step_idx,
+            description=f"Scrape URL and extract content: {goal[:60]}",
+            tool_name="scrape_web",
+            risk_level=RiskLevel.LOW,
+            status=StepStatus.PENDING,
+        ))
+        step_idx += 1
+    elif needs_profile:
+        fallback_steps.append(PlanStep(
+            index=step_idx,
+            description=f"Look up developer profile: {goal[:60]}",
+            tool_name="lookup_handle",
+            risk_level=RiskLevel.LOW,
+            status=StepStatus.PENDING,
+        ))
+        step_idx += 1
+    else:
+        if needs_search:
+            fallback_steps.append(PlanStep(
+                index=step_idx,
+                description=f"Gather data & facts for: {goal[:70]}",
+                tool_name="search_web",
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+            ))
+            step_idx += 1
+
+        if needs_code:
+            fallback_steps.append(PlanStep(
+                index=step_idx,
+                description="Process computation and code execution",
+                tool_name="execute_code",
+                risk_level=RiskLevel.MEDIUM,
+                status=StepStatus.PENDING,
+            ))
+            step_idx += 1
+
+    fallback_steps.append(PlanStep(
+        index=step_idx,
+        description="Synthesize structured answer and takeaways",
+        tool_name=None,
+        risk_level=RiskLevel.LOW,
+        status=StepStatus.PENDING,
+    ))
+
+    for s in fallback_steps:
+        HITLGate.requires_approval(s, auto_approve_level=auto_approve_level)
+    return fallback_steps
+
+
 async def generate_structured_plan(
     goal: str,
     conversation_history: Optional[List[Dict[str, Any]]] = None,
@@ -171,24 +264,26 @@ async def generate_structured_plan(
             )
         ]
 
+    # 1. Immediate recognition for greetings & simple conversational inputs
+    greeting_re = re.compile(
+        r"^\s*(hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|"
+        r"who\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you|help|thanks|thank\s+you|"
+        r"sup|yo|testing|test)\b[!?.]*\s*$",
+        re.IGNORECASE,
+    )
+    if greeting_re.match(goal.strip()):
+        step = PlanStep(
+            index=1,
+            description="Respond directly to user inquiry and introduce available autonomous capabilities",
+            tool_name=None,
+            risk_level=RiskLevel.LOW,
+            status=StepStatus.PENDING,
+        )
+        HITLGate.requires_approval(step, auto_approve_level=auto_approve_level)
+        return [step]
+
     if openai_client is None:
-        # Default programmatic decomposition
-        return [
-            PlanStep(
-                index=1,
-                description=f"Analyze and retrieve facts for: {goal[:80]}",
-                tool_name="search_web",
-                risk_level=RiskLevel.LOW,
-                status=StepStatus.PENDING,
-            ),
-            PlanStep(
-                index=2,
-                description="Synthesize final findings and deliverables",
-                tool_name=None,
-                risk_level=RiskLevel.LOW,
-                status=StepStatus.PENDING,
-            ),
-        ]
+        return _programmatic_fallback_plan(goal, auto_approve_level=auto_approve_level)
 
     try:
         history_snippet = ""
@@ -270,33 +365,7 @@ async def generate_structured_plan(
     except Exception as err:
         logger.warning(f"Structured plan generation failed, using robust fallback: {err}")
 
-    # Robust fallback plan
-    fallback_steps = [
-        PlanStep(
-            index=1,
-            description=f"Gather data & search facts for: {goal[:70]}",
-            tool_name="search_web",
-            risk_level=RiskLevel.LOW,
-            status=StepStatus.PENDING,
-        ),
-        PlanStep(
-            index=2,
-            description="Process information & execute analysis",
-            tool_name="execute_code",
-            risk_level=RiskLevel.MEDIUM,
-            status=StepStatus.PENDING,
-        ),
-        PlanStep(
-            index=3,
-            description="Synthesize structured deliverables and summary",
-            tool_name=None,
-            risk_level=RiskLevel.LOW,
-            status=StepStatus.PENDING,
-        ),
-    ]
-    for s in fallback_steps:
-        HITLGate.requires_approval(s, auto_approve_level=auto_approve_level)
-    return fallback_steps
+    return _programmatic_fallback_plan(goal, auto_approve_level=auto_approve_level)
 
 
 async def refine_plan(

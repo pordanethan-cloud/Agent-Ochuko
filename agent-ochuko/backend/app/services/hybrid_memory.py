@@ -97,19 +97,19 @@ class AgentContextCompressor:
             results_lines.append(f"- Step {s.index} ({s.description}): {summary}")
 
         results_text = "\n".join(results_lines)
-        artifacts_text = ""
         if task.artifacts:
             artifacts_text = "\n\nGENERATED ARTIFACTS / DELIVERABLES:\n" + "\n".join(
                 f"- {a.get('filename')}: {a.get('download_url')}" for a in task.artifacts
             )
+        else:
+            artifacts_text = "\n\n(No downloadable files or artifacts were created. Do NOT invent, simulate, or list any filenames or deliverable tables.)"
 
         return (
             f"ORIGINAL GOAL: {task.goal}\n\n"
             f"ALL EXECUTED STEP RESULTS:\n{results_text}"
             f"{artifacts_text}\n\n"
-            f"Synthesize the complete, comprehensive final answer for the user. "
-            f"Structure clearly with sections, tables, or code where relevant. "
-            f"Reference any created files or deliverables."
+            f"Synthesize a compact, precise, beautifully structured answer answering the goal directly.\n"
+            f"If and ONLY if actual deliverables are listed above under GENERATED ARTIFACTS, you may reference them. Never hallucinate fake files."
         )
 
 

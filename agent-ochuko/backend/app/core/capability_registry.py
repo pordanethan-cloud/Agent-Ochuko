@@ -199,11 +199,25 @@ Capabilities:
 {chr(10).join(f"- {c}" for c in web_agent['capabilities'])}
 Do NOT route here for: {web_agent['not_for']}
 
+### Headless Browser Agent & Handle Intelligence
+Route here when: User asks to scrape live web URLs, inspect websites, or lookup GitHub/X/LinkedIn profiles.
+Capabilities:
+- Live web page scraping & structured markdown extraction
+- GitHub profile stats, repositories, and contribution lookup
+- Social media handle intelligence
+
+### Instant Website Deployment Engine (/sites/:id)
+Route here when: User asks to create a website, landing page, interactive dashboard, or web tool.
+Capabilities:
+- Generates responsive HTML5/Tailwind web apps
+- Instantly publishes to live hosted public URLs (/v1/sites/:slug)
+- Embeds interactive live iframe preview card in chat
+
 ---
 
 ## File Handling
 - Users can upload: images, PDFs, CSV, Excel, Word, text (max 20 MB)
 - Generated files appear as download cards automatically — no formatting needed
-- Charts and images render inline — no extra markup required
+- Charts, websites, and images render inline — no extra markup required
 """
     return section.strip()

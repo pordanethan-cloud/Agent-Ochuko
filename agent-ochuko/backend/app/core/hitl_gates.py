@@ -11,9 +11,16 @@ from app.core.agent_task_models import PlanStep, RiskLevel
 
 logger = logging.getLogger("app.core.hitl_gates")
 
-LOW_RISK_TOOLS = {"search_web", "deep_research", "visualize__read_me"}
+LOW_RISK_TOOLS = {
+    "search_web", "deep_research", "visualize__read_me",
+    "gmail_search", "gmail_read", "calendar_list_events", "calendar_check_availability",
+    "photos_search", "photos_list", "photos_get",
+}
 MEDIUM_RISK_TOOLS = {"visualize__show_widget"}
-HIGH_RISK_TOOLS = {"generate_image", "browse_web"}
+HIGH_RISK_TOOLS = {
+    "generate_image", "browse_web", "deploy_site",
+    "gmail_send", "calendar_create_event", "photos_upload",
+}
 
 _CODE_FILE_WRITE_PATTERNS = re.compile(
     r"\b(open\s*\([^)]*['\"][wWaA][bBtT]?\+?['\"]|to_csv|to_excel|to_pdf|savefig|"
@@ -40,6 +47,11 @@ class HITLGate:
         if tool in HIGH_RISK_TOOLS:
             return RiskLevel.HIGH
 
+        if tool in LOW_RISK_TOOLS:
+            return RiskLevel.LOW
+
+
+
         if tool == "execute_code":
             hint_code = ""
             if step.tool_args_hint and isinstance(step.tool_args_hint, dict):
@@ -52,14 +64,11 @@ class HITLGate:
                 return RiskLevel.HIGH
             return RiskLevel.MEDIUM
 
-        if tool in LOW_RISK_TOOLS:
-            return RiskLevel.LOW
-
         if tool in MEDIUM_RISK_TOOLS:
             return RiskLevel.MEDIUM
 
         # Default fallback based on keyword scan of step description
-        if any(w in desc for w in ["write", "create file", "delete", "send", "generate", "export", "pdf", "report"]):
+        if any(w in desc for w in ["write", "create file", "delete", "send", "generate", "export", "pdf", "report", "deploy"]):
             return RiskLevel.HIGH
         elif any(w in desc for w in ["render", "display", "plot", "calculate"]):
             return RiskLevel.MEDIUM

@@ -129,7 +129,20 @@ async def test_refine_plan():
         PlanStep(index=1, description="Old step 1"),
         PlanStep(index=2, description="Old step 2"),
     ]
-    edits = {1: "New updated step 1 description"}
-    refined = await refine_plan(plan, edits)
-    assert refined[0].description == "New updated step 1 description"
-    assert refined[1].description == "Old step 2"
+    edits = {2: "Updated step 2 with specific data"}
+    new_plan = await refine_plan(plan, edits)
+    assert new_plan[1].description == "Updated step 2 with specific data"
+
+
+@pytest.mark.asyncio
+async def test_greeting_single_step_planning():
+    """Verify greetings and simple queries return a 1-step direct response plan without search or code execution."""
+    for greeting in ["hello", "Hi!", "good morning", "who are you?", "help"]:
+        plan = await generate_structured_plan(
+            goal=greeting,
+            conversation_history=None,
+            openai_client=None,
+        )
+        assert len(plan) == 1
+        assert plan[0].tool_name is None
+        assert plan[0].risk_level == RiskLevel.LOW

@@ -38,14 +38,15 @@ router = APIRouter()
 # The backend strips these out, emits them as thinking_delta SSE events, and
 # the frontend renders them in a collapsible panel — no new model required.
 _THINKING_INSTRUCTION = (
-    "\n\nREASONING FORMAT:\n"
-    "Before giving your final answer, wrap your reasoning in <thinking> tags:\n"
+    "\n\nREASONING MANDATE (THINK MODE):\n"
+    "Before formulating your response, perform thorough step-by-step reasoning enclosed in <thinking>...</thinking> tags:\n"
     "<thinking>\n"
-    "Think through the problem step by step. Question your first interpretation. "
-    "Check for false assumptions. Consider what the user actually needs vs what they literally asked. "
-    "If your initial reasoning has a flaw, correct it here before writing the answer.\n"
+    "Break down the user's intent, evaluate potential edge cases, fact check assumptions, and outline your approach.\n"
     "</thinking>\n"
-    "After the closing tag, write the clean final answer with no reference to the thinking block."
+    "CRITICAL RULES:\n"
+    "1. After the closing </thinking> tag, you MUST ALWAYS provide the complete, detailed, polished final answer directly to the user.\n"
+    "2. If you realize during thinking that you need live web information or code execution, immediately trigger the appropriate function call tool.\n"
+    "3. NEVER terminate your stream after </thinking> without writing out the full synthesized response."
 )
 
 _THINK_OPEN_RE = re.compile(r"<(?:thinking|think|reasoning)>", re.IGNORECASE)
@@ -887,33 +888,53 @@ async def chat_stream_generator(
                                 for p in c
                                 if not isinstance(p, dict) or p.get("type") in ("text", "input_text")
                             )
+                        # Unwrap full pasted content body from between ``` fences if present
+                        pasted_full = re.search(r"\[Pasted Content:[^\]]*\]\s*```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```", last_user_goal, flags=re.IGNORECASE)
+                        if pasted_full:
+                            prefix = last_user_goal[:pasted_full.start()].strip()
+                            body = pasted_full.group(1).strip()
+                            last_user_goal = f"{prefix} {body}".strip() if prefix else body
+                        else:
+                            pasted_single = re.search(r"\[Pasted Content:\s*([^\]]+)\]", last_user_goal, flags=re.IGNORECASE)
+                            if pasted_single:
+                                last_user_goal = pasted_single.group(1).strip()
                         break
 
-            agent_cfg = await get_agent_mode_config()
-            task = AgentTask(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                goal=last_user_goal or "Execute autonomous task",
-                max_duration_seconds=agent_cfg.get("max_duration_seconds", 300),
-            )
-            manager = AgentTaskManager(
-                task=task,
-                openai_client=client,
-                deployment=deployment,
-                nano_deployment=deployment,
-                config=agent_cfg,
-                supabase_client=get_supabase_admin(),
-            )
-            # Initialize plan and stream execution
-            await manager.init_plan(history=messages[:-1] if len(messages) > 1 else None)
-            async for sse_event in manager.execute_plan_stream(
-                search_fn=_perform_google_search,
-                deep_research_fn=_perform_parallel_searches,
-            ):
-                yield sse_event
+            is_greeting = bool(re.match(
+                r"^\s*(hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|"
+                r"who\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you|help|thanks|thank\s+you|"
+                r"sup|yo|testing|test)\b[!?.]*\s*$",
+                (last_user_goal or "").strip(),
+                re.IGNORECASE,
+            ))
 
-            yield "data: [DONE]\n\n"
-            return
+            # Only spin up autonomous multi-step orchestrator for non-greeting tasks
+            if not is_greeting:
+                agent_cfg = await get_agent_mode_config()
+                task = AgentTask(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    goal=last_user_goal or "Execute autonomous task",
+                    max_duration_seconds=agent_cfg.get("max_duration_seconds", 300),
+                )
+                manager = AgentTaskManager(
+                    task=task,
+                    openai_client=client,
+                    deployment=deployment,
+                    nano_deployment=deployment,
+                    config=agent_cfg,
+                    supabase_client=get_supabase_admin(),
+                )
+                # Initialize plan and stream execution
+                await manager.init_plan(history=messages[:-1] if len(messages) > 1 else None)
+                async for sse_event in manager.execute_plan_stream(
+                    search_fn=_perform_google_search,
+                    deep_research_fn=_perform_parallel_searches,
+                ):
+                    yield sse_event
+
+                yield "data: [DONE]\n\n"
+                return
 
         # Pre-loop agent task planning for complex multi-step goals
         try:
@@ -990,6 +1011,7 @@ async def chat_stream_generator(
             from app.core.widget_tools import WIDGET_TOOLS
             stream_kwargs: Dict[str, Any] = {
                 "model": deployment,
+                "max_output_tokens": 4096,
                 "tools": [
                     # Two-tool inline widget renderer (read_me + show_widget)
                     *WIDGET_TOOLS,
@@ -1644,6 +1666,46 @@ async def chat_stream_generator(
                 continue
 
             break
+
+        # Think/Solve Mode Fallback: if reasoning occurred but no final answer was emitted, auto-synthesize the response
+        if (
+            not stream_failed
+            and routing_mode in ("think", "solve")
+            and not assistant_content.strip()
+            and accumulated_thinking.strip()
+        ):
+            logger.info("Think mode generated reasoning without final answer. Auto-synthesizing response...")
+            yield (
+                "data: "
+                + json.dumps({
+                    "type": "search_activity",
+                    "status": "searching",
+                    "label": "Formulating detailed answer...",
+                })
+                + "\n\n"
+            )
+            try:
+                synth_input = local_messages + [
+                    {"role": "system", "content": full_system},
+                    {"role": "assistant", "content": f"<thinking>\n{accumulated_thinking}\n</thinking>"},
+                    {"role": "user", "content": "Based on your thorough reasoning above, deliver your complete, detailed final response directly to the user."}
+                ]
+                async with client.responses.stream(
+                    model=deployment,
+                    input=[normalize_responses_message(m) for m in synth_input],
+                    max_output_tokens=4096,
+                ) as synth_stream:
+                    async for s_event in synth_stream:
+                        if s_event.type == "response.output_text.delta":
+                            s_chunk = s_event.delta
+                            assistant_content += s_chunk
+                            yield (
+                                "data: "
+                                + json.dumps({"type": "content_block_delta", "delta": {"text": s_chunk}})
+                                + "\n\n"
+                            )
+            except Exception as synth_err:
+                logger.warning(f"Think mode auto-synthesis error: {synth_err}")
 
         if stream_failed:
             lower_err = error_message.lower()

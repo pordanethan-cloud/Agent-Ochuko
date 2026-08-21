@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Sliders } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -13,8 +13,10 @@ import {
   AgentPlanReviewCard,
   AgentExecutionStepper,
   AgentHITLApprovalCard,
+  AgentSiteDeploymentCard,
 } from '../components/AgentModeWidgets'
 import type { PlanStepItem, AgentTaskData } from '../components/AgentModeWidgets'
+import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
 
 
 
@@ -3372,12 +3374,24 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: st
 
 const ThinkingPanel: React.FC<{ content: string; isStreaming?: boolean }> = ({ content, isStreaming }) => {
   const [expanded, setExpanded] = useState<boolean>(!!isStreaming)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
+  // Auto-expand when reasoning starts, auto-collapse when final answer finishes
   useEffect(() => {
     if (isStreaming) {
       setExpanded(true)
+    } else {
+      // Auto-collapse cleanly once reasoning + response complete
+      setExpanded(false)
     }
   }, [isStreaming])
+
+  // Auto-scroll to keep latest thought tokens in view while streaming
+  useEffect(() => {
+    if (isStreaming && expanded && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [content, isStreaming, expanded])
 
   if (!content || !content.trim()) return null
 
@@ -3385,28 +3399,49 @@ const ThinkingPanel: React.FC<{ content: string; isStreaming?: boolean }> = ({ c
   const wordCount = trimmed.split(/\s+/).length
 
   return (
-    <div className="my-2.5 rounded-xl bg-[#0b0c10]/95 border border-white/[0.08] shadow-lg overflow-hidden select-none animate-fadeIn transition-all duration-200">
+    <div className={`my-2 rounded-xl border overflow-hidden select-none transition-all duration-300 ${
+      isStreaming 
+        ? 'bg-[#0f111a]/95 border-amber-500/25 shadow-[0_0_15px_rgba(245,158,11,0.08)]' 
+        : 'bg-[#0b0c10]/95 border-white/[0.08] shadow-md'
+    }`}>
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="w-full flex items-center justify-between px-3.5 py-2 bg-[#14161f]/70 hover:bg-[#1a1d29]/90 border-b border-white/[0.05] transition duration-150 text-left"
+        className="w-full flex items-center justify-between px-3.5 py-2.5 bg-[#141622]/80 hover:bg-[#1a1d2d] border-b border-white/[0.05] transition-colors duration-150 text-left"
       >
         <div className="flex items-center gap-2.5 min-w-0">
-          <Brain className={`w-3.5 h-3.5 shrink-0 ${isStreaming ? 'text-amber-400 animate-pulse' : 'text-[#8e95a2]'}`} />
-          <span className="text-[11.5px] font-mono font-medium text-[#c5a880] tracking-wide truncate">
-            {isStreaming ? 'Thinking...' : `Thought process (${wordCount} words)`}
+          <div className={`relative flex items-center justify-center w-5 h-5 rounded-md ${
+            isStreaming ? 'bg-amber-500/15 text-amber-400' : 'bg-white/[0.05] text-[#8e95a2]'
+          }`}>
+            <Brain className={`w-3.5 h-3.5 ${isStreaming ? 'animate-pulse' : ''}`} />
+            {isStreaming && (
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+            )}
+          </div>
+          <span className="text-[12px] font-mono font-medium text-[#c5a880] tracking-wide truncate">
+            {isStreaming ? 'Reasoning step-by-step...' : `Thought process (${wordCount} words)`}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0 text-[#8e95a2]">
-          {isStreaming && (
-            <span className="text-[10px] font-mono text-amber-400/80 animate-pulse">Reasoning...</span>
+          {isStreaming ? (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span>Thinking</span>
+            </div>
+          ) : (
+            <span className="text-[10.5px] font-sans text-white/40">
+              {expanded ? 'Hide' : 'Show details'}
+            </span>
           )}
-          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          {expanded ? <ChevronUp className="w-3.5 h-3.5 text-white/50" /> : <ChevronDown className="w-3.5 h-3.5 text-white/50" />}
         </div>
       </button>
 
       {expanded && (
-        <div className="p-3.5 max-h-80 overflow-y-auto font-mono text-[11.5px] text-[#9a9090] leading-relaxed whitespace-pre-wrap select-text bg-[#07080b]/90 border-t border-white/[0.03]">
+        <div
+          ref={scrollRef}
+          className="p-3.5 max-h-80 overflow-y-auto font-mono text-[11.5px] text-[#a09e9e] leading-relaxed whitespace-pre-wrap select-text bg-[#07080c]/95 border-t border-white/[0.03] transition-all"
+        >
           {trimmed}
         </div>
       )}
@@ -3798,6 +3833,7 @@ export const Dashboard: React.FC = () => {
   const [isArtifactExpanded, setIsArtifactExpanded] = useState(false)
   const [copiedArtifact, setCopiedArtifact] = useState(false)
   const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
+  const [isConnectorModalOpen, setIsConnectorModalOpen] = useState(false)
   const [isArtifactCopyOpen, setIsArtifactCopyOpen] = useState(false)
   const headerSettingsRef = useRef<HTMLDivElement>(null)
   const artifactCopyRef = useRef<HTMLDivElement>(null)
@@ -5965,6 +6001,12 @@ export const Dashboard: React.FC = () => {
                 })
               )
               if (newFiles.length > 0) {
+                // Auto-open first generated file in preview sidebar
+                setActiveArtifact({
+                  filename: newFiles[0].filename,
+                  downloadUrl: newFiles[0].download_url,
+                  sizeBytes: newFiles[0].size_bytes,
+                })
                 setMessages((prev) => {
                   const updated = [...prev]
                   if (updated.length > 0) {
@@ -6028,6 +6070,16 @@ export const Dashboard: React.FC = () => {
 
             } else if (data.type === 'agent_step_complete') {
 
+              // Auto-open newly produced step artifact in preview sidebar
+              if (data.artifacts && data.artifacts.length > 0) {
+                const firstArt = data.artifacts[0]
+                setActiveArtifact({
+                  filename: firstArt.filename || firstArt.title || 'Live Preview',
+                  downloadUrl: firstArt.download_url || firstArt.url,
+                  sizeBytes: firstArt.size_bytes || 0,
+                })
+              }
+
               setMessages((prev) => {
                 const updated = [...prev]
                 if (updated.length > 0) {
@@ -6076,6 +6128,16 @@ export const Dashboard: React.FC = () => {
               })
 
             } else if (data.type === 'agent_task_complete') {
+
+              // Auto-open any final deliverable artifact in preview sidebar
+              if (data.artifacts && data.artifacts.length > 0) {
+                const firstArt = data.artifacts[0]
+                setActiveArtifact({
+                  filename: firstArt.filename || firstArt.title || 'Live Preview',
+                  downloadUrl: firstArt.download_url || firstArt.url,
+                  sizeBytes: firstArt.size_bytes || 0,
+                })
+              }
 
               setMessages((prev) => {
                 const updated = [...prev]
@@ -7412,6 +7474,14 @@ export const Dashboard: React.FC = () => {
               </button>
             )}
 
+            <button
+              onClick={() => setIsConnectorModalOpen(true)}
+              className="p-1.5 rounded-lg border border-[#1e2025] bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center mr-1"
+              title="Connected Apps"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+            </button>
+
             <div ref={headerSettingsRef} className="relative">
               <button
                 onClick={() => setIsHeaderSettingsOpen(o => !o)}
@@ -7421,7 +7491,18 @@ export const Dashboard: React.FC = () => {
                 <Settings className="w-3.5 h-3.5" />
               </button>
               {isHeaderSettingsOpen && (
-                <div className="absolute right-0 mt-1.5 w-48 rounded-xl border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
+                <div className="absolute right-0 mt-1.5 w-52 rounded-xl border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
+                  <button
+                    onClick={() => {
+                      setIsConnectorModalOpen(true)
+                      setIsHeaderSettingsOpen(false)
+                    }}
+                    className="w-full text-left px-4 py-2.5 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold border-b border-[#1e2025]/50"
+                  >
+                    <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Connected Apps</span>
+                  </button>
+
                   {localStorage.getItem('app_lock_pin') ? (
                     <>
                       <button
@@ -8033,14 +8114,17 @@ export const Dashboard: React.FC = () => {
 
                               </div>
 
-                            ) : (
-
-                              <div className="flex items-center gap-1.5 py-1.5 px-0.5 select-none">
-
-                                <span className="w-2 h-2 rounded-full bg-white/40 animate-pulse" />
-
+                            ) : msg.thinkingContent ? (
+                              <div className="inline-flex items-center gap-2 py-1 text-xs select-none">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                <span className="text-[12px] font-sans font-normal text-amber-200/80 animate-pulse">
+                                  Synthesizing answer...
+                                </span>
                               </div>
-
+                            ) : (
+                              <div className="flex items-center gap-1.5 py-1.5 px-0.5 select-none">
+                                <span className="w-2 h-2 rounded-full bg-white/40 animate-pulse" />
+                              </div>
                             )}
 
                           </div>
@@ -8138,6 +8222,41 @@ export const Dashboard: React.FC = () => {
                             isStreaming && i === messages.length - 1,
 
                           )}
+
+                          {/* Instant Site Deployment Preview Cards (from artifacts or content URL) */}
+                          {(() => {
+                            const artifactSites = (msg.agentTaskData?.artifacts || [])
+                              .filter((a: any) => a.type === 'site_preview' || (a.download_url && a.download_url.includes('/v1/sites/')))
+                              .map((a: any) => ({
+                                title: a.title || 'Live Deployed Web App',
+                                url: a.download_url,
+                                slug: a.slug,
+                              }))
+
+                            const urlMatches = Array.from(
+                              (msg.content || '').matchAll(/(https?:\/\/[^\s)\]`"']+\/v1\/sites\/[a-zA-Z0-9\-_]+)/gi)
+                            ).map((m) => ({
+                              title: 'Live Deployed Web App',
+                              url: m[1],
+                              slug: m[1].split('/sites/').pop(),
+                            }))
+
+                            const allSites = [...artifactSites]
+                            for (const s of urlMatches) {
+                              if (!allSites.some((ex) => ex.url === s.url)) {
+                                allSites.push(s)
+                              }
+                            }
+
+                            return allSites.map((site, sIdx) => (
+                              <AgentSiteDeploymentCard
+                                key={sIdx}
+                                title={site.title}
+                                previewUrl={site.url}
+                                slug={site.slug}
+                              />
+                            ))
+                          })()}
 
                           {/* Generated file download cards — shown BEFORE image so files are always reachable */}
 
@@ -8852,9 +8971,9 @@ export const Dashboard: React.FC = () => {
                 </div>
 
                 {/* Body */}
-                <div className="flex-1 overflow-auto p-6 bg-[#08090b]">
+                <div className="flex-1 overflow-hidden p-0 bg-[#08090b] flex flex-col min-h-0 w-full">
                   {artifactError ? (
-                    <div className="h-full flex items-center justify-center">
+                    <div className="h-full flex items-center justify-center p-6">
                       <div className="max-w-md w-full p-6 rounded-xl border border-red-500/30 bg-red-500/10 flex flex-col items-center text-center space-y-4">
                         <div className="p-3 rounded-full bg-red-500/20 text-red-400">
                           <X className="w-6 h-6" />
@@ -8883,25 +9002,38 @@ export const Dashboard: React.FC = () => {
                     const isOffice = ['doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)
                     const isPdf = ext === 'pdf'
                     const isImg = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)
+                    const isSiteUrl = !!activeArtifact.downloadUrl && (activeArtifact.downloadUrl.includes('/v1/sites/') || activeArtifact.downloadUrl.includes('/sites/'))
 
                     if (artifactTab === 'preview') {
+                      if (isSiteUrl) {
+                        return (
+                          <div className="w-full h-full bg-white overflow-hidden flex-1">
+                            <iframe
+                              src={activeArtifact.downloadUrl}
+                              className="w-full h-full border-0 block"
+                              title={activeArtifact.filename}
+                              sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
+                            />
+                          </div>
+                        )
+                      }
                       if (isImg) {
                         return (
-                          <div className="h-full flex items-center justify-center p-4 bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025]">
+                          <div className="w-full h-full flex items-center justify-center p-2 bg-[#0a0b0d] flex-1">
                             <img
                               src={activeArtifact.downloadUrl || `data:image/svg+xml;utf8,${encodeURIComponent(artifactContent)}`}
                               alt={activeArtifact.filename}
-                              className="max-w-full max-h-full object-contain rounded"
+                              className="max-w-full max-h-full object-contain"
                             />
                           </div>
                         )
                       }
                       if (isPdf) {
                         return (
-                          <div className="w-full h-[calc(100vh-8.5rem)] bg-[#0a0b0d]/50 rounded-xl border border-[#1e2025] overflow-hidden">
+                          <div className="w-full h-full bg-[#0a0b0d] overflow-hidden flex-1">
                             <iframe
                               src={activeArtifact.downloadUrl}
-                              className="w-full h-full border-0"
+                              className="w-full h-full border-0 block"
                               title={activeArtifact.filename}
                             />
                           </div>
@@ -8909,17 +9041,17 @@ export const Dashboard: React.FC = () => {
                       }
                       if (isDocx) {
                         return (
-                          <div className="w-full h-[calc(100vh-8.5rem)] bg-[#0a0b0d]/30 rounded-xl border border-[#1e2025] overflow-hidden">
+                          <div className="w-full h-full bg-[#0a0b0d]/30 overflow-auto p-4 flex-1">
                             <DocxPreview url={activeArtifact.downloadUrl || ''} />
                           </div>
                         )
                       }
                       if (isOffice) {
                         return (
-                          <div className="w-full h-[calc(100vh-8.5rem)] bg-white rounded-xl border border-[#1e2025] overflow-hidden">
+                          <div className="w-full h-full bg-white overflow-hidden flex-1">
                             <iframe
                               src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(activeArtifact.downloadUrl || '')}`}
-                              className="w-full h-full border-0"
+                              className="w-full h-full border-0 block"
                               title={activeArtifact.filename}
                             />
                           </div>
@@ -8927,11 +9059,11 @@ export const Dashboard: React.FC = () => {
                       }
                       if (isHtml) {
                         return (
-                          <div className="w-full h-[calc(100vh-8.5rem)] bg-white rounded-xl border border-[#1e2025] overflow-hidden">
+                          <div className="w-full h-full bg-white overflow-hidden flex-1">
                             <iframe
                               srcDoc={artifactContent}
-                              sandbox="allow-scripts allow-popups"
-                              className="w-full h-full border-0"
+                              sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
+                              className="w-full h-full border-0 block"
                               title="HTML Preview"
                             />
                           </div>
@@ -8939,8 +9071,8 @@ export const Dashboard: React.FC = () => {
                       }
                       if (isMd) {
                         return (
-                          <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
-                            <div className="p-6 text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
+                          <div className="w-full h-full overflow-auto p-6 bg-[#07080a] flex-1">
+                            <div className="text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
                               {renderMarkdown(artifactContent)}
                             </div>
                           </div>
@@ -9440,6 +9572,12 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Connected Apps Settings Modal */}
+      <ConnectorSettingsModal
+        isOpen={isConnectorModalOpen}
+        onClose={() => setIsConnectorModalOpen(false)}
+      />
 
     </div>
 

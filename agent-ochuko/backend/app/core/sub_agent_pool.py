@@ -156,9 +156,9 @@ class SubAgentPool:
     async def delegate_code_execution(
         self,
         code: str,
-        language: str,
-        conversation_id: str,
-        user_id: str,
+        language: str = "python",
+        conversation_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> SubAgentResult:
         """
         Executes code inside the isolated sandbox.
@@ -170,8 +170,8 @@ class SubAgentPool:
             exec_output, exec_files = await execute_code_in_sandbox(
                 code=code,
                 language=language,
-                conversation_id=conversation_id,
-                user_id=user_id,
+                conversation_id=conversation_id or "default",
+                user_id=user_id or "default",
                 timeout_seconds=60,
             )
 
@@ -199,3 +199,103 @@ class SubAgentPool:
                 summary=f"Code execution error: {str(e)[:150]}",
                 error=str(e),
             )
+
+    async def delegate_browser_scrape(
+        self,
+        url: str,
+        extract_type: str = "markdown",
+        query_context: str = "",
+        search_fn=None,
+    ) -> SubAgentResult:
+        """
+        Executes web scraping. If direct scraping fails (e.g. anti-bot, DNS, or blocked URL),
+        automatically falls back to Google Search Grounding for 100% resilient live intelligence.
+        """
+        clean_url = (url or "").strip().rstrip(".:,;`)]'\"")
+        if clean_url and ("." in clean_url):
+            try:
+                from app.services.browser_agent import BrowserAgent
+                res = await BrowserAgent.scrape_url(url=clean_url, extract_type=extract_type)
+                if res.get("success") and res.get("content_markdown"):
+                    return SubAgentResult(
+                        success=True,
+                        summary=res.get("summary", "Page scraped."),
+                        artifacts=[],
+                        token_spend=len(res.get("content_markdown", "")) // 4 + 100,
+                        raw_length=len(res.get("content_markdown", "")),
+                    )
+            except Exception as e:
+                logger.debug(f"Direct scrape error for {clean_url}, using search grounding: {e}")
+
+        # Fallback to Google Grounding Search
+        if search_fn:
+            search_query = query_context or f"latest updates and content from {clean_url}"
+            return await self.delegate_search(query=search_query, search_fn=search_fn)
+
+        return SubAgentResult(success=False, summary=f"Could not load {clean_url}.", error="Scrape failed")
+
+    async def delegate_handle_lookup(self, handle: str, platform: str = "auto") -> SubAgentResult:
+        """Looks up a developer or social profile handle."""
+        try:
+            from app.services.handle_intelligence import HandleIntelligence
+            res = await HandleIntelligence.lookup_profile(raw_handle=handle, platform=platform)
+            return SubAgentResult(
+                success=res.get("success", False),
+                summary=res.get("summary", "Profile retrieved."),
+                artifacts=[],
+                token_spend=150,
+                raw_length=len(str(res)),
+                error=res.get("error"),
+            )
+        except Exception as e:
+            logger.error(f"SubAgent handle lookup failed: {e}")
+            return SubAgentResult(success=False, summary=f"Handle lookup error: {str(e)[:120]}", error=str(e))
+
+    async def delegate_site_deployment(
+        self,
+        title: str,
+        html_content: str,
+        css_content: str = "",
+        js_content: str = "",
+        user_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        supabase_client=None,
+    ) -> SubAgentResult:
+        """Deploys an instant static website and produces a live preview URL."""
+        try:
+            from app.services.hosted_sites_service import HostedSitesService
+            res = await HostedSitesService.deploy_site(
+                title=title,
+                html_content=html_content,
+                css_content=css_content,
+                js_content=js_content,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                supabase_client=supabase_client,
+            )
+            preview_url = res.get("preview_url", "")
+            summary = (
+                f"**Website Deployed Successfully!**\n"
+                f"- **Title**: {res.get('title')}\n"
+                f"- **Live Preview URL**: [{preview_url}]({preview_url})\n"
+                f"- **Slug**: `{res.get('slug')}`"
+            )
+            artifacts = [
+                {
+                    "filename": f"{res.get('slug')}.html",
+                    "download_url": preview_url,
+                    "title": res.get("title"),
+                    "type": "site_preview",
+                    "slug": res.get("slug"),
+                }
+            ]
+            return SubAgentResult(
+                success=True,
+                summary=summary,
+                artifacts=artifacts,
+                token_spend=250,
+                raw_length=len(html_content),
+            )
+        except Exception as e:
+            logger.error(f"SubAgent site deployment failed: {e}")
+            return SubAgentResult(success=False, summary=f"Site deployment error: {str(e)[:120]}", error=str(e))

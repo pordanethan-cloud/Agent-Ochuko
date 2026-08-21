@@ -64,7 +64,10 @@ async def test_agent_task_full_execution_stream():
     events = []
     async for sse_event in manager.execute_plan_stream(search_fn=mock_search_fn):
         assert sse_event.startswith("data: ")
-        payload = json.loads(sse_event[6:].strip())
+        raw = sse_event[6:].strip()
+        if raw == "[DONE]":
+            continue
+        payload = json.loads(raw)
         events.append(payload)
 
     event_types = [e.get("type") for e in events]
