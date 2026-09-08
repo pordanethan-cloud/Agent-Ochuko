@@ -14,6 +14,7 @@ const App: React.FC = () => {
         <Route path="/login" element={<Login />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/shared/:token" element={<SharedView />} />
+        <Route path="/shared" element={<SharedView />} />
         <Route path="/capabilities" element={<Capabilities />} />
         <Route
           path="/"

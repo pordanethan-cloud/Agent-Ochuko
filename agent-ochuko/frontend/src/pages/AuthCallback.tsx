@@ -27,7 +27,9 @@ export const AuthCallback: React.FC = () => {
       redirected = true
       // Clean hash & search params so back button won't re-process OAuth callback
       window.history.replaceState({}, document.title, window.location.pathname)
-      navigate('/', { replace: true })
+      const target = localStorage.getItem('auth_redirect_to') || '/'
+      localStorage.removeItem('auth_redirect_to')
+      navigate(target, { replace: true })
     }
 
     const access_token = hashParams.get('access_token') || params.get('access_token')

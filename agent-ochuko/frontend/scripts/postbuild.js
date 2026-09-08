@@ -9,8 +9,8 @@ const distDir = path.resolve(__dirname, '../dist')
 const indexHtml = path.join(distDir, 'index.html')
 
 if (fs.existsSync(indexHtml)) {
-  // Routes that might be directly loaded or redirected to by external services (e.g. Google OAuth)
-  const routes = ['auth/callback', 'login']
+  // Routes that might be directly loaded or redirected to by external services (e.g. Google OAuth, shared links)
+  const routes = ['auth/callback', 'login', 'shared']
   routes.forEach(route => {
     const routeDir = path.join(distDir, route)
     fs.mkdirSync(routeDir, { recursive: true })

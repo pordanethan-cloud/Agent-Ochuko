@@ -3798,7 +3798,7 @@ export const Dashboard: React.FC = () => {
             : c
         ))
         if (shouldShare && data.share_token) {
-          const shareUrl = `${window.location.origin}/shared/${data.share_token}`
+          const shareUrl = `${window.location.origin}/shared/?token=${data.share_token}`
           await navigator.clipboard.writeText(shareUrl)
           showToast('Link copied!', 'info')
         } else {
@@ -4837,9 +4837,18 @@ export const Dashboard: React.FC = () => {
 
         // Clear active conversation cache if this is a brand new login/tab session
         const isFreshSession = !sessionStorage.getItem('session_started')
-        if (isFreshSession) {
+        const pendingConvoId = sessionStorage.getItem('pending_active_convo_id') || localStorage.getItem('pending_active_convo_id')
+
+        if (isFreshSession && !pendingConvoId) {
           sessionStorage.setItem('session_started', 'true')
           localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), '00000000-0000-0000-0000-000000000000')
+        }
+
+        if (pendingConvoId) {
+          sessionStorage.setItem('session_started', 'true')
+          sessionStorage.removeItem('pending_active_convo_id')
+          localStorage.removeItem('pending_active_convo_id')
+          localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), pendingConvoId)
         }
 
         // ── Hydrate from user-scoped cache (safe now that we know who this is) ──
@@ -9192,7 +9201,7 @@ export const Dashboard: React.FC = () => {
         const activeConvo = conversations.find(c => c.id === activeConversationId)
         const isShared = activeConvo?.is_shared
         const shareToken = activeConvo?.share_token
-        const shareUrl = shareToken ? `${window.location.origin}/shared/${shareToken}` : ''
+        const shareUrl = shareToken ? `${window.location.origin}/shared/?token=${shareToken}` : ''
 
         return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">

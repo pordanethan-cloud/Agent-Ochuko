@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../utils/supabaseClient'
 import { Shield, ArrowRight, Mail, Lock, User } from 'lucide-react'
 
 export const Login: React.FC = () => {
+  const [searchParams] = useSearchParams()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -13,22 +15,19 @@ export const Login: React.FC = () => {
   const [password, setPassword] = useState('')
   const [preferredName, setPreferredName] = useState('')
 
-
-
   const handleGoogleLogin = async () => {
     setLoading(true)
     setError(null)
     setSuccess(null)
+    const redirectTarget = searchParams.get('redirect') || searchParams.get('returnTo')
+    if (redirectTarget) {
+      localStorage.setItem('auth_redirect_to', redirectTarget)
+    }
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
-          scopes: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/photoslibrary.readonly https://www.googleapis.com/auth/photoslibrary.appendonly https://www.googleapis.com/auth/drive.file'
         }
       })
       if (error) throw error
