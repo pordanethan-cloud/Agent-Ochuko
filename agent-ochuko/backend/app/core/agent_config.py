@@ -138,7 +138,7 @@ async def get_reasoning_effort(
     """
     Returns the reasoning effort for the given mode + complexity tier.
 
-    - nano/discuss routes to gpt-5.6-luna with effort "none" (cheapest).
+    - nano/discuss routes to gpt-5.6-luna with effort "low" (cheap but coherent).
     - think/agent/ultra resolve via TERRA_EFFORT_MAP; solve via LUNA_EFFORT_MAP.
       Maps are JSON objects: {"low": "...", "medium": "...", "high": "...", "xhigh": "..."}
       keyed by complexity tier, runtime-tunable via App Config.
@@ -151,9 +151,9 @@ async def get_reasoning_effort(
 
     mode_lower = (mode or "think").lower()
 
-    # Nano tier on the 5.6 family always runs at effort "none".
+    # Nano tier on the 5.6 family runs luna at effort "low" (cheap but coherent).
     if mode_lower in ("nano", "discuss"):
-        return "none"
+        return "low"
 
     # Legacy path for o-series deployments without complexity routing.
     if complexity is None and not (deployment or "").lower().startswith("gpt-5.6"):

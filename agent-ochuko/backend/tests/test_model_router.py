@@ -216,16 +216,16 @@ async def test_routing_decision_carries_complexity_and_effort():
 
 
 @pytest.mark.asyncio
-async def test_nano_and_discuss_effort_none():
+async def test_nano_and_discuss_effort_low():
     _CONFIG_CACHE["NANO_MODEL_DEPLOYMENT"] = "gpt-5.6-luna"
     _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
 
     d1 = await model_router.route("hello", "think", "c1", 1)  # intercepted
     assert d1.routing_mode == "nano"
-    assert d1.reasoning_effort == "none"
+    assert d1.reasoning_effort == "low"
 
     d2 = await model_router.route("hello", "discuss", "c1", 0)
-    assert d2.reasoning_effort == "none"
+    assert d2.reasoning_effort == "low"
 
 
 @pytest.mark.asyncio

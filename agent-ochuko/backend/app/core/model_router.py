@@ -3,9 +3,9 @@
 ModelRouter — 3-layer intelligent model routing (ADR-002 aligned).
 
 Routing layers:
-  Layer 0: DISCUSS mode → always gpt-5.6-luna @ reasoning effort "none" (cheapest)
+  Layer 0: DISCUSS mode → always gpt-5.6-luna @ reasoning effort "low" (cheapest)
   Layer 1: Silent Nano Interceptor → trivial messages in THINK/SOLVE mode
-           get routed to nano (gpt-5.6-luna @ "none") for NANO_MAX_TURNS
+           get routed to nano (gpt-5.6-luna @ "low") for NANO_MAX_TURNS
            turns before handing off
   Layer 2: Mode + complexity-based → THINK=gpt-5.6-terra, SOLVE=gpt-5.6-luna,
            each with a rule-classified reasoning-effort tier (low→xhigh)
