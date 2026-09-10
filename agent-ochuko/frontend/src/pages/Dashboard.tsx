@@ -1101,6 +1101,39 @@ function WidgetRenderer({
 
 let _mermaidReady = false
 
+// Render cache: cleaned code → SVG string. Re-mounts (virtualization, tab
+// switches) inject instantly instead of re-parsing/re-rendering.
+const _mermaidRenderCache = new Map<string, string>()
+
+// Pre-warm the mermaid chunk during idle time so the first diagram doesn't
+// stall behind a ~1MB lazy import.
+let _mermaidPreWarmeupStarted = false
+function preWarmMermaid() {
+  if (_mermaidPreWarmeupStarted) return
+  _mermaidPreWarmeupStarted = true
+  const start = () => {
+    import('mermaid').then((m) => {
+      m.default.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        securityLevel: 'loose',
+        suppressErrorRendering: true,
+        htmlLabels: true,
+        wrap: true,
+        markdownAutoWrap: true,
+        themeVariables: { fontSize: '13px' },
+        flowchart: { padding: 10, useMaxWidth: true },
+        sequence: { wrap: true },
+        maxTextSize: 120000,
+      })
+      _mermaidReady = true
+    }).catch(() => { /* lazy path will retry on demand */ })
+  }
+  const w = window as any
+  if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(start, { timeout: 3000 })
+  else setTimeout(start, 1500)
+}
+
 // Validate and clean mermaid code before rendering
 function validateMermaidCode(code: string): { valid: boolean, cleanedCode: string, error?: string } {
   if (!code || code.trim().length === 0) {
@@ -1160,6 +1193,20 @@ function MermaidBlock({ code }: { code: string }) {
 
       if (!diagramRef.current) return
 
+      // Cache hit → inject the previously rendered SVG instantly.
+      const cached = _mermaidRenderCache.get(validation.cleanedCode)
+      if (cached) {
+        diagramRef.current.innerHTML = cached
+        const cachedSvg = diagramRef.current.querySelector('svg')
+        if (cachedSvg) {
+          cachedSvg.style.maxWidth = '100%'
+          cachedSvg.style.width = '100%'
+          cachedSvg.style.height = 'auto'
+          cachedSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+        }
+        return
+      }
+
       setIsLoading(true)
 
       try {
@@ -1172,11 +1219,18 @@ function MermaidBlock({ code }: { code: string }) {
 
           const m = await import('mermaid')
 
-          m.default.initialize({ 
-            startOnLoad: false, 
-            theme: 'dark', 
+          m.default.initialize({
+            startOnLoad: false,
+            theme: 'dark',
             securityLevel: 'loose',
-            suppressErrorRendering: true
+            suppressErrorRendering: true,
+            htmlLabels: true,
+            wrap: true,
+            markdownAutoWrap: true,
+            themeVariables: { fontSize: '13px' },
+            flowchart: { padding: 10, useMaxWidth: true },
+            sequence: { wrap: true },
+            maxTextSize: 120000,
           })
 
           _mermaidReady = true
@@ -1188,6 +1242,13 @@ function MermaidBlock({ code }: { code: string }) {
         const renderId = `mermaid-${Date.now()}-${Math.floor(Math.random() * 100000)}`
 
         const { svg } = await mermaid.render(renderId, validation.cleanedCode)
+
+        // Keep the cache bounded (diagrams are small SVG strings).
+        if (_mermaidRenderCache.size >= 50) {
+          const oldest = _mermaidRenderCache.keys().next().value
+          if (oldest !== undefined) _mermaidRenderCache.delete(oldest)
+        }
+        _mermaidRenderCache.set(validation.cleanedCode, svg)
 
         // Clean up temporary DOM element appended by mermaid if still present
         const tempEl = document.getElementById(renderId)
@@ -1342,7 +1403,7 @@ function MermaidBlock({ code }: { code: string }) {
 
   return (
 
-    <div className="group my-3 relative rounded-lg border border-[#1e2025] bg-[#0d1117] overflow-hidden">
+    <div className={`group my-3 relative rounded-lg border border-[#1e2025] bg-[#0d1117] overflow-hidden ${isExpanded ? 'w-full' : 'max-w-[620px]'}`}>
       {isLoading && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d1117]/80 backdrop-blur-sm">
           <div className="flex items-center gap-2">
@@ -3672,11 +3733,9 @@ const FileAttachmentChip: React.FC<{
 
   const handlePreview = () => {
     if (!attachment.url) return
-    let previewType = 'image/*'
+    let previewType = mimeFromName(attachment.name)
     if (isPdf) {
       previewType = 'application/pdf'
-    } else if (isCode) {
-      previewType = 'text/plain'
     }
     window.dispatchEvent(new CustomEvent('open-file-preview', {
       detail: {
@@ -3685,6 +3744,11 @@ const FileAttachmentChip: React.FC<{
         url: attachment.url,
       }
     }))
+  }
+
+  const handleDownload = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (attachment.url) triggerDirectDownload(attachment.url, attachment.name)
   }
 
   // ── Image thumbnail (vision jobs) — compact, elegant thumbnail ──────────────
@@ -3712,6 +3776,17 @@ const FileAttachmentChip: React.FC<{
         <div className="absolute inset-0 rounded-lg bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2">
           <span className="text-[10px] text-white font-medium leading-tight truncate w-full">{attachment.name}</span>
         </div>
+        {/* Download action (uploaded files) */}
+        {attachment.url && (
+          <button
+            type="button"
+            onClick={handleDownload}
+            title={`Download ${attachment.name}`}
+            className="absolute top-1.5 right-1.5 p-1.5 rounded-md bg-black/60 text-white/80 hover:text-white hover:bg-black/80 opacity-0 group-hover/img:opacity-100 transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
     )
   }
@@ -3736,7 +3811,15 @@ const FileAttachmentChip: React.FC<{
         <p className="text-[11.5px] text-brand-text/90 font-medium truncate">{attachment.name}</p>
       </div>
       {attachment.url && (
-        <div className="shrink-0 text-white/40">
+        <div className="shrink-0 flex items-center gap-1 text-white/40">
+          <button
+            type="button"
+            onClick={handleDownload}
+            title={`Download ${attachment.name}`}
+            className="p-1 rounded-md hover:text-white hover:bg-white/10 transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
           <ExternalLink className="w-2.5 h-2.5" />
         </div>
       )}
@@ -4146,6 +4229,12 @@ export const Dashboard: React.FC = () => {
         })
     }
   }, [previewingFile])
+
+  // Pre-warm the Mermaid chunk during idle time (no cold-start lag on the
+  // first diagram).
+  useEffect(() => {
+    preWarmMermaid()
+  }, [])
 
   const [pastedText, setPastedText] = useState<{
 
