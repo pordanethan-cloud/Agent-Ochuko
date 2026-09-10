@@ -1851,6 +1851,27 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
 
       let url = match[8]
 
+      // Citation marker: [n](https://...) with a purely numeric label renders
+      // as a compact glass-HUD superscript chip with the domain on hover.
+      if (/^\d{1,3}$/.test(label.trim()) && /^https?:\/\//.test(url)) {
+        let domain = ''
+        try { domain = new URL(url).hostname.replace(/^www\./, '') } catch { /* keep empty */ }
+        segments.push(
+          <a
+            key={`${keyBase}-cite${match.index}`}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={domain || url}
+            className="inline-flex items-center justify-center align-super ml-0.5 mr-0.5 min-w-[16px] h-[15px] px-[4px] rounded-full text-[9.5px] font-sans font-semibold bg-white/10 border border-white/20 text-white/70 hover:bg-white/20 hover:text-white transition duration-150 leading-none"
+          >
+            {label.trim()}
+          </a>
+        )
+        lastIndex = match.index + fullMatch.length
+        continue
+      }
+
       // Resolve sandbox paths
       if ((url.includes('/mnt/data/') || url.startsWith('sandbox:')) && generatedFiles) {
         const filename = url.split('/').pop() || '';
@@ -3041,7 +3062,11 @@ function parseMarkdownToBlocks(text: string): ASTBlock[] {
 // ─── Block markdown renderer ──────────────────────────────────────────────────
 
 export function renderMarkdown(text: string, generatedFiles?: any[]): React.ReactNode {
-  const blocks = parseMarkdownToBlocks(text)
+  const extracted = extractSourcesSection(text)
+  const noticeText = extractNoticeSection(extracted.body)
+  const noticeBlock = noticeText ? <PolicyNoticeCard notice={noticeText} /> : null
+  const sourcesBlock = extracted.sources.length > 0 ? <SourcesBlock sources={extracted.sources} /> : null
+  const blocks = parseMarkdownToBlocks(extracted.body)
 
   return (
     <div className="space-y-2.5 font-serif">
@@ -3220,6 +3245,124 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
             return null
         }
       })}
+      {sourcesBlock}
+      {noticeBlock}
+    </div>
+  )
+}
+
+// ── Policy / stop notice card ─────────────────────────────────────────────────
+// The backend degrades safety refusals and early stops into a trailing
+// "*(Note: Response stopped early: ...)*" marker. Detect it and render a calm,
+// distinct notice card instead of error-styled inline text.
+
+function extractNoticeSection(text: string): string | null {
+  const raw = text || ''
+  const m = raw.match(/\*{0,2}\(Note: Response stopped early:[^]*\)\*{0,2}\s*$/)
+  if (m && m.index !== undefined) {
+    const noticeText = m[0].replace(/^\*{0,2}\(Note: Response stopped early:\s*/, '').replace(/\)\*{0,2}\s*$/, '')
+    return noticeText.trim() || null
+  }
+  return null
+}
+
+function PolicyNoticeCard({ notice }: { notice: string }) {
+  const isGuardrail = /safety|guardrail|flagged|policy/i.test(notice)
+  return (
+    <div className="mt-2.5 flex items-start gap-2.5 border border-white/10 rounded-xl bg-white/[0.03] px-3.5 py-3 font-sans">
+      <span
+        className="shrink-0 mt-[1px] inline-flex items-center justify-center w-[18px] h-[18px] rounded-full text-[10px] font-bold bg-white/10 border border-white/20 text-white/70 leading-none"
+        aria-hidden="true"
+      >
+        i
+      </span>
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+          {isGuardrail ? 'Policy notice' : 'Response stopped early'}
+        </p>
+        <p className="text-[13px] text-white/70 leading-relaxed mt-0.5">{notice}</p>
+      </div>
+    </div>
+  )
+}
+
+// ── Citation sources block ────────────────────────────────────────────────────
+// Extracts a trailing "**Sources:**" section (emitted by the research citation
+// contract) from message text and renders it as a collapsible glass-HUD block.
+
+function extractSourcesSection(text: string): { body: string; sources: { title: string; url: string }[] } {
+  const raw = text || ''
+  const patterns = [
+    /\n\*\*Sources?:?\*\*\s*\n?/i,
+    /\nSources?:\s*\n/i,
+  ]
+  for (const re of patterns) {
+    const m = raw.match(re)
+    if (m && m.index !== undefined && m.index > raw.length * 0.25) {
+      const body = raw.slice(0, m.index)
+      const section = raw.slice(m.index + m[0].length)
+      const sources: { title: string; url: string }[] = []
+      const seen = new Set<string>()
+      const lineRe = /\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g
+      let lm: RegExpExecArray | null
+      while ((lm = lineRe.exec(section)) !== null) {
+        const url = lm[2]
+        if (!seen.has(url)) {
+          seen.add(url)
+          sources.push({ title: lm[1] || url, url })
+        }
+      }
+      if (sources.length === 0) {
+        const urlRe = /(https?:\/\/[^\s)]+)/g
+        while ((lm = urlRe.exec(section)) !== null) {
+          const url = lm[1]
+          if (!seen.has(url)) { seen.add(url); sources.push({ title: url, url }) }
+        }
+      }
+      if (sources.length > 0) return { body, sources }
+    }
+  }
+  return { body: raw, sources: [] }
+}
+
+function SourcesBlock({ sources }: { sources: { title: string; url: string }[] }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <div className="mt-2.5 border border-white/10 rounded-xl bg-[#0e1013]/60 overflow-hidden font-sans">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[12px] font-semibold uppercase tracking-wider text-white/60 hover:text-white/90 hover:bg-white/[0.03] transition duration-150"
+      >
+        <span className="text-[9px] leading-none text-white/40">{open ? '▾' : '▸'}</span>
+        Sources
+        <span className="ml-1 text-[10px] font-normal normal-case tracking-normal text-white/40">
+          ({sources.length})
+        </span>
+      </button>
+      {open && (
+        <ul className="px-3.5 pb-3 pt-0.5 space-y-1.5 border-t border-white/[0.06]">
+          {sources.map((s, i) => {
+            let domain = ''
+            try { domain = new URL(s.url).hostname.replace(/^www\./, '') } catch { /* keep empty */ }
+            return (
+              <li key={i} className="flex items-baseline gap-2 text-[13px]">
+                <span className="shrink-0 inline-flex items-center justify-center min-w-[16px] h-[15px] px-[4px] rounded-full text-[9.5px] font-semibold bg-white/10 border border-white/20 text-white/70 leading-none">
+                  {i + 1}
+                </span>
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-white/80 hover:text-white underline underline-offset-4 decoration-white/30 truncate transition duration-150"
+                  title={domain || s.url}
+                >
+                  {s.title}
+                </a>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
   )
 }
