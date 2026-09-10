@@ -60,8 +60,8 @@ This design system uses dense, commanding base tones, sophisticated mid-tones, a
 
   /* Sizing */
   --radius-sm:      4px;
-  --radius-md:      8px;
-  --radius-lg:      14px;
+  --radius-md:      6px;
+  --radius-lg:      10px;
   --widget-max-width: 720px;
   --widget-padding: 20px;
 
@@ -71,12 +71,18 @@ This design system uses dense, commanding base tones, sophisticated mid-tones, a
 }
 ```
 
+### Minimalist Consistency Rules (non-negotiable)
+- Flat translucent surfaces, 1px borders, generous whitespace. Intentionally plain — not generic.
+- NO glow filters, NO neon drop shadows, NO decorative radial gradients. Depth comes from border contrast and spacing, never from glow.
+- Color is information, not decoration: mint = success/active, gold = warning/highlight ONLY. Violet and orange are rare status colors, never theme colors.
+- One accent per widget. If everything is highlighted, nothing is.
+
 ### SVG Color Usage & Theme Rules
 - **Base Canvas**: Set canvas backgrounds to `#1A3038` (Deep Abyssal Teal) or transparent.
 - **Node/Card Fills**: Use `#223D47` or `#294954` with thin borders of `rgba(233, 236, 239, 0.15)`.
 - **Text Labels**: Use `#F4F1DE` (Parchment White) for headers and titles to give a tangible, high-end editorial feel. Use `#E9ECEF` (Alunite Grey) for subtexts.
 - **Active States / Confirmation Path**: Use `#00A896` (Deep Persian Mint) for success routes or active nodes.
-- **CTAs & Highlights**: Use `#FFB703` (Gallium Gold) or `#FF5A00` (International Orange) for attention highlights or precision warning indicators.
+- **Warnings/Highlights**: Use `#FFB703` (Gallium Gold) sparingly — one highlighted element per widget maximum.
 
 ### Mandatory SVG Structure
 - ALWAYS include a `<style>` block at the top of the `<svg>` with the `:root` CSS variables above.
@@ -97,38 +103,24 @@ _DIAGRAM_MODULE = _OCHUKO_BASE_TOKENS + """
 ### Purpose
 Flowcharts, high-fidelity architecture diagrams, sequence diagrams, state machines, entity graphs.
 
-### SVG Patterns & Premium Styling
-To ensure designs look premium and state-of-the-art:
-- **Glowing Drop Shadows**: Always define a `<filter id="glow">` or `<filter id="green-shadow">` containing `feDropShadow` or `feGaussianBlur` to give process blocks a green neon depth glow.
-- **Dual-Stop Gradients**: Use `<linearGradient>` for process nodes (e.g. grading from deep slate `#16181b` to slate `#0f1113`) and key paths.
-- **Node Shapes**: Process nodes must use rounded corners (`rx="10"` or `rx="12"`), a subtle border (`stroke="var(--brass-core)"`), and `filter="url(#glow)"`. Never draw raw flat sharp rectangles.
-- **Connectors**: Use curved bezier connectors (`d="M ... C ..."`), never simple jagged straight lines, to represent fluid pipelines.
-- **Icons & Metaphors**: Draw small SVG vector shapes or paths representing icons (e.g. lock/key for security, cylinder for database, cloud for Azure) inside process blocks next to labels.
+### Minimal Premium Styling
+Depth comes from contrast and spacing, never from glow:
+- **Node Shapes**: Process nodes use modest rounded corners (`rx="6"` or `rx="8"`) with a subtle 1px border (`stroke="rgba(233,236,239,0.18)"`). Flat fills (`#223D47` / `#294954`) — no gradients, no glow filters.
+- **Highlight Rule**: at most ONE node may carry a mint (`var(--brass-core)`) border to mark the active/entry point.
+- **Connectors**: clean straight or gently-curved lines with small arrow markers; 1.5px stroke, `rgba(233,236,239,0.35)`.
+- **Icons & Metaphors**: small monochrome SVG paths inside blocks (lock/key for security, cylinder for database, cloud for Azure).
 
 ### Reusable defs block (always include):
 ```xml
 <defs>
-  <!-- Green neon drop shadow -->
-  <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-    <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#10b981" flood-opacity="0.15" />
-  </filter>
-  <!-- Node background gradient -->
-  <linearGradient id="node-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-    <stop offset="0%" stop-color="#16181b"/>
-    <stop offset="100%" stop-color="#0f1113"/>
-  </linearGradient>
-  <linearGradient id="accent-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-    <stop offset="0%" stop-color="rgba(34, 197, 94, 0.18)"/>
-    <stop offset="100%" stop-color="rgba(34, 197, 94, 0.05)"/>
-  </linearGradient>
   <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-    <polygon points="0 0, 8 3, 0 6" fill="var(--brass-core)"/>
+    <polygon points="0 0, 8 3, 0 6" fill="rgba(233,236,239,0.5)"/>
   </marker>
 </defs>
 ```
 
 ### Layout Rules
-- Group related services or zones using container blocks with dashed borders and radial gradients (`radialGradient` representing atmospheric lighting).
+- Group related services or zones using container blocks with subtle dashed borders (`rgba(233,236,239,0.12)`). No radial-gradient atmosphere fills — group by border + label alone.
 - Process steps should align cleanly with grid points.
 
 ### Example skeleton
@@ -284,25 +276,13 @@ Decorative illustrations, visual metaphors, abstract compositions, icons, concep
 
 ### SVG Art Techniques
 ```xml
-<!-- Noise texture overlay -->
+<!-- Subtle paper grain (optional, max 6% opacity) -->
 <filter id="grain">
   <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/>
   <feColorMatrix type="saturate" values="0"/>
   <feBlend in="SourceGraphic" mode="overlay" result="blend"/>
   <feComposite in="blend" in2="SourceGraphic"/>
 </filter>
-
-<!-- Glow effect -->
-<filter id="brass-glow">
-  <feGaussianBlur stdDeviation="4" result="blur"/>
-  <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-</filter>
-
-<!-- Radial gradient for atmosphere -->
-<radialGradient id="atmo" cx="50%" cy="50%" r="60%">
-  <stop offset="0%" stop-color="var(--brass-whisper)"/>
-  <stop offset="100%" stop-color="transparent"/>
-</radialGradient>
 ```
 
 ### Composition Rules

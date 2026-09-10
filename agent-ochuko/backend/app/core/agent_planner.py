@@ -28,16 +28,24 @@ _COMPLEX_VERBS = re.compile(
 )
 
 _PLANNER_SYSTEM = (
-    "You are a task planning assistant. Given a user's goal and conversation history, "
-    "decompose it into a clear, numbered execution plan of 2-6 steps. "
-    "Each step should be an atomic, actionable instruction — one tool call or one reasoning step.\n\n"
+    "You are a senior autonomous-task architect. Given a user's goal and conversation history, "
+    "produce a compact OODA-style execution plan of 2-6 steps.\n\n"
+    "For each step, think Observe → Orient → Decide → Act:\n"
+    "- OBSERVE: what facts, files, or live data the step needs.\n"
+    "- ORIENT: which tool fits and why (one clause).\n"
+    "- DECIDE: the concrete action with exact arguments (queries, URLs, file paths).\n"
+    "- ACT: what 'done' looks like for the step (the verification).\n\n"
+    "Encode all of this in ONE crisp line per step, format:\n"
+    "  N. [tool] action — verify: how we know it worked\n"
+    "Example:\n"
+    "  2. [deep_research] queries: ['iPhone 17 Pro Max camera 2026', 'S26 Ultra camera 2026'] — verify: specs table covers camera/battery/price\n\n"
     "CRITICAL RULE for comparative or multi-topic queries:\n"
     "If the goal asks to compare multiple subjects (phones, products, people, policies, etc.) "
     "or requests information across multiple dimensions/aspects/ramifications, your plan MUST include "
-    "a step like:\n"
-    "  2. Call deep_research with queries: [<list of 3-6 specific, narrow sub-queries — one per subject or dimension>]\n"
-    "Each sub-query must be a precise Google search string, NOT a vague description.\n\n"
-    "Write the plan as a plain numbered list. No explanations, no preamble. "
+    "a deep_research step listing 3-6 specific, narrow sub-queries — one per subject or dimension.\n\n"
+    "FILE DELIVERABLES: when the goal produces files, include a final verification step using "
+    "sandbox_ls/sandbox_read to confirm files are complete before reporting done.\n\n"
+    "Keep the whole plan under 250 words. Plain numbered list, no preamble. "
     "If the goal can be answered in a single step without tool calls, respond with: SINGLE_STEP"
 )
 
@@ -48,7 +56,7 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "  {\n"
     "    \"index\": 1,\n"
     "    \"description\": \"Specific step action description (e.g. Scrape pricing data from URL, Look up @handle on GitHub, Deploy landing page)\",\n"
-    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
+    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"sandbox_ls\" | \"sandbox_read\" | \"sandbox_write\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
     "    \"risk_level\": \"low\" | \"medium\" | \"high\"\n"
     "  }\n"
     "]\n\n"
@@ -56,6 +64,8 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "- When user provides a URL or asks to scrape/crawl/browse a webpage: use tool_name=\"scrape_web\".\n"
     "- When user pastes a link or asks to read a specific page's content: use tool_name=\"fetch_url\".\n"
     "- When user asks to remember a preference or fact for later: use tool_name=\"memory_save\".\n"
+    "- When a step creates or modifies files: use tool_name=\"sandbox_write\" (complete files only).\n"
+    "- When a step inspects or verifies existing files: use tool_name=\"sandbox_ls\" or \"sandbox_read\".\n"
     "- When user asks to look up a GitHub username or social profile: use tool_name=\"lookup_handle\".\n"
     "- When user asks to build, deploy, or create a web app, website, landing page, or calculator: use tool_name=\"deploy_site\".\n"
     "- When user asks to search or read emails: use tool_name=\"gmail_search\" or \"gmail_read\".\n"
@@ -66,14 +76,16 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "- When user asks to upload or save a photo to Google Photos: use tool_name=\"photos_upload\" (risk_level=\"high\").\n"
     "- When user asks for general web data, live facts, or research: use tool_name=\"search_web\".\n\n"
     "Risk Level Guidelines:\n"
-    "- 'low': Reading / research (search_web, deep_research, fetch_url, memory_save, memory_recall, scrape_web, lookup_handle, gmail_search, gmail_read, calendar_list_events, calendar_check_availability, photos_search, photos_list, photos_get)\n"
-    "- 'medium': Safe computation (execute_code without file writes, widget rendering)\n"
+    "- 'low': Reading / research (search_web, deep_research, fetch_url, sandbox_ls, sandbox_read, memory_save, memory_recall, scrape_web, lookup_handle, gmail_search, gmail_read, calendar_list_events, calendar_check_availability, photos_search, photos_list, photos_get)\n"
+    "- 'medium': Safe computation (execute_code without file writes, widget rendering, sandbox_write for user-requested deliverables)\n"
     "- 'high': External writes & file mutations (deploy_site, gmail_send, calendar_create_event, photos_upload, execute_code with PDF/Excel/file generation, generate_image)\n\n"
     "Rules:\n"
     "1. Keep descriptions crisp and actionable.\n"
     "2. If the goal is a simple greeting or direct single question, return a 1-step plan with tool_name=null and risk_level='low'.\n"
-    "3. Output strictly valid JSON.\n\n"
-    + AGENT_CONDUCT
+    "3. Output strictly valid JSON.\n"
+    "4. Think OODA: order steps by dependency; each description names its concrete inputs (URLs, queries, paths) and its verification.\n"
+    "5. File deliverables get a closing sandbox verification step (sandbox_ls/sandbox_read).\n\n"
+    + AGENT_CONDUCT + "\n\n" + ULTRA_IDENTITY
 )
 
 # Patterns that signal research-intensive prompts

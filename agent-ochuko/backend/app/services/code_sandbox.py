@@ -157,6 +157,86 @@ async def mount_conversation_files(user_id: str, conversation_id: str, work_dir:
     return await asyncio.to_thread(_do_list_and_download)
 
 
+# ── Sandbox navigation helpers (sandbox_ls / sandbox_read / sandbox_write) ────
+# The model navigates its own conversation workspace on demand instead of the
+# backend injecting file contents into every turn. Paths are resolved inside
+# the conversation's data/ dir only (traversal-safe).
+
+_SANDBOX_IGNORED_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
+
+
+def _resolve_sandbox_path(conversation_id: str, subpath: str = "") -> str:
+    """Resolve a sandbox-relative path, refusing traversal outside data/."""
+    data_dir = os.path.abspath(
+        os.path.join(tempfile.gettempdir(), f"sandbox_{conversation_id}", "data")
+    )
+    target = os.path.abspath(os.path.join(data_dir, subpath or ""))
+    if target != data_dir and not target.startswith(data_dir + os.sep):
+        raise ValueError(f"Path escapes the sandbox: {subpath!r}")
+    return target
+
+
+async def sandbox_list_files(conversation_id: str, subpath: str = "") -> str:
+    """Lists the conversation sandbox tree with sizes. Traversal-safe."""
+    def _list():
+        root = _resolve_sandbox_path(conversation_id, subpath)
+        if not os.path.exists(root):
+            return f"Sandbox path '{subpath or '/'}' does not exist yet."
+        if os.path.isfile(root):
+            return f"{subpath} · {os.path.getsize(root)} bytes"
+        entries = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _SANDBOX_IGNORED_DIRS]
+            for f in filenames:
+                full = os.path.join(dirpath, f)
+                rel = os.path.relpath(full, root).replace("\\", "/")
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    size = 0
+                entries.append(f"- {rel} ({size} bytes)")
+        if not entries:
+            return "Sandbox is empty. Use sandbox_write or execute_code to create files."
+        header = f"Sandbox contents ({subpath or 'root'}):"
+        return header + "\n" + "\n".join(entries[:100])
+    return await asyncio.to_thread(_list)
+
+
+async def sandbox_read_file(conversation_id: str, subpath: str, offset: int = 0, max_bytes: int = 4000) -> str:
+    """Reads a slice of a sandbox text file. Returns metadata + content."""
+    def _read():
+        target = _resolve_sandbox_path(conversation_id, subpath)
+        if not os.path.isfile(target):
+            return f"sandbox_read error: '{subpath}' not found. Use sandbox_ls to list files."
+        size = os.path.getsize(target)
+        with open(target, "rb") as f:
+            f.seek(max(0, offset))
+            chunk = f.read(max(256, min(max_bytes, 16000)))
+        try:
+            text = chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"'{subpath}' is binary ({size} bytes) — use execute_code to inspect it."
+        parts = [f"'{subpath}' · {size} bytes total · showing bytes {offset}–{offset + len(chunk)}"]
+        if offset + len(chunk) < size:
+            parts.append(f"[... {size - offset - len(chunk)} more bytes — call again with offset={offset + len(chunk)} ...]")
+        parts.append(text)
+        return "\n".join(parts)
+    return await asyncio.to_thread(_read)
+
+
+async def sandbox_write_file(conversation_id: str, subpath: str, content: str) -> str:
+    """Writes a complete file into the sandbox data/ dir. Returns a one-line receipt."""
+    def _write():
+        target = _resolve_sandbox_path(conversation_id, subpath)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        data = content.encode("utf-8")
+        with open(target, "wb") as f:
+            f.write(data)
+        preview = content.strip().replace("\n", " ")[:200]
+        return f"WROTE {subpath} · {len(data)} bytes · starts: {preview!r}"
+    return await asyncio.to_thread(_write)
+
+
 async def execute_code_in_sandbox(
     code: str,
     language: str,

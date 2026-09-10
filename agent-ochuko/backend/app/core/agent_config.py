@@ -150,3 +150,29 @@ async def get_max_completion_tokens(mode: str = "think", deployment: Optional[st
         return int(val)
     except (ValueError, TypeError):
         return None
+
+
+# Mode → (App Config key, default output-token budget).
+# Ultra (agent mode) and THINK get full Claude-grade headroom so generated
+# files are never truncated; everything is runtime-tunable via App Config.
+_OUTPUT_TOKEN_BUDGETS = {
+    "ultra":   ("MAX_OUTPUT_TOKENS_ULTRA",   "32768"),
+    "agent":   ("MAX_OUTPUT_TOKENS_ULTRA",   "32768"),
+    "think":   ("MAX_OUTPUT_TOKENS_THINK",   "32768"),
+    "solve":   ("MAX_OUTPUT_TOKENS_SOLVE",   "16384"),
+    "discuss": ("MAX_OUTPUT_TOKENS_DISCUSS", "4096"),
+    "nano":    ("MAX_OUTPUT_TOKENS_DISCUSS", "4096"),
+}
+
+
+async def get_max_output_tokens(mode: str = "think") -> int:
+    """
+    Returns the max_output_tokens budget for the given routing mode.
+    Reads from App Configuration at call time (runtime-tunable).
+    """
+    key, default = _OUTPUT_TOKEN_BUDGETS.get(mode.lower(), ("MAX_OUTPUT_TOKENS_THINK", "32768"))
+    raw = await get_config(key, default)
+    try:
+        return max(1024, int(raw))
+    except (ValueError, TypeError):
+        return int(default)

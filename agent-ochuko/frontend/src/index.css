@@ -25,6 +25,12 @@
   }
 }
 
+/* Artifact panel slide-in (Claude-style right dock) */
+@keyframes slideInRight {
+  from { transform: translateX(24px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
 /* Minimalist scrollbar styling */
 ::-webkit-scrollbar {
   width: 5px;

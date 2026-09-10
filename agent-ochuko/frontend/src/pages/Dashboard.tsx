@@ -17,6 +17,7 @@ import {
 } from '../components/AgentModeWidgets'
 import type { PlanStepItem, AgentTaskData } from '../components/AgentModeWidgets'
 import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
+import { ArtifactPanel } from '../components/ArtifactPanel'
 
 
 
@@ -477,7 +478,7 @@ function DocxPreview({ url }: DocxPreviewProps) {
   }, [url])
 
   return (
-    <div className="w-full h-full min-h-[500px] flex flex-col bg-white text-black p-4 rounded-xl overflow-auto select-text relative">
+    <div className="w-full h-full min-h-[500px] flex flex-col bg-white text-black p-4 rounded-lg overflow-auto select-text relative">
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
           <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
@@ -526,7 +527,7 @@ function FileDownloadCard({
   const hasUrl = download_url && !download_url.startsWith('sandbox:') && !download_url.includes('/mnt/data/')
 
   return (
-    <div className="mt-2 flex items-center gap-3 px-3.5 py-2.5 rounded-xl border border-[#ffffff]/15 bg-[#0d0f11]/60 hover:bg-[#0d0f11]/90 hover:border-[#ffffff]/30 transition-all duration-200 group/dl w-full select-none">
+    <div className="mt-2 flex items-center gap-3 px-3.5 py-2.5 rounded-lg border border-[#ffffff]/15 bg-[#0d0f11]/60 hover:bg-[#0d0f11]/90 hover:border-[#ffffff]/30 transition-all duration-200 group/dl w-full select-none">
       {/* File type icon */}
       <div
         className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border"
@@ -880,7 +881,7 @@ function WidgetRenderer({
   // ── Loading state ────────────────────────────────────────────────────────────
   if (widgetLoading) {
     return (
-      <div className="mt-3 my-2 rounded-xl bg-[#1A3038]/90 border border-[rgba(233,236,239,0.12)] shadow-xl overflow-hidden font-sans animate-fadeIn">
+      <div className="mt-3 my-2 rounded-lg bg-[#1A3038]/90 border border-[rgba(233,236,239,0.12)] shadow-xl overflow-hidden font-sans animate-fadeIn">
         <div className="flex items-center gap-3 px-4 py-3.5 bg-[#223D47]/85 border-b border-[rgba(233,236,239,0.08)]">
           <div
             className="w-3.5 h-3.5 rounded-full border-2 border-white/10 shrink-0"
@@ -915,7 +916,7 @@ function WidgetRenderer({
         </button>
 
         {menuOpen && (
-          <div className="absolute right-0 mt-1.5 w-44 py-1.5 bg-[#0f1118]/95 border border-white/10 rounded-xl shadow-2xl backdrop-blur-md text-[11px] font-medium text-[#8e95a2] select-none flex flex-col z-[100]">
+          <div className="absolute right-0 mt-1.5 w-44 py-1.5 bg-[#0f1118]/95 border border-white/10 rounded-lg shadow-2xl backdrop-blur-md text-[11px] font-medium text-[#8e95a2] select-none flex flex-col z-[100]">
 
             {isSvg && (
               <>
@@ -1309,7 +1310,7 @@ function MermaidBlock({ code }: { code: string }) {
 
   return (
 
-    <div className="group my-3 relative rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
+    <div className="group my-3 relative rounded-lg border border-[#1e2025] bg-[#0d1117] overflow-hidden">
       {isLoading && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d1117]/80 backdrop-blur-sm">
           <div className="flex items-center gap-2">
@@ -1513,14 +1514,14 @@ function SvgBlock({ svg }: { svg: string }) {
 
   if (!dataUri) {
     return (
-      <div className="my-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 text-amber-400 text-sm">
+      <div className="my-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/5 text-amber-400 text-sm">
         Could not render SVG (encoding error).
       </div>
     )
   }
 
   return (
-    <div className="group my-3 relative rounded-xl border border-[#1e2025] bg-[#0d1117] overflow-hidden">
+    <div className="group my-3 relative rounded-lg border border-[#1e2025] bg-[#0d1117] overflow-hidden">
       {/* Controls — top-right, revealed on hover */}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
         {/* Copy SVG source */}
@@ -2032,7 +2033,7 @@ const ImagePending: React.FC<{ prompt?: string }> = ({ prompt }) => (
 
   <div className="flex flex-col gap-2.5 my-1">
 
-    <div className="w-72 h-52 rounded-2xl bg-[#111316] border border-[#1e2025] overflow-hidden relative">
+    <div className="w-72 h-52 rounded-lg bg-[#111316] border border-[#1e2025] overflow-hidden relative">
 
       {/* Animated shimmer */}
 
@@ -2076,7 +2077,7 @@ const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }
     <div className="flex flex-col gap-2 my-1 group/img">
       <div 
         onClick={handlePreview}
-        className="relative rounded-2xl overflow-hidden border border-[#1e2025] shadow-xl shadow-black/50 w-fit max-w-sm cursor-pointer"
+        className="relative rounded-lg overflow-hidden border border-[#1e2025] shadow-xl shadow-black/50 w-fit max-w-sm cursor-pointer"
       >
         <img
           src={url}
@@ -2176,7 +2177,7 @@ const CodeView: React.FC<{ language: string; content: string }> = ({ language, c
   const highlightedLines = useMemo(() => highlightedHtml.split('\n'), [highlightedHtml])
 
   return (
-    <div className="flex font-mono text-[11px] sm:text-[11.5px] leading-relaxed select-text overflow-x-auto text-[#abb2bf] bg-[#07080a] p-4.5 rounded-xl border border-[#1e2025]">
+    <div className="flex font-mono text-[11px] sm:text-[11.5px] leading-relaxed select-text overflow-x-auto text-[#abb2bf] bg-[#07080a] p-4.5 rounded-lg border border-[#1e2025]">
       {/* Line numbers column */}
       <div className="select-none pr-3.5 border-r border-[#1e2025] text-right text-[#4b5263] min-w-[2.25rem] font-bold">
         {lines.map((_, i) => (
@@ -2289,7 +2290,7 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
   return (
 
-    <div className="group relative bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-xl my-4 shadow-lg z-10">
+    <div className="group relative bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-lg my-4 shadow-lg z-10">
 
       {/* Split-button — top-right, reveal on hover */}
 
@@ -2614,7 +2615,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
               title={src.title || src.url}
 
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#1e2025] bg-[#0c0d10]/95 hover:border-[#ffffff]/30 hover:bg-[#ffffff]/5 transition-all duration-200 group/badge max-w-[240px] shadow-sm animate-fadeIn"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#1e2025] bg-[#0c0d10]/95 hover:border-[#ffffff]/30 hover:bg-[#ffffff]/5 transition-all duration-200 group/badge max-w-[240px] shadow-sm animate-fadeIn"
 
             >
 
@@ -3164,7 +3165,7 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
 
           case 'table': {
             return (
-              <div key={key} className="overflow-x-auto my-2.5 border border-white/10 rounded-xl bg-[#0e1013]/60 shadow-sm font-sans">
+              <div key={key} className="overflow-x-auto my-2.5 border border-white/10 rounded-lg bg-[#0e1013]/60 shadow-sm font-sans">
                 <table className="min-w-full divide-y divide-white/10 text-left text-[13px]">
                   <thead className="bg-[#1c1e22]/60 text-white">
                     <tr>
@@ -3269,7 +3270,7 @@ function extractNoticeSection(text: string): string | null {
 function PolicyNoticeCard({ notice }: { notice: string }) {
   const isGuardrail = /safety|guardrail|flagged|policy/i.test(notice)
   return (
-    <div className="mt-2.5 flex items-start gap-2.5 border border-white/10 rounded-xl bg-white/[0.03] px-3.5 py-3 font-sans">
+    <div className="mt-2.5 flex items-start gap-2.5 border border-white/10 rounded-lg bg-white/[0.03] px-3.5 py-3 font-sans">
       <span
         className="shrink-0 mt-[1px] inline-flex items-center justify-center w-[18px] h-[18px] rounded-full text-[10px] font-bold bg-white/10 border border-white/20 text-white/70 leading-none"
         aria-hidden="true"
@@ -3328,7 +3329,7 @@ function extractSourcesSection(text: string): { body: string; sources: { title: 
 function SourcesBlock({ sources }: { sources: { title: string; url: string }[] }) {
   const [open, setOpen] = React.useState(false)
   return (
-    <div className="mt-2.5 border border-white/10 rounded-xl bg-[#0e1013]/60 overflow-hidden font-sans">
+    <div className="mt-2.5 border border-white/10 rounded-lg bg-[#0e1013]/60 overflow-hidden font-sans">
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[12px] font-semibold uppercase tracking-wider text-white/60 hover:text-white/90 hover:bg-white/[0.03] transition duration-150"
@@ -3473,7 +3474,7 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: st
   const percent = Math.min(100, Math.round((currentStep / totalSteps) * 100))
 
   return (
-    <div className="my-3 px-3.5 py-2.5 rounded-xl bg-[#0c0d10]/95 border border-white/[0.08] shadow-lg backdrop-blur-xl select-none animate-fadeIn space-y-2">
+    <div className="my-3 px-3.5 py-2.5 rounded-lg bg-[#0c0d10]/95 border border-white/[0.08] shadow-lg backdrop-blur-xl select-none animate-fadeIn space-y-2">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 overflow-hidden">
           {/* Minimalist Ash Dot */}
@@ -3542,7 +3543,7 @@ const ThinkingPanel: React.FC<{ content: string; isStreaming?: boolean }> = ({ c
   const wordCount = trimmed.split(/\s+/).length
 
   return (
-    <div className={`my-2 rounded-xl border overflow-hidden select-none transition-all duration-300 ${
+    <div className={`my-2 rounded-lg border overflow-hidden select-none transition-all duration-300 ${
       isStreaming 
         ? 'bg-[#0f111a]/95 border-amber-500/25 shadow-[0_0_15px_rgba(245,158,11,0.08)]' 
         : 'bg-[#0b0c10]/95 border-white/[0.08] shadow-md'
@@ -3660,7 +3661,7 @@ const FileAttachmentChip: React.FC<{
       <div
         onClick={handlePreview}
         title={attachment.url ? `Preview ${attachment.name}` : attachment.name}
-        className={`relative group/img w-36 sm:w-40 h-24 sm:h-28 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-black/40 shadow-sm ${
+        className={`relative group/img w-36 sm:w-40 h-24 sm:h-28 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black/40 shadow-sm ${
           attachment.url ? 'cursor-pointer hover:border-white/30' : 'cursor-default'
         } transition-all duration-200`}
       >
@@ -3668,15 +3669,15 @@ const FileAttachmentChip: React.FC<{
           <img
             src={attachment.url}
             alt={attachment.name}
-            className="w-full h-full object-cover rounded-xl"
+            className="w-full h-full object-cover rounded-lg"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center rounded-xl bg-white/5">
+          <div className="w-full h-full flex items-center justify-center rounded-lg bg-white/5">
             <FileText className="w-5 h-5 text-white/30" />
           </div>
         )}
         {/* Subtle hover overlay with filename */}
-        <div className="absolute inset-0 rounded-xl bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2">
+        <div className="absolute inset-0 rounded-lg bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-end p-2">
           <span className="text-[10px] text-white font-medium leading-tight truncate w-full">{attachment.name}</span>
         </div>
       </div>
@@ -7013,7 +7014,7 @@ export const Dashboard: React.FC = () => {
 
         style={{ width: (isSidebarOpen || isSidebarHovered) ? `${sidebarWidth}px` : '256px' }}
 
-        className={`absolute top-3 left-3 h-[calc(100vh-24px)] bg-[#0d0f11]/95 border border-[#1e2025] rounded-2xl z-30 flex flex-col justify-between px-6 py-7 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out ${
+        className={`absolute top-3 left-3 h-[calc(100vh-24px)] bg-[#0d0f11]/95 border border-[#1e2025] rounded-lg z-30 flex flex-col justify-between px-6 py-7 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out ${
 
           isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
 
@@ -7025,7 +7026,7 @@ export const Dashboard: React.FC = () => {
 
           <div className="flex items-center gap-3 mb-8 pb-6 border-b border-[#1e2025]">
 
-            <div className="w-9 h-9 rounded-xl overflow-hidden border border-[#ffffff]/15 bg-brand-bg shrink-0">
+            <div className="w-9 h-9 rounded-lg overflow-hidden border border-[#ffffff]/15 bg-brand-bg shrink-0">
 
               <img src="/favicon.png" alt="Ochuko" className="w-full h-full object-cover" />
 
@@ -7643,7 +7644,7 @@ export const Dashboard: React.FC = () => {
                 <Settings className="w-3.5 h-3.5" />
               </button>
               {isHeaderSettingsOpen && (
-                <div className="absolute right-0 mt-1.5 w-52 rounded-xl border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
+                <div className="absolute right-0 mt-1.5 w-52 rounded-lg border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
                   <button
                     onClick={() => {
                       setIsConnectorModalOpen(true)
@@ -7759,7 +7760,7 @@ export const Dashboard: React.FC = () => {
 
             <div className="h-full flex flex-col items-center justify-center max-w-lg mx-auto text-center space-y-7">
 
-              <div className="w-16 h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
+              <div className="w-16 h-16 bg-brand-surface border border-[#1e2025] rounded-lg overflow-hidden shadow-xl relative group">
 
                 <div className="absolute inset-0 bg-[#ffffff]/4 opacity-0 group-hover:opacity-100 transition duration-500" />
 
@@ -7848,7 +7849,7 @@ export const Dashboard: React.FC = () => {
                       {/* ── Compaction Marker Banner ─────────────────────────────────── */}
                       {msg.isCompactionMarker ? (
                         <div className="my-2">
-                          <div className="flex items-start gap-3 py-3 px-4 rounded-xl bg-[#1a1d22] border border-[#2e3542] text-xs text-brand-muted select-none">
+                          <div className="flex items-start gap-3 py-3 px-4 rounded-lg bg-[#1a1d22] border border-[#2e3542] text-xs text-brand-muted select-none">
                             <svg className="w-4 h-4 mt-0.5 shrink-0 text-brand-accent/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h12A2.25 2.25 0 0120.25 6v12A2.25 2.25 0 0118 20.25H6A2.25 2.25 0 013.75 18V6z" />
                               <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 9h7.5M8.25 12h5.25" />
@@ -7914,7 +7915,7 @@ export const Dashboard: React.FC = () => {
                                         <div className="text-[9px] text-brand-muted/50 font-medium select-none">
                                           {archivedMsg.role === 'user' ? 'You' : 'Agent Ochuko'}
                                         </div>
-                                        <div className={`rounded-xl px-3 py-2 text-brand-text/90 ${archivedMsg.role === 'user' ? 'bg-[#23272d] border border-white/10 rounded-tr-sm' : 'bg-[#1a1d22]/30 border border-[#2e3542]/50 rounded-tl-sm'}`}>
+                                        <div className={`rounded-lg px-3 py-2 text-brand-text/90 ${archivedMsg.role === 'user' ? 'bg-[#23272d] border border-white/10 rounded-tr-sm' : 'bg-[#1a1d22]/30 border border-[#2e3542]/50 rounded-tl-sm'}`}>
                                           {archivedMsg.thinkingContent && (
                                             <div className="mb-2 text-[10px] text-brand-muted/70 italic border-l border-[#2e3542] pl-2 py-0.5 select-none">
                                               {archivedMsg.thinkingContent}
@@ -7976,7 +7977,7 @@ export const Dashboard: React.FC = () => {
 
                     <div
 
-                      className={`relative rounded-2xl min-w-0 ${
+                      className={`relative rounded-lg min-w-0 ${
 
                         msg.role === 'user'
 
@@ -8637,7 +8638,7 @@ export const Dashboard: React.FC = () => {
             <form
               ref={formRef}
               onSubmit={handleSend}
-              className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
+              className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-lg pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
             >
 
             {/* Uploading progress indicator */}
@@ -8694,7 +8695,7 @@ export const Dashboard: React.FC = () => {
                           localObjectUrl: file.localObjectUrl,
                           sizeBytes: file.sizeBytes
                         })}
-                        className="relative group w-28 h-20 sm:w-32 sm:h-24 rounded-xl overflow-hidden border border-white/15 bg-[#121418] cursor-pointer hover:border-white/35 transition shrink-0 shadow-md animate-fadeIn select-none"
+                        className="relative group w-28 h-20 sm:w-32 sm:h-24 rounded-lg overflow-hidden border border-white/15 bg-[#121418] cursor-pointer hover:border-white/35 transition shrink-0 shadow-md animate-fadeIn select-none"
                         title="Click to preview image"
                       >
                         <img
@@ -8734,7 +8735,7 @@ export const Dashboard: React.FC = () => {
                         localObjectUrl: file.localObjectUrl,
                         sizeBytes: file.sizeBytes
                       })}
-                      className="relative group flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
+                      className="relative group flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
                       title="Click to preview file"
                     >
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[9px] tracking-tight border ${extBadgeBg} shrink-0`}>
@@ -8767,7 +8768,7 @@ export const Dashboard: React.FC = () => {
                       content: pastedText.content,
                       sizeBytes: pastedText.sizeBytes
                     })}
-                    className="relative group flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
+                    className="relative group flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
                     title="Click to preview pasted text"
                   >
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-[9px] tracking-tight border bg-blue-500/15 text-blue-400 border-blue-500/30 shrink-0">
@@ -9126,7 +9127,7 @@ export const Dashboard: React.FC = () => {
                 <div className="flex-1 overflow-hidden p-0 bg-[#08090b] flex flex-col min-h-0 w-full">
                   {artifactError ? (
                     <div className="h-full flex items-center justify-center p-6">
-                      <div className="max-w-md w-full p-6 rounded-xl border border-red-500/30 bg-red-500/10 flex flex-col items-center text-center space-y-4">
+                      <div className="max-w-md w-full p-6 rounded-lg border border-red-500/30 bg-red-500/10 flex flex-col items-center text-center space-y-4">
                         <div className="p-3 rounded-full bg-red-500/20 text-red-400">
                           <X className="w-6 h-6" />
                         </div>
@@ -9232,8 +9233,8 @@ export const Dashboard: React.FC = () => {
                       }
                       if (isBinaryFile(activeArtifact.filename)) {
                         return (
-                          <div className="h-full flex items-center justify-center p-8 bg-[#0a0b0d]/30 rounded-xl border border-[#1e2025]">
-                            <div className="max-w-md w-full p-6 rounded-2xl bg-[#0a0b0d] border border-[#1e2025] flex flex-col items-center text-center space-y-4 shadow-xl">
+                          <div className="h-full flex items-center justify-center p-8 bg-[#0a0b0d]/30 rounded-lg border border-[#1e2025]">
+                            <div className="max-w-md w-full p-6 rounded-lg bg-[#0a0b0d] border border-[#1e2025] flex flex-col items-center text-center space-y-4 shadow-xl">
                               <div className="p-4 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
                                 <FileText className="w-10 h-10" />
                               </div>
@@ -9248,7 +9249,7 @@ export const Dashboard: React.FC = () => {
                                       await triggerDirectDownload(activeArtifact.downloadUrl, activeArtifact.filename)
                                     }
                                   }}
-                                  className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm transition shadow-lg shadow-blue-600/15"
+                                  className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium text-sm transition shadow-lg shadow-blue-600/15"
                                 >
                                   <Download className="w-4 h-4" /> Download File
                                 </button>
@@ -9260,7 +9261,7 @@ export const Dashboard: React.FC = () => {
                       }
                       // Fallback for code/text files with no preview
                       return (
-                        <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
+                        <div className="rounded-lg border border-[#1e2025] bg-[#07080a] overflow-hidden">
                           <CodeView
                             language={activeArtifact.filename.split('.').pop() || 'text'}
                             content={artifactContent}
@@ -9270,7 +9271,7 @@ export const Dashboard: React.FC = () => {
                     } else {
                       // activeTab === 'code'
                       return (
-                        <div className="rounded-xl border border-[#1e2025] bg-[#07080a] overflow-hidden">
+                        <div className="rounded-lg border border-[#1e2025] bg-[#07080a] overflow-hidden">
                           <CodeView
                             language={ext === 'md' ? 'markdown' : ext}
                             content={artifactContent}
@@ -9292,7 +9293,7 @@ export const Dashboard: React.FC = () => {
 
         <div className="fixed inset-0 bg-black/70 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
 
-          <div className="bg-[#0d0f11] border border-[#1e2025] rounded-2xl w-full max-w-sm p-6 shadow-2xl space-y-6">
+          <div className="bg-[#0d0f11] border border-[#1e2025] rounded-lg w-full max-w-sm p-6 shadow-2xl space-y-6">
 
             <div className="space-y-2">
 
@@ -9348,7 +9349,7 @@ export const Dashboard: React.FC = () => {
 
         return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
-            <div className="bg-[#0d0f11] border border-[#1e2025] rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-6">
+            <div className="bg-[#0d0f11] border border-[#1e2025] rounded-lg w-full max-w-md p-6 shadow-2xl space-y-6">
               <div className="flex items-center justify-between border-b border-[#1c1e22] pb-3">
                 <h3 className="text-sm font-semibold text-brand-text flex items-center gap-2">
                   <Share2 className="w-4 h-4 text-[#ffffff]" />
@@ -9440,7 +9441,7 @@ export const Dashboard: React.FC = () => {
 
             key={t.id}
 
-            className={`px-4 py-2.5 rounded-xl border text-[12px] font-semibold tracking-wide shadow-xl shadow-black/40 backdrop-blur-md ${
+            className={`px-4 py-2.5 rounded-lg border text-[12px] font-semibold tracking-wide shadow-xl shadow-black/40 backdrop-blur-md ${
 
               t.type === 'error'
 
@@ -9462,7 +9463,7 @@ export const Dashboard: React.FC = () => {
 
       {/* Floating Capabilities Popup at Bottom Left (White background, Black text, Minimalist) */}
       {showCapabilitiesNote && (
-        <div className="fixed bottom-3 left-6 w-80 p-4 rounded-xl border border-black/10 bg-white shadow-2xl flex flex-col gap-2.5 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 pointer-events-auto select-none">
+        <div className="fixed bottom-3 left-6 w-80 p-4 rounded-lg border border-black/10 bg-white shadow-2xl flex flex-col gap-2.5 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 pointer-events-auto select-none">
           <div className="flex items-start justify-between">
             <span className="text-[10px] uppercase tracking-widest text-black/50 font-bold">
               System Notice
@@ -9515,9 +9516,28 @@ export const Dashboard: React.FC = () => {
           onClose={() => setLockMode(null)}
         />
       )}
-      {/* Unified File/Text Preview Modal */}
-      {previewingFile && (
-        <div 
+      {/* Unified File/Text Preview — Claude-style dock for text artifacts, modal for media */}
+      {previewingFile && (() => {
+        const pn = previewingFile.name.toLowerCase()
+        const pIsImg = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(pn)
+        const pIsPdf = previewingFile.type === 'application/pdf' || pn.endsWith('.pdf')
+        const pIsBin = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(pn)
+        if (!pIsImg && !pIsPdf && !pIsBin) {
+          return (
+            <>
+              <div className="fixed inset-0 bg-black/40 z-[99] max-md:bg-[#07080a]/95" onClick={() => setPreviewingFile(null)} />
+              <ArtifactPanel
+                file={previewingFile}
+                content={loadedPreviewContent}
+                loading={previewLoading}
+                renderMarkdown={renderMarkdown}
+                onClose={() => setPreviewingFile(null)}
+              />
+            </>
+          )
+        }
+        return (
+        <div
           className="fixed inset-0 bg-[#07080a]/95 backdrop-blur-md z-[100] flex flex-col items-center justify-between p-4 md:p-6 animate-fadeIn"
           onClick={() => setPreviewingFile(null)}
         >
@@ -9645,14 +9665,14 @@ export const Dashboard: React.FC = () => {
                   <img 
                     src={fileUrl} 
                     alt={previewingFile.name} 
-                    className="w-auto h-auto max-w-full max-h-[85vh] object-contain rounded-xl border border-white/10 shadow-2xl animate-scaleIn select-none"
+                    className="w-auto h-auto max-w-full max-h-[85vh] object-contain rounded-lg border border-white/10 shadow-2xl animate-scaleIn select-none"
                   />
                 )
               }
 
               if (isHtml) {
                 return (
-                  <div className="w-full h-full min-h-[85vh] bg-white rounded-xl border border-white/10 overflow-hidden shadow-2xl">
+                  <div className="w-full h-full min-h-[85vh] bg-white rounded-lg border border-white/10 overflow-hidden shadow-2xl">
                     <iframe 
                       srcDoc={loadedPreviewContent || previewingFile.content || undefined} 
                       src={!previewingFile.content && fileUrl ? fileUrl : undefined} 
@@ -9666,7 +9686,7 @@ export const Dashboard: React.FC = () => {
 
               if (isPdf) {
                 return (
-                  <div className="w-full h-full min-h-[85vh] flex flex-col rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-[#181a20]">
+                  <div className="w-full h-full min-h-[85vh] flex flex-col rounded-lg overflow-hidden border border-white/10 shadow-2xl bg-[#181a20]">
                     <iframe 
                       src={fileUrl} 
                       className="w-full h-full flex-1 border-0 bg-white" 
@@ -9678,8 +9698,8 @@ export const Dashboard: React.FC = () => {
 
               if (isBinary) {
                 return (
-                  <div className="flex flex-col items-center justify-center max-w-md p-8 rounded-2xl bg-[#111317] border border-white/15 text-center shadow-2xl space-y-4">
-                    <div className="w-16 h-16 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center text-white/90">
+                  <div className="flex flex-col items-center justify-center max-w-md p-8 rounded-lg bg-[#111317] border border-white/15 text-center shadow-2xl space-y-4">
+                    <div className="w-16 h-16 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center text-white/90">
                       <FileText className="w-8 h-8" />
                     </div>
                     <div>
@@ -9693,7 +9713,7 @@ export const Dashboard: React.FC = () => {
                         download={previewingFile.name}
                         target="_blank"
                         rel="noreferrer"
-                        className="px-4 py-2 rounded-xl bg-white text-black font-bold text-xs hover:bg-white/90 transition flex items-center gap-2"
+                        className="px-4 py-2 rounded-lg bg-white text-black font-bold text-xs hover:bg-white/90 transition flex items-center gap-2"
                       >
                         <Download className="w-4 h-4" />
                         <span>Download / Open File</span>
@@ -9710,7 +9730,7 @@ export const Dashboard: React.FC = () => {
                   <span className="text-xs font-mono">Loading file contents...</span>
                 </div>
               ) : (
-                <pre className="w-full h-full max-h-[85vh] bg-[#0b0c0f] border border-[#1e2025] rounded-xl p-6 text-[#c9d1d9] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
+                <pre className="w-full h-full max-h-[85vh] bg-[#0b0c0f] border border-[#1e2025] rounded-lg p-6 text-[#c9d1d9] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
                   {loadedPreviewContent || previewingFile.content || "No text content available to display."}
                 </pre>
               )
@@ -9723,7 +9743,8 @@ export const Dashboard: React.FC = () => {
             Click outside or press ESC to dismiss preview
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* Connected Apps Settings Modal */}
       <ConnectorSettingsModal

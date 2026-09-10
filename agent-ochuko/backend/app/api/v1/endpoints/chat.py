@@ -1116,6 +1116,12 @@ async def chat_stream_generator(
         full_system = system_prompt + datetime_context
         if routing_mode in ("think", "solve"):
             full_system = full_system + _THINKING_INSTRUCTION
+        # Agent mode carries the exclusive Ultra identity on top of the general
+        # skill prompt (which already includes the general TASK_APPROACH).
+        # NOTE: the router maps agent requests to think — gate on the request mode.
+        if mode == "agent":
+            from app.core.skills import ULTRA_IDENTITY
+            full_system = full_system + "\n\n" + ULTRA_IDENTITY
 
         # ─── AGENT MODE AUTONOMOUS ORCHESTRATION ───────────────────────────
         if mode == "agent":
@@ -1211,6 +1217,12 @@ async def chat_stream_generator(
                 if plan_text:
                     full_system += format_plan_for_system_prompt(plan_text)
                     logger.info("Injected execution plan into system prompt for user message: %.60s", last_user_msg)
+                    # Surface the plan in the UI (collapsible execution-plan block)
+                    yield (
+                        "data: "
+                        + json.dumps({"type": "agent_plan", "plan": plan_text})
+                        + "\n\n"
+                    )
         except Exception as plan_err:
             logger.warning("Task planning skipped (non-fatal): %s", plan_err)
 
@@ -1239,7 +1251,10 @@ async def chat_stream_generator(
         # We construct a mutable copy of the messages for agent iterations
         local_messages = list(messages)
         iteration = 0
-        max_iterations = 10
+        from app.core.agent_config import get_max_iterations, get_max_output_tokens
+        max_iterations = await get_max_iterations(routing_mode)
+        output_budget = await get_max_output_tokens(routing_mode)
+        logger.info("Agent loop budget: mode=%s iterations=%d output_tokens=%d", routing_mode, max_iterations, output_budget)
         circuit_breaker = create_turn_circuit_breaker(max_steps=max_iterations)
         reflexion = create_reflexion_engine(max_attempts=max_iterations)
         active_tool_step = 0
@@ -1259,7 +1274,7 @@ async def chat_stream_generator(
             from app.core.widget_tools import WIDGET_TOOLS
             stream_kwargs: Dict[str, Any] = {
                 "model": deployment,
-                "max_output_tokens": 4096,
+                "max_output_tokens": output_budget,
                 "tools": [
                     # Two-tool inline widget renderer (read_me + show_widget)
                     *WIDGET_TOOLS,
@@ -1385,6 +1400,80 @@ async def chat_stream_generator(
                                 }
                             },
                             "required": [],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "sandbox_ls",
+                        "description": (
+                            "List the files in your conversation sandbox workspace, with sizes. "
+                            "WHEN to call: before reading or overwriting files, when the user refers "
+                            "to earlier files, or when you need to check what a previous execution "
+                            "produced. Cheap and safe — call it whenever in doubt."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "subpath": {
+                                    "type": "string",
+                                    "description": "Optional subdirectory to list. Omit for the root.",
+                                }
+                            },
+                            "required": [],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "sandbox_read",
+                        "description": (
+                            "Read a slice of a text file from your sandbox workspace. "
+                            "WHEN to call: to inspect a file's content before editing it, verifying a "
+                            "generated file, or continuing work across turns. Returns up to 4000 bytes "
+                            "per call with a continuation offset for larger files."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "File path relative to the sandbox root, e.g. 'report.csv'",
+                                },
+                                "offset": {
+                                    "type": "integer",
+                                    "description": "Byte offset to start reading from (default 0).",
+                                },
+                                "max_bytes": {
+                                    "type": "integer",
+                                    "description": "Max bytes to return per call (default 4000, max 16000).",
+                                },
+                            },
+                            "required": ["path"],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "sandbox_write",
+                        "description": (
+                            "Write a COMPLETE file into your sandbox workspace. Files written here are "
+                            "uploaded and surfaced to the user as downloadable artifacts. "
+                            "QUALITY BAR: write the full file in one call — complete, runnable, no "
+                            "stubs or placeholders. Never truncate to save tokens. "
+                            "For binary/chart outputs, use execute_code instead. "
+                            "AFTER writing large multi-file deliverables, verify with sandbox_read."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "File path relative to the sandbox root, e.g. 'app/main.py'",
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "The complete file content (UTF-8 text).",
+                                },
+                            },
+                            "required": ["path", "content"],
                         },
                     },
                     {
@@ -1676,6 +1765,14 @@ async def chat_stream_generator(
                             step_label = "Saving to conversation memory..."
                         elif t_name == "memory_recall":
                             step_label = "Recalling conversation memory..."
+                        elif t_name == "sandbox_ls":
+                            step_label = "Listing sandbox files..."
+                        elif t_name == "sandbox_read":
+                            p = args.get("path", "")
+                            step_label = f"Reading {p[:50]}" if p else "Reading sandbox file..."
+                        elif t_name == "sandbox_write":
+                            p = args.get("path", "")
+                            step_label = f"Writing {p[:50]}" if p else "Writing sandbox file..."
                         elif t_name == "execute_code":
                             code_text = args.get("code", "").lower()
                             if any(kw in code_text for kw in ["fitz", "pdf", "docx", "signature", "document"]):
@@ -1902,6 +1999,89 @@ async def chat_stream_generator(
                             logger.error(f"Agent memory_recall failed: {e}")
                             tool_outputs.append(f"memory_recall error: {str(e)}")
 
+                    elif t_name == "sandbox_ls":
+                        try:
+                            from app.services.code_sandbox import sandbox_list_files
+                            args = json.loads(t_args_str or "{}")
+                            listing = await sandbox_list_files(conversation_id, (args.get("subpath", "") or "").strip())
+                            tool_outputs.append(listing)
+                        except Exception as e:
+                            logger.error(f"Agent sandbox_ls failed: {e}")
+                            tool_outputs.append(f"sandbox_ls error: {str(e)}")
+
+                    elif t_name == "sandbox_read":
+                        try:
+                            from app.services.code_sandbox import sandbox_read_file
+                            args = json.loads(t_args_str or "{}")
+                            target = (args.get("path", "") or "").strip()
+                            if target:
+                                content = await sandbox_read_file(
+                                    conversation_id,
+                                    target,
+                                    offset=int(args.get("offset", 0) or 0),
+                                    max_bytes=int(args.get("max_bytes", 4000) or 4000),
+                                )
+                                tool_outputs.append(content)
+                            else:
+                                tool_outputs.append("sandbox_read error: 'path' is required.")
+                        except Exception as e:
+                            logger.error(f"Agent sandbox_read failed: {e}")
+                            tool_outputs.append(f"sandbox_read error: {str(e)}")
+
+                    elif t_name == "sandbox_write":
+                        try:
+                            from app.services.code_sandbox import sandbox_write_file, _resolve_sandbox_path
+                            args = json.loads(t_args_str or "{}")
+                            target = (args.get("path", "") or "").strip()
+                            content = args.get("content", "")
+                            if target and content:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Writing file: {target[:80]}",
+                                    })
+                                    + "\n\n"
+                                )
+                                receipt = await sandbox_write_file(conversation_id, target, content)
+                                # Upload to R2 so the user gets a downloadable artifact card.
+                                try:
+                                    from app.services.code_sandbox import _resolve_sandbox_path
+                                    import mimetypes
+                                    full_path = _resolve_sandbox_path(conversation_id, target)
+                                    mime = mimetypes.guess_type(full_path)[0] or "text/plain"
+                                    with open(full_path, "rb") as fh:
+                                        data = fh.read()
+                                    r2_url = await _upload_generated_file(
+                                        file_bytes=data,
+                                        filename=os.path.basename(full_path),
+                                        mime_type=mime,
+                                        conversation_id=conversation_id,
+                                        user_id=user_id,
+                                    )
+                                    accumulated_files.append({
+                                        "filename": os.path.basename(full_path),
+                                        "download_url": r2_url,
+                                        "size_bytes": len(data),
+                                    })
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "generated_files",
+                                            "files": [accumulated_files[-1]],
+                                        })
+                                        + "\n\n"
+                                    )
+                                except Exception as up_err:
+                                    logger.warning(f"sandbox_write R2 upload skipped: {up_err}")
+                                tool_outputs.append(receipt)
+                            else:
+                                tool_outputs.append("sandbox_write error: both 'path' and 'content' are required.")
+                        except Exception as e:
+                            logger.error(f"Agent sandbox_write failed: {e}")
+                            tool_outputs.append(f"sandbox_write error: {str(e)}")
+
                     elif t_name == "execute_code":
                         try:
                             from app.services.code_sandbox import execute_code_in_sandbox
@@ -1944,7 +2124,27 @@ async def chat_stream_generator(
                                     })
                                     + "\n\n"
                                 )
-                                tool_outputs.append(f"Code execution stdout/stderr:\n{exec_output}")
+                # Artifact isolation: cap persisted stdout so huge
+                                # dumps never ride into the next model call. The
+                                # model can inspect files on demand via sandbox_read.
+                                _HEAD, _TAIL = 4000, 1000
+                                if len(exec_output) > _HEAD + _TAIL + 64:
+                                    capped = (
+                                        exec_output[:_HEAD]
+                                        + f"\n[... {len(exec_output) - _HEAD - _TAIL} chars truncated — use sandbox_ls / sandbox_read to inspect files ...]\n"
+                                        + exec_output[-_TAIL:]
+                                    )
+                                else:
+                                    capped = exec_output
+                                tool_outputs.append(f"Code execution stdout/stderr:\n{capped}")
+                                # Reflexion: on execution failure, inject a self-correction
+                                # directive so the next iteration changes approach.
+                                if any(sig in exec_output.lower() for sig in ("traceback", "error", "exception", "not found", "cannot")):
+                                    try:
+                                        trial = reflexion.record_trial(f"execute_code: {code_str[:120]}", exec_output[:500])
+                                        tool_outputs.append(f"[Self-correction] {trial.self_critique}")
+                                    except Exception as ref_err:
+                                        logger.debug("reflexion skip: %s", ref_err)
                             else:
                                 tool_outputs.append("Code snippet was empty.")
                         except Exception as e:
@@ -2112,7 +2312,7 @@ async def chat_stream_generator(
                 async with client.responses.stream(
                     model=deployment,
                     input=[normalize_responses_message(m) for m in synth_input],
-                    max_output_tokens=4096,
+                    max_output_tokens=output_budget,
                 ) as synth_stream:
                     async for s_event in synth_stream:
                         if s_event.type == "response.output_text.delta":

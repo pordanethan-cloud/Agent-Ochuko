@@ -1,4 +1,4 @@
-﻿# app/core/skills.py
+# app/core/skills.py
 """
 Skill-based prompt system — replaces the monolithic _OCHUKO_RULE.
 
@@ -18,10 +18,10 @@ Adding a new skill:
 import re
 from typing import Literal
 
-# â”€â”€ Skill names â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Skill names ────────────────────────────────────────────────────────────────
 SkillName = Literal["code", "svg", "image", "research", "analysis", "writing", "help", "general"]
 
-# â”€â”€ Base identity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Base identity ──────────────────────────────────────────────────────────────
 # Always prepended. Covers identity, tone, no-emoji, search mandate, time
 # awareness, conduct contract (mistakes / wellbeing / refusal), formatting
 # discipline, widget flow, and tool roster. Token-capped by test (â‰¤500).
@@ -66,7 +66,7 @@ BASE_IDENTITY = (
     "`generate_image`, `memory_save` / `memory_recall`, `visualize__read_me` + `visualize__show_widget`."
 )
 
-# â”€â”€ Agent-mode conduct addendum â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Agent-mode conduct addendum ────────────────────────────────────────────────
 # Compact persona contract injected into agent-mode planner/synthesis contexts.
 # Kept separate from BASE_IDENTITY so per-step payloads stay lean.
 AGENT_CONDUCT = (
@@ -77,7 +77,32 @@ AGENT_CONDUCT = (
     "- Decline clearly illegal or unsafe sub-tasks in one sentence and continue with the nearest safe alternative."
 )
 
-# â”€â”€ Skill modules â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Ultra identity ─────────────────────────────────────────────────────────────
+# Agent-mode-ONLY persona tokens. The behavioral approach lives in
+# TASK_APPROACH (general for all modes); this carries the identity that makes
+# agent mode feel like a different, deeper tier. Token-capped by test (≤250).
+ULTRA_IDENTITY = (
+    "You are Ochuko Ultra — the deep-autonomy tier of Agent Ochuko, reserved for hard, "
+    "multi-step work. You operate with full ownership: think deeper, plan further ahead, "
+    "consider multiple approaches before committing, and exhaust options before giving up. "
+    "You hold yourself to the highest standard of craft — every deliverable production-grade, "
+    "every claim verified, every file complete."
+)
+
+# ── General task approach ──────────────────────────────────────────────────────
+# Behavioral half of the Ultra upgrade, generalized to ALL modes. Appended by
+# get_skill_prompt. Carries NO identity tokens — those stay exclusive to agent
+# mode via ULTRA_IDENTITY.
+TASK_APPROACH = (
+    "APPROACH TO TASKS:\n"
+    "- Plan before acting: decompose the goal, order steps by dependency, pick tools deliberately.\n"
+    "- Self-check after each step; correct course silently and continue.\n"
+    "- Verify before declaring done: run or inspect what you built; state what you verified.\n"
+    "- Deliverables are complete and usable — never stubs, never truncated; output budget is not a constraint.\n"
+    "- If blocked, state the blocker plainly and take the best alternative path."
+)
+
+# ── Skill modules ──────────────────────────────────────────────────────────────
 # Each skill is injected ONLY when the classifier detects the relevant task type.
 SKILLS: dict[str, str] = {
 
@@ -86,14 +111,17 @@ SKILLS: dict[str, str] = {
         "When writing, refactoring, or providing code files (React, TypeScript, Python, etc.) for a codebase:\n"
         "  - Format code cleanly inside multi-line fenced code blocks with language tags (```tsx, ```typescript, ```python, etc.).\n"
         "  - Preserve indentation and formatting. Never dump minified single-line code into response prose.\n"
-        "You also have an execute_code tool — a persistent sandbox (Python/JS/Bash) with FULL internet access.\n"
-        "  - Reading Files: Read from `../data/filename.ext`.\n"
-        "  - Writing Files: Save outputs under `../data/filename.ext`.\n"
+        "You also have a persistent sandbox (Python/JS/Bash) with FULL internet access.\n"
+        "  - Reading Files: use `sandbox_read` (or read from `../data/filename.ext` in code).\n"
+        "  - Listing Files: use `sandbox_ls` to see everything your sandbox contains.\n"
+        "  - Writing Files: prefer `sandbox_write` (or save under `../data/filename.ext` in code).\n"
         "  - Execution: Use `execute_code` when the user wants to run code, analyze data, plot charts, or process files.\n"
         "  - Do NOT call `visualize__show_widget` when providing codebase component code.\n"
-        "FILE CREATION QUALITY BAR:\n"
-        "  - Generated files must be complete and immediately usable — never stubs, placeholders, or truncated snippets.\n"
-        "  - Produce full runnable output (real data bindings, valid syntax, all imports included)."
+        "FILE CREATION CONTRACT (violations count as task failure):\n"
+        "  - Generated files must be COMPLETE and immediately usable — never stubs, placeholders, TODOs, or truncated snippets.\n"
+        "  - Full runnable output: real data bindings, valid syntax, all imports, all functions implemented.\n"
+        "  - A 500-line file gets 500 real lines. Never cut a file short to save tokens — output budget is not a constraint.\n"
+        "  - Multi-file deliverables: write every file fully; verify the set hangs together before declaring done."
     ),
 
     "svg": (
@@ -182,7 +210,7 @@ SKILLS: dict[str, str] = {
     "general": "",  # No extra skill injection — base identity only
 }
 
-# â”€â”€ Task classifier â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Task classifier ────────────────────────────────────────────────────────────
 # Regex patterns checked in priority order. First match wins.
 # Patterns are intentionally broad — false positives are acceptable because
 # loading an extra skill costs only ~150 tokens, not an extra inference call.
@@ -260,15 +288,19 @@ def classify_skill(message: str) -> SkillName:
 def get_skill_prompt(message: str) -> str:
     """
     Return the full system prompt for this message:
-    BASE_IDENTITY + (skill module if applicable).
+    BASE_IDENTITY + (skill module if applicable) + TASK_APPROACH.
 
     This is what gets passed as the system prompt to the model.
+    The task approach is general (all modes); the Ultra identity is NOT
+    included here — it is agent-mode-only (see ULTRA_IDENTITY).
     """
     skill = classify_skill(message)
     skill_text = SKILLS.get(skill, "")
+    parts = [BASE_IDENTITY]
     if skill_text:
-        return BASE_IDENTITY + "\n\n" + skill_text
-    return BASE_IDENTITY
+        parts.append(skill_text)
+    parts.append(TASK_APPROACH)
+    return "\n\n".join(parts)
 
 
 def get_skill_name(message: str) -> SkillName:

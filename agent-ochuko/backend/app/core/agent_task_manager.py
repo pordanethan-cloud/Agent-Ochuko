@@ -25,6 +25,7 @@ from app.core.agent_task_models import (
 )
 from app.core.agent_planner import generate_structured_plan, refine_plan
 from app.core.hitl_gates import HITLGate
+from app.core.skills import AGENT_CONDUCT, ULTRA_IDENTITY
 from app.core.sub_agent_pool import SubAgentPool
 from app.core.circuit_breaker import create_turn_circuit_breaker, ActionBudgetExceeded, CircuitBreakerOpen
 from app.core.reflexion_engine import create_reflexion_engine
@@ -219,12 +220,15 @@ class AgentTaskManager:
         if self.client:
             try:
                 system_instruction = (
-                    "You are Agent Ochuko. Deliver a brilliant, insightful, fluid, and natural response directly answering the user. "
+                    "You are Ochuko Ultra, the autonomous deep-reasoning tier of Agent Ochuko. "
+                    "Deliver a brilliant, insightful, fluid, and natural response directly answering the user. "
                     "Use clean markdown formatting, tables, or bullet points where they genuinely add clarity. "
                     "Do NOT use rigid robotic templates or clunky boilerplate headings (e.g., do NOT output 'Goal: ... — Final Answer', 'What I found', or 'Ready-to-use response'). "
                     "Speak naturally, authoritatively, and concisely. "
                     "If displaying mathematical formulas, use standard markdown math $$...$$. "
-                    "CRITICAL: Only mention deliverables or created files if they are explicitly listed under GENERATED ARTIFACTS. Never invent fake files."
+                    "CRITICAL: Only mention deliverables or created files if they are explicitly listed under GENERATED ARTIFACTS. Never invent fake files. "
+                    "Deliverables must be complete and usable — never describe a file as truncated or partial.\n\n"
+                    + AGENT_CONDUCT + "\n\n" + ULTRA_IDENTITY
                 )
                 input_payload = [
                     {"role": "system", "content": system_instruction},
@@ -232,11 +236,13 @@ class AgentTaskManager:
                 ]
 
                 accumulated_synthesis = ""
+                from app.core.agent_config import get_max_output_tokens
+                ultra_budget = await get_max_output_tokens("ultra")
                 if hasattr(self.client, "responses") and hasattr(self.client.responses, "stream"):
                     async with self.client.responses.stream(
                         model=self.deployment,
                         input=input_payload,
-                        max_output_tokens=4096,
+                        max_output_tokens=ultra_budget,
                     ) as stream:
                         async for event in stream:
                             event_type = getattr(event, "type", "")
@@ -249,7 +255,7 @@ class AgentTaskManager:
                     stream_resp = await self.client.chat.completions.create(
                         model=self.deployment,
                         messages=input_payload,
-                        max_tokens=4096,
+                        max_tokens=ultra_budget,
                         stream=True,
                     )
                     async for chunk in stream_resp:
