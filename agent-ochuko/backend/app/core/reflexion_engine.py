@@ -29,7 +29,12 @@ class ReflexionEngine:
         attempt_num = len(self.trials) + 1
         
         # Simple rule-based reflection heuristic (augmented by LLM self-critique in turn prompt)
-        critique = f"Attempt {attempt_num} failed with error: {error_output}. Re-examine arguments, imports, and syntax before retrying."
+        # Tone aligned with the Ochuko conduct contract: direct, factual, no apology loops.
+        critique = (
+            f"Attempt {attempt_num} failed. Error: {error_output}. "
+            "Diagnose the root cause, re-examine arguments, imports, and syntax, "
+            "then adjust the approach — do not repeat the identical failing call."
+        )
         
         trial = ExecutionTrial(
             attempt=attempt_num,

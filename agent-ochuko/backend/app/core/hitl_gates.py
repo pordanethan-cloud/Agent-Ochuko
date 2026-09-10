@@ -12,7 +12,8 @@ from app.core.agent_task_models import PlanStep, RiskLevel
 logger = logging.getLogger("app.core.hitl_gates")
 
 LOW_RISK_TOOLS = {
-    "search_web", "deep_research", "visualize__read_me",
+    "search_web", "deep_research", "fetch_url",
+    "memory_save", "memory_recall", "visualize__read_me",
     "gmail_search", "gmail_read", "calendar_list_events", "calendar_check_availability",
     "photos_search", "photos_list", "photos_get",
 }

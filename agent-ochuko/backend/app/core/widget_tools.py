@@ -427,10 +427,14 @@ WIDGET_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "name": "visualize__read_me",
         "description": (
-            "Returns required context for show_widget: CSS variables, color tokens, "
-            "typography rules, layout constraints, and examples for the selected "
-            "design modules. Call this BEFORE the first show_widget call in any "
-            "response. Do NOT narrate or mention this call to the user."
+            "Loads Ochuko's design system context: CSS variables, color tokens, "
+            "typography rules, layout constraints, and worked examples for the "
+            "selected design modules. "
+            "WHEN to call: BEFORE the first visualize__show_widget call in any "
+            "response — the tokens it returns are REQUIRED for on-brand output. "
+            "WHEN NOT to call: for plain code snippets or data-only tables that "
+            "need no visual rendering. "
+            "Do NOT narrate or mention this call to the user."
         ),
         "parameters": {
             "type": "object",
@@ -464,10 +468,14 @@ WIDGET_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "name": "visualize__show_widget",
         "description": (
-            "Renders SVG or HTML inline in the chat. "
+            "Renders SVG or HTML inline in the chat as a live widget the user can "
+            "interact with and download. "
             "Auto-detects mode: code starting with '<svg' → SVG mode. "
             "Everything else → HTML mode (supports JS, inline CSS, Chart.js CDN). "
-            "ALWAYS call visualize__read_me first. "
+            "CONTRACT: ALWAYS call visualize__read_me first — its tokens define the "
+            "Ochuko brand (abyssal teal surfaces, parchment text, mint success "
+            "accents). Widgets must be fully functional on first render — no "
+            "placeholders, no external local assets. "
             "Never narrate this call. Use a natural preamble like 'Here's a diagram of that flow.'"
         ),
         "parameters": {

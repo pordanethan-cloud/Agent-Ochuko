@@ -2,12 +2,11 @@
 """
 Grounded Search Engine endpoint.
 
-Web search is performed exclusively by Gemini 2.5 Flash with Google Search grounding.
-Azure Bing Search is NOT used anywhere in this system.
-
-The Gemini model retrieves and synthesises the answer in a single generation call,
-returning a cited, grounded response. Sources are extracted from grounding metadata
-and returned alongside the answer.
+Web search uses the shared three-tier retrieval pipeline from the chat module:
+  Phase 0: Tavily (primary — advanced depth, page-level content, recency filter)
+  Phase 1: Gemini 2.5 Flash with Google Search grounding (fallback)
+  Phase 1-fallback: open-websearch daemon/CLI (DuckDuckGo/Brave/Bing)
+followed by Azure OpenAI synthesis over the retrieved context.
 
 Route: POST /v1/search/ask-hybrid
 Auth:  Requires a valid JWT (same guard as the chat endpoints).

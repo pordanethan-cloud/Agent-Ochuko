@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any
 from openai import AsyncAzureOpenAI
 from app.core.agent_task_models import PlanStep, StepStatus, RiskLevel
 from app.core.hitl_gates import HITLGate
+from app.core.skills import AGENT_CONDUCT
 
 logger = logging.getLogger("app.core.agent_planner")
 
@@ -47,12 +48,14 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "  {\n"
     "    \"index\": 1,\n"
     "    \"description\": \"Specific step action description (e.g. Scrape pricing data from URL, Look up @handle on GitHub, Deploy landing page)\",\n"
-    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"generate_image\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
+    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
     "    \"risk_level\": \"low\" | \"medium\" | \"high\"\n"
     "  }\n"
     "]\n\n"
     "Tool Selection Directives:\n"
     "- When user provides a URL or asks to scrape/crawl/browse a webpage: use tool_name=\"scrape_web\".\n"
+    "- When user pastes a link or asks to read a specific page's content: use tool_name=\"fetch_url\".\n"
+    "- When user asks to remember a preference or fact for later: use tool_name=\"memory_save\".\n"
     "- When user asks to look up a GitHub username or social profile: use tool_name=\"lookup_handle\".\n"
     "- When user asks to build, deploy, or create a web app, website, landing page, or calculator: use tool_name=\"deploy_site\".\n"
     "- When user asks to search or read emails: use tool_name=\"gmail_search\" or \"gmail_read\".\n"
@@ -63,13 +66,14 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "- When user asks to upload or save a photo to Google Photos: use tool_name=\"photos_upload\" (risk_level=\"high\").\n"
     "- When user asks for general web data, live facts, or research: use tool_name=\"search_web\".\n\n"
     "Risk Level Guidelines:\n"
-    "- 'low': Reading / research (search_web, deep_research, scrape_web, lookup_handle, gmail_search, gmail_read, calendar_list_events, calendar_check_availability, photos_search, photos_list, photos_get)\n"
+    "- 'low': Reading / research (search_web, deep_research, fetch_url, memory_save, memory_recall, scrape_web, lookup_handle, gmail_search, gmail_read, calendar_list_events, calendar_check_availability, photos_search, photos_list, photos_get)\n"
     "- 'medium': Safe computation (execute_code without file writes, widget rendering)\n"
     "- 'high': External writes & file mutations (deploy_site, gmail_send, calendar_create_event, photos_upload, execute_code with PDF/Excel/file generation, generate_image)\n\n"
     "Rules:\n"
     "1. Keep descriptions crisp and actionable.\n"
     "2. If the goal is a simple greeting or direct single question, return a 1-step plan with tool_name=null and risk_level='low'.\n"
-    "3. Output strictly valid JSON."
+    "3. Output strictly valid JSON.\n\n"
+    + AGENT_CONDUCT
 )
 
 # Patterns that signal research-intensive prompts

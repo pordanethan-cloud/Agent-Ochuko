@@ -40,7 +40,8 @@ class ReviewerAgent:
                 missing.append("Document letterhead application")
 
         if missing:
-            feedback = f"ReviewerAgent flag: Output is missing key elements: {missing}"
+            # Tone aligned with the Ochuko conduct contract: direct, factual, no apology loops.
+            feedback = f"Output is missing key requirements: {missing}. Fix these gaps and resubmit."
             logger.warning(feedback)
             return ReviewResult(is_approved=False, feedback=feedback, missing_requirements=missing)
 

@@ -6,6 +6,7 @@ import re
 import uuid
 import base64
 import httpx
+from html.parser import HTMLParser
 from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -204,6 +205,189 @@ async def _perform_open_websearch_fallback(query: str) -> tuple:
         raise e
 
 
+# ── Time-aware search helpers ─────────────────────────────────────────────────
+# Queries mentioning live/current data get the current year appended so search
+# engines return fresh results, and every search context carries the execution
+# date so the synthesising model can reason about recency.
+
+_TIME_SENSITIVE_RE = re.compile(
+    r"\b(latest|current|today|now|recent|this\s+(?:year|month|week)|"
+    r"news|breaking|price|prices|rate|rates|update|updated|trending|2024|2025|2026|2027)\b",
+    re.IGNORECASE,
+)
+
+
+def _time_aware_query(query: str) -> str:
+    """Append the current year to time-sensitive queries for freshness."""
+    q = (query or "").strip()
+    current_year = datetime.now(timezone.utc).year
+    if _TIME_SENSITIVE_RE.search(q) and str(current_year) not in q:
+        return f"{q} {current_year}"
+    return q
+
+
+def _search_time_header() -> str:
+    """Header prepended to every search context so the model knows 'now'."""
+    from datetime import timedelta
+    now = datetime.now(timezone(timedelta(hours=1)))
+    return (
+        f"Search executed on {now.strftime('%A, %B %d, %Y at %I:%M %p')} (WAT). "
+        f"Current year: {now.year}. Prefer the freshest sources and state publication dates when available."
+    )
+
+
+async def _perform_tavily_search(query: str) -> tuple:
+    """
+    Primary retrieval via the Tavily Search API (advanced depth).
+
+    Unlike snippet-only metasearch, Tavily advanced returns page-level content
+    extracts per result plus an optional synthesized answer — this is what
+    closes the quality gap vs Claude-style grounded search.
+
+    Returns (google_context, sources) in the same shape as the Gemini grounding
+    path. Raises RuntimeError when TAVILY_API_KEY is missing or the call fails,
+    so callers can cascade to the Gemini/open-websearch fallbacks.
+    """
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("TAVILY_API_KEY is not configured.")
+
+    payload: Dict[str, Any] = {
+        "api_key": api_key,
+        "query": _time_aware_query(query),
+        "search_depth": "advanced",
+        "include_answer": True,
+        "include_raw_content": False,
+        "max_results": 8,
+    }
+    # News-class queries get recency filtering (last 30 days)
+    if _TIME_SENSITIVE_RE.search(query):
+        payload["topic"] = "news"
+        payload["days"] = 30
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        res = await client.post("https://api.tavily.com/search", json=payload)
+        res.raise_for_status()
+        data = res.json()
+
+    results = data.get("results", []) or []
+    sources: List[Dict[str, str]] = []
+    chunks: List[str] = []
+    seen_urls: set = set()
+    for r in results:
+        url = r.get("url", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        title = r.get("title", "") or url
+        content = (r.get("content", "") or "").strip()
+        published = r.get("published_date", "") or ""
+        sources.append({"title": title, "url": url})
+        chunk = f"Source: {title}\nURL: {url}"
+        if published:
+            chunk += f"\nPublished: {published}"
+        chunk += f"\nContent: {content}"
+        chunks.append(chunk)
+
+    context_parts = [_search_time_header()]
+    tavily_answer = (data.get("answer", "") or "").strip()
+    if tavily_answer:
+        context_parts.append(f"Search Synthesis: {tavily_answer}")
+    context_parts.append(
+        "Supporting Sources:\n" + ("\n\n".join(chunks) if chunks else "No live web results found.")
+    )
+    google_context = "\n\n".join(context_parts)
+    return google_context, sources[:20]
+
+
+# ── fetch_url: full-page reader (free, no paid API) ───────────────────────────
+# Claude-style lever: after search_web surfaces a promising result, read the
+# actual page content instead of synthesising from thin snippets.
+
+class _HTMLTextExtractor(HTMLParser):
+    """Stdlib HTMLParser that extracts readable text, skipping script/style."""
+    _SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "head"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._chunks: List[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+        elif tag in ("p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"):
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0 and data.strip():
+            self._chunks.append(data.strip())
+
+    def get_text(self) -> str:
+        import re as _re
+        text = " ".join(self._chunks)
+        return _re.sub(r"\n{3,}", "\n\n", _re.sub(r"[ \t]{2,}", " ", text)).strip()
+
+
+def _html_to_text(html: str) -> str:
+    """Converts raw HTML to clean readable text (stdlib only, no new deps)."""
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(html)
+    except Exception:
+        pass
+    return extractor.get_text()
+
+
+async def _perform_fetch_url(url: str) -> str:
+    """
+    Fetches a web page and returns clean, token-safe text content.
+
+    Returns a string suitable for direct injection into the tool-output
+    context. Never raises to the model context — errors degrade to a
+    graceful one-line notice the model can act on.
+    """
+    url = (url or "").strip()
+    if not url:
+        return "fetch_url error: no URL provided."
+    if not url.startswith(("http://", "https://")):
+        return f"fetch_url error: '{url[:100]}' is not a valid http(s) URL."
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AgentOchuko/1.0; +https://ochuko.ai)"},
+        ) as client:
+            res = await client.get(url)
+            res.raise_for_status()
+    except Exception as e:
+        logger.warning("fetch_url failed for %.120s: %s", url, e)
+        return f"fetch_url error: could not retrieve {url[:200]} ({type(e).__name__})."
+
+    content_type = res.headers.get("content-type", "")
+    if "html" in content_type or "xml" in content_type or "text/plain" in content_type:
+        body = res.text
+    else:
+        return f"fetch_url error: unsupported content type '{content_type or 'unknown'}' at {url[:200]}."
+
+    if "html" in content_type:
+        body = _html_to_text(body)
+
+    _MAX_PAGE_TEXT = 12000
+    if len(body) > _MAX_PAGE_TEXT:
+        body = body[:_MAX_PAGE_TEXT] + "\n\n[... page content truncated ...]"
+    if not body.strip():
+        return f"fetch_url: retrieved {url[:200]} but no readable text was found (page may be JS-rendered)."
+
+    retrieved_date = _search_time_header().split(".")[0]
+    return f"Content from {url} ({retrieved_date}):\n\n{body}"
+
+
 async def _perform_google_search(
     query: str,
     synthesis_deployment: str = "",
@@ -211,23 +395,28 @@ async def _perform_google_search(
     return_raw: bool = False,
 ) -> Dict[str, Any]:
     """
-    Two-phase multi-cloud hybrid search (reference architecture):
+    Three-tier hybrid search pipeline:
+
+    Phase 0 — Tavily Retrieval (primary, when TAVILY_API_KEY is configured)
+        Advanced-depth search with page-level content extracts, recency
+        filtering for news-class queries, and date-stamped context.
 
     Phase 1 — Google Retrieval (Gemini 2.5 Flash, google-genai SDK)
         Triggers the Google Search grounding tool to pull live web snippets
         and source metadata. Gemini is used ONLY for retrieval — it is the
         lightest, fastest path to real-time Google results.
 
+    Phase 1-fallback — open-websearch daemon/CLI (DuckDuckGo/Brave/Bing)
+
     Phase 2 — Azure Synthesis (Azure OpenAI Responses API, async)
-        The raw Google context is packaged into a system prompt and forwarded
+        The raw retrieved context is packaged into a system prompt and forwarded
         to the Azure OpenAI deployment for accurate, structured synthesis.
-        Azure reasons over the live data; Gemini retrieves it.
 
     Returns { "answer": str, "sources": [{"title": str, "url": str}] }
     """
     google_api_key = os.getenv("GOOGLE_API_KEY")
-    if not google_api_key:
-        raise RuntimeError("GOOGLE_API_KEY is not configured.")
+    if not google_api_key and not os.getenv("TAVILY_API_KEY"):
+        raise RuntimeError("No web search provider configured (set GOOGLE_API_KEY or TAVILY_API_KEY).")
 
     # ── Phase 1: Google Grounding via Gemini 2.5 Flash ────────────────────
     # Run the synchronous google-genai call off the event loop thread
@@ -318,17 +507,23 @@ async def _perform_google_search(
 
         raise last_exc or RuntimeError("All Gemini API keys failed.")
 
+    # ── Phase 0: Tavily retrieval (primary — page-level content depth) ────
     try:
-        google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
-    except Exception as google_err:
-        logger.warning("Primary Google search retrieval failed: %s. Attempting open-websearch fallback...", google_err)
+        google_context, sources = await _perform_tavily_search(query)
+        logger.info("Tavily retrieval succeeded for query: %.80s", query)
+    except Exception as tavily_err:
+        logger.info("Tavily retrieval unavailable (%s). Falling back to Gemini grounding...", tavily_err)
         try:
-            google_context, sources = await _perform_open_websearch_fallback(query)
-            logger.info("Successfully retrieved search results using open-websearch fallback")
-        except Exception as fallback_err:
-            logger.error("Fallback open-websearch also failed: %s. Reverting to empty context.", fallback_err)
-            google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
-            sources = []
+            google_context, sources = await asyncio.to_thread(_google_retrieval_phase)
+        except Exception as google_err:
+            logger.warning("Primary Google search retrieval failed: %s. Attempting open-websearch fallback...", google_err)
+            try:
+                google_context, sources = await _perform_open_websearch_fallback(query)
+                logger.info("Successfully retrieved search results using open-websearch fallback")
+            except Exception as fallback_err:
+                logger.error("Fallback open-websearch also failed: %s. Reverting to empty context.", fallback_err)
+                google_context = "Google web search was unavailable. Fallback to your built-in search or training knowledge to answer."
+                sources = []
 
     if return_raw:
         return {
@@ -601,7 +796,31 @@ async def build_llm_context(conversation_id: str) -> List[Dict[str, Any]]:
             )
         response = await asyncio.to_thread(fetch_msgs)
         db_messages = response.data or []
-        formatted_messages = []
+
+        formatted_messages: List[Dict[str, Any]] = []
+
+        # Inject persisted conversation memory (agent_memory JSONB) as a leading
+        # system message so remembered user facts/preferences are always in context.
+        try:
+            def fetch_memory():
+                return (
+                    supabase.table("conversations")
+                    .select("agent_memory")
+                    .eq("id", conversation_id)
+                    .single()
+                    .execute()
+                )
+            mem_res = await asyncio.to_thread(fetch_memory)
+            agent_memory = (mem_res.data or {}).get("agent_memory") or {}
+            if isinstance(agent_memory, dict) and agent_memory:
+                mem_lines = [f"- {k}: {v}" for k, v in agent_memory.items()]
+                formatted_messages.append({
+                    "role": "system",
+                    "content": "[Conversation Memory — durable user facts & preferences]:\n" + "\n".join(mem_lines),
+                })
+        except Exception as mem_err:
+            logger.debug("agent_memory injection skipped: %s", mem_err)
+
         for msg in db_messages:
             role = msg.get("role")
             content = msg.get("content") or ""
@@ -1019,8 +1238,13 @@ async def chat_stream_generator(
                         "type": "function",
                         "name": "search_web",
                         "description": (
-                            "Search the web using Google for current, real-time information. "
+                            "Search the web for current, real-time information. "
                             "Call this for a SINGLE, focused lookup. "
+                            "For anything time-sensitive (news, prices, laws, releases, scores), "
+                            "include the current year in the query — e.g. 'Nigeria tax reform 2026'. "
+                            "AFTER searching: if a result looks central to the answer but the snippet "
+                            "is thin, follow up with fetch_url on that result's URL to read the page. "
+                            "DUTY: cite web-sourced claims with [n](url) markers. "
                             "For comparing multiple subjects or researching multiple dimensions at once, "
                             "use deep_research instead."
                         ),
@@ -1044,6 +1268,7 @@ async def chat_stream_generator(
                             "Use this whenever the user asks to compare subjects (phones, products, policies, people), "
                             "requests info across multiple dimensions/aspects/ramifications, or needs a structured research report. "
                             "Pass a list of 2-6 specific, targeted search strings — one per subject or dimension. "
+                            "For time-sensitive topics, include the current year in each query. "
                             "Results from all queries are merged and returned together. "
                             "PREFER this over calling search_web multiple times."
                         ),
@@ -1063,18 +1288,92 @@ async def chat_stream_generator(
                     },
                     {
                         "type": "function",
+                        "name": "fetch_url",
+                        "description": (
+                            "Read the full text content of a specific web page. "
+                            "WHEN to call: after search_web surfaces a promising result and you need "
+                            "the page's actual content (not just a snippet); or when the user pastes a "
+                            "link and asks about its content. "
+                            "WHEN NOT to call: for PDF/document files (attach or use the document "
+                            "pipeline instead); for site-wide crawling (call once per page, pick the "
+                            "most relevant). "
+                            "DUTY: facts taken from a fetched page must be cited with a [n](url) "
+                            "marker referencing that page's URL."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "url": {
+                                    "type": "string",
+                                    "description": "The complete http(s) URL of the page to read",
+                                }
+                            },
+                            "required": ["url"],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "memory_save",
+                        "description": (
+                            "Persist a durable fact or preference about the user to conversation "
+                            "memory. WHEN to call: the user states a stable preference, goal, project "
+                            "detail, or correction worth remembering for later turns (e.g. 'I prefer "
+                            "concise answers', 'my startup is X'). NEVER save credentials, tokens, "
+                            "passwords, or other sensitive data. Keys are short slugs "
+                            "(e.g. 'tone_preference'); values are one crisp sentence."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "description": "Short snake_case slug identifying the fact",
+                                },
+                                "value": {
+                                    "type": "string",
+                                    "description": "The fact or preference, one crisp sentence",
+                                },
+                            },
+                            "required": ["key", "value"],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "memory_recall",
+                        "description": (
+                            "Read facts previously saved with memory_save for this conversation. "
+                            "WHEN to call: at the start of a task where remembered preferences or "
+                            "facts could change your answer, or when the user asks what you remember. "
+                            "Call with a specific key when you know it, or no key to dump all saved "
+                            "facts."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "description": "Optional specific memory key to recall. Omit to recall all saved facts.",
+                                }
+                            },
+                            "required": [],
+                        },
+                    },
+                    {
+                        "type": "function",
                         "name": "execute_code",
                         "description": (
                             "Execute Python, JavaScript (Node.js), or Bash code in a persistent sandbox "
-                            "that has FULL internet access. The sandbox can: install pip/npm packages automatically, "
-                            "make HTTP/API requests, scrape web pages, process data, generate files (CSV, PNG, PDF, DOCX, ZIP), "
-                            "create charts with matplotlib, perform numerical computation, convert file formats, "
-                            "and more. Files produced are automatically uploaded and returned as download links.\n"
-                            "Call this whenever the user wants to: run/test code, analyse data, plot charts, "
-                            "fetch live data in code, convert or process files, perform computation, or any task "
-                            "that benefits from actually executing code rather than describing it.\n"
-                            "Do NOT use this for SVG display — use visualize__show_widget instead. "
-                            "Do NOT use this to generate AI images — use generate_image for that."
+                            "with FULL internet access. "
+                            "STRUCTURE: files persist between calls — read inputs from "
+                            "`../data/filename.ext` and write outputs there too; anything you save is "
+                            "automatically uploaded and returned to the user as a download link "
+                            "(synced to cloud storage). "
+                            "WHEN to call: run/test code, analyse data, plot charts, fetch live data "
+                            "in code, convert or process files, perform computation. "
+                            "QUALITY BAR: generated files must be complete and immediately usable — "
+                            "never stubs or truncated snippets. "
+                            "Do NOT use for SVG display (visualize__show_widget) or AI images "
+                            "(generate_image)."
                         ),
                         "parameters": {
                             "type": "object",
@@ -1341,6 +1640,13 @@ async def chat_stream_generator(
                         if t_name == "search_web":
                             q = args.get("query", "")
                             step_label = f"Searching web for: {q}" if q else "Searching web for information..."
+                        elif t_name == "fetch_url":
+                            u = args.get("url", "")
+                            step_label = f"Reading page: {u[:60]}" if u else "Reading web page..."
+                        elif t_name == "memory_save":
+                            step_label = "Saving to conversation memory..."
+                        elif t_name == "memory_recall":
+                            step_label = "Recalling conversation memory..."
                         elif t_name == "execute_code":
                             code_text = args.get("code", "").lower()
                             if any(kw in code_text for kw in ["fitz", "pdf", "docx", "signature", "document"]):
@@ -1482,6 +1788,90 @@ async def chat_stream_generator(
                         except Exception as e:
                             logger.error(f"Agent deep_research failed: {e}")
                             tool_outputs.append(f"Deep research error: {str(e)}")
+
+                    elif t_name == "fetch_url":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            target_url = args.get("url", "")
+                            if target_url:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Reading page: {target_url[:80]}",
+                                    })
+                                    + "\n\n"
+                                )
+                                page_text = await _perform_fetch_url(target_url)
+                                tool_outputs.append(page_text)
+                            else:
+                                tool_outputs.append("fetch_url error: no URL provided.")
+                        except Exception as e:
+                            logger.error(f"Agent fetch_url failed: {e}")
+                            tool_outputs.append(f"fetch_url error: {str(e)}")
+
+                    elif t_name == "memory_save":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            mem_key = (args.get("key", "") or "").strip()[:80]
+                            mem_value = (args.get("value", "") or "").strip()[:500]
+                            if mem_key and mem_value:
+                                def _save_memory():
+                                    current = (
+                                        supabase.table("conversations")
+                                        .select("agent_memory")
+                                        .eq("id", conversation_id)
+                                        .single()
+                                        .execute()
+                                    )
+                                    mem = (current.data or {}).get("agent_memory") or {}
+                                    if not isinstance(mem, dict):
+                                        mem = {}
+                                    mem[mem_key] = mem_value
+                                    supabase.table("conversations").update(
+                                        {"agent_memory": mem}
+                                    ).eq("id", conversation_id).execute()
+                                    return mem
+                                await asyncio.to_thread(_save_memory)
+                                tool_outputs.append(f"Memory saved: '{mem_key}' = {mem_value}")
+                            else:
+                                tool_outputs.append("memory_save error: both key and value are required.")
+                        except Exception as e:
+                            logger.error(f"Agent memory_save failed: {e}")
+                            tool_outputs.append(f"memory_save error: {str(e)}")
+
+                    elif t_name == "memory_recall":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            mem_key = (args.get("key", "") or "").strip()
+
+                            def _recall_memory():
+                                row = (
+                                    supabase.table("conversations")
+                                    .select("agent_memory")
+                                    .eq("id", conversation_id)
+                                    .single()
+                                    .execute()
+                                )
+                                return (row.data or {}).get("agent_memory") or {}
+
+                            mem = await asyncio.to_thread(_recall_memory)
+                            if not isinstance(mem, dict) or not mem:
+                                tool_outputs.append(
+                                    "No memories saved for this conversation yet. "
+                                    "Use memory_save to persist durable user facts and preferences."
+                                )
+                            elif mem_key:
+                                tool_outputs.append(
+                                    f"Memory '{mem_key}': {mem.get(mem_key, '(not found)')}"
+                                )
+                            else:
+                                lines = [f"- {k}: {v}" for k, v in mem.items()]
+                                tool_outputs.append("Saved memories:\n" + "\n".join(lines))
+                        except Exception as e:
+                            logger.error(f"Agent memory_recall failed: {e}")
+                            tool_outputs.append(f"memory_recall error: {str(e)}")
 
                     elif t_name == "execute_code":
                         try:

@@ -43,6 +43,14 @@ _SIMPLE_QUERY_PATTERNS = [
 
 _SIMPLE_QUERY_RE = re.compile("|".join(_SIMPLE_QUERY_PATTERNS), re.IGNORECASE)
 
+# Live/current-data keywords — these need full-model tool capabilities
+# (OODA web search with search_web/deep_research), never nano interception.
+_LIVE_QUERY_RE = re.compile(
+    r"\b(latest|current|currently|today|now|recent|recently|breaking|news|"
+    r"price|prices|rate|rates|update|updated|trending|market|live|forecast)\b",
+    re.IGNORECASE,
+)
+
 # Whitelist prefixes for short lookup questions
 _SIMPLE_PREFIX_RE = re.compile(
     r"^(who\s*is|what\s*is|where\s*is|when\s*was|how\s*old\s*is|capital\s*of|define|meaning\s*of)\b",
@@ -96,6 +104,10 @@ def _is_simple_request(message_text: str) -> bool:
     
     # Temporal year lookups need full model tool capabilities (OODA web search)
     if any(yr in stripped for yr in ["2024", "2025", "2026", "2027"]):
+        return False
+
+    # Live/current-data questions need search grounding — route to full model
+    if _LIVE_QUERY_RE.search(stripped):
         return False
 
     # Simple requests must be short (e.g. <= 90 characters)
