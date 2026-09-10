@@ -14,7 +14,7 @@ from typing import Optional, List, Dict, Any
 from openai import AsyncAzureOpenAI
 from app.core.agent_task_models import PlanStep, StepStatus, RiskLevel
 from app.core.hitl_gates import HITLGate
-from app.core.skills import AGENT_CONDUCT
+from app.core.skills import AGENT_CONDUCT, ULTRA_IDENTITY
 
 logger = logging.getLogger("app.core.agent_planner")
 
