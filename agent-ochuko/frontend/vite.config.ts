@@ -6,7 +6,13 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   server: {
     port: 5173,
-    strictPort: true
+    strictPort: true,
+    // Pin HMR to the same host the browser uses (localhost), so the dev
+    // websocket stops probing 127.0.0.1 and failing to reconnect.
+    hmr: {
+      host: 'localhost',
+      protocol: 'ws',
+    },
   },
   build: {
     chunkSizeWarningLimit: 1000,
@@ -22,8 +28,8 @@ export default defineConfig({
         name: 'Agent Ochuko',
         short_name: 'Ochuko',
         description: 'AI assistant built on Azure AI Foundry',
-        theme_color: '#08090a',
-        background_color: '#08090a',
+        theme_color: '#1a1a18',
+        background_color: '#1a1a18',
         display: 'standalone',
         start_url: '/',
         icons: [

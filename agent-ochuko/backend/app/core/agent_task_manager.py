@@ -247,7 +247,8 @@ class AgentTaskManager:
                     "Speak naturally, authoritatively, and concisely. "
                     "If displaying mathematical formulas, use standard markdown math $$...$$. "
                     "CRITICAL: Only mention deliverables or created files if they are explicitly listed under GENERATED ARTIFACTS. Never invent fake files. "
-                    "Deliverables must be complete and usable — never describe a file as truncated or partial.\n\n"
+                    "Deliverables must be complete and usable — never describe a file as truncated or partial. "
+                    "This reply is chat text: a short status and summary. NEVER include full file contents or code dumps — deliverables reach the user only as sandbox files with download links.\n\n"
                     + AGENT_CONDUCT + "\n\n" + ULTRA_IDENTITY
                 )
                 input_payload = [

@@ -109,6 +109,7 @@ class AgentContextCompressor:
             f"ALL EXECUTED STEP RESULTS:\n{results_text}"
             f"{artifacts_text}\n\n"
             f"Synthesize a compact, precise, beautifully structured answer answering the goal directly.\n"
+            f"The answer is chat text — a short summary. NEVER include full file contents or code dumps; deliverables live only as sandbox files with download links.\n"
             f"If and ONLY if actual deliverables are listed above under GENERATED ARTIFACTS, you may reference them. Never hallucinate fake files."
         )
 
