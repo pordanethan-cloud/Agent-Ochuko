@@ -121,7 +121,18 @@ SKILLS: dict[str, str] = {
         "  - Generated files must be COMPLETE and immediately usable — never stubs, placeholders, TODOs, or truncated snippets.\n"
         "  - Full runnable output: real data bindings, valid syntax, all imports, all functions implemented.\n"
         "  - A 500-line file gets 500 real lines. Never cut a file short to save tokens — output budget is not a constraint.\n"
-        "  - Multi-file deliverables: write every file fully; verify the set hangs together before declaring done."
+        "  - Multi-file deliverables: write every file fully; verify the set hangs together before declaring done.\n"
+        "WEBSITE PROJECT CONTRACT (any production website, landing page, or web app):\n"
+        "  - NEVER ship a real website as one giant HTML file. Build a repo-style multi-file project:\n"
+        "    index.html (entry, project root) · css/styles.css · js/main.js · README.md (structure + how to run/deploy).\n"
+        "    Add extra pages/assets (css/pages.css, js/components.js, images/) as needed.\n"
+        "  - Entry point is ALWAYS index.html; all links between files are RELATIVE (./css/styles.css, ./js/main.js)\n"
+        "    so the project renders correctly in preview and on any static host.\n"
+        "  - Responsive by contract: fluid type (clamp()), media queries at ~360px / 768px / 1280px, a mobile nav\n"
+        "    that never overlaps content, no fixed-px page layouts. Verify all three widths before declaring done.\n"
+        "  - Production quality bar: real copy (never lorem ipsum), consistent spacing/color tokens, semantic HTML,\n"
+        "    SEO + Open Graph meta tags, favicon, accessible labels/contrast/focus states.\n"
+        "  - Single-file HTML is allowed ONLY for genuine snippets, demos, or quick mockups."
     ),
 
     "svg": (

@@ -2105,22 +2105,25 @@ async def chat_stream_generator(
                                 )
                                 receipt = await sandbox_write_file(conversation_id, target, content)
                                 # Upload to R2 so the user gets a downloadable artifact card.
+                                # Preserve the sandbox-relative path so multi-file
+                                # projects keep working relative links on the CDN.
                                 try:
                                     from app.services.code_sandbox import _resolve_sandbox_path
                                     import mimetypes
                                     full_path = _resolve_sandbox_path(conversation_id, target)
+                                    rel_upload = os.path.relpath(full_path, _resolve_sandbox_path(conversation_id)).replace("\\", "/")
                                     mime = mimetypes.guess_type(full_path)[0] or "text/plain"
                                     with open(full_path, "rb") as fh:
                                         data = fh.read()
                                     r2_url = await _upload_generated_file(
                                         file_bytes=data,
-                                        filename=os.path.basename(full_path),
+                                        filename=rel_upload,
                                         mime_type=mime,
                                         conversation_id=conversation_id,
                                         user_id=user_id,
                                     )
                                     accumulated_files.append({
-                                        "filename": os.path.basename(full_path),
+                                        "filename": rel_upload,
                                         "download_url": r2_url,
                                         "size_bytes": len(data),
                                     })

@@ -13,6 +13,19 @@ from typing import Tuple
 
 logger = logging.getLogger("app.services.cloudflare_r2")
 
+
+def build_r2_public_url(public_domain: str, r2_key: str) -> str:
+    """
+    Builds the public CDN URL for an R2 key. Each path segment is URL-encoded
+    (spaces, unicode) while "/" separators are preserved so multi-file
+    projects keep working relative links between uploaded files.
+    """
+    from urllib.parse import quote
+    public_domain = (public_domain or "").rstrip("/")
+    encoded_key = "/".join(quote(seg) for seg in r2_key.split("/"))
+    return f"{public_domain}/{encoded_key}"
+
+
 def get_r2_client(bucket_type: str = "UPLOADS") -> Tuple[boto3.client, str, str]:
     """
     Returns a tuple of (s3_client, bucket_name, public_domain) configured for the given
@@ -98,7 +111,7 @@ async def upload_file_bytes(
         )
 
     await asyncio.to_thread(_do_upload)
-    return f"{public_domain}/{r2_key}"
+    return build_r2_public_url(public_domain, r2_key)
 
 
 def generate_r2_download_url(filename: str, expiry_seconds: int = 3600, bucket_type: str = "UPLOADS") -> str:

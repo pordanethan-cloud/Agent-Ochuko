@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { FileText, X, Download, Code2, Eye } from 'lucide-react'
+import { FileText, X, Download, Code2, Eye, Globe, Monitor, Smartphone } from 'lucide-react'
 
 export interface ArtifactFile {
   name: string
@@ -16,6 +16,7 @@ interface ArtifactPanelProps {
   loading: boolean
   renderMarkdown: (text: string, generatedFiles?: any[]) => React.ReactNode
   onClose: () => void
+  onPublish?: () => void
 }
 
 const MIN_WIDTH = 380
@@ -64,11 +65,12 @@ function CsvTable({ text }: { text: string }) {
   )
 }
 
-export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose }: ArtifactPanelProps) {
+export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose, onPublish }: ArtifactPanelProps) {
   const kind = kindOf(file)
   const canRender = kind === 'html' || kind === 'svg' || kind === 'md' || kind === 'csv'
   const [tab, setTab] = useState<'render' | 'code'>('render')
   const [width, setWidth] = useState(DEFAULT_WIDTH)
+  const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop')
   const dragging = useRef(false)
 
   const startDrag = useCallback((e: React.MouseEvent) => {
@@ -112,8 +114,10 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose 
         onMouseDown={startDrag}
       />
 
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] shrink-0">
+      {/* Header — safe-area padding for mobile full-screen sheet */}
+      <div
+        className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] shrink-0 max-md:pt-[max(0.75rem,env(safe-area-inset-top))]"
+      >
         <div className="flex items-center gap-2.5 min-w-0">
           <FileText className="w-4 h-4 text-white/50 shrink-0" />
           <div className="min-w-0">
@@ -124,6 +128,16 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose 
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          {onPublish && (
+            <button
+              type="button"
+              onClick={onPublish}
+              title="Publish artifact"
+              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
+            >
+              <Globe className="w-3.5 h-3.5" />
+            </button>
+          )}
           {fileUrl && (
             <a
               href={fileUrl}
@@ -147,7 +161,7 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose 
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs + viewport toggle */}
       {canRender && (
         <div className="flex items-center gap-1 px-3 pt-2.5 shrink-0">
           <button
@@ -170,6 +184,27 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose 
             <Code2 className="w-3 h-3" />
             Code
           </button>
+          {/* Claude-style viewport toggle for live HTML (desktop vs 390px mobile) */}
+          {kind === 'html' && tab === 'render' && fileUrl && (
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setDevice('desktop')}
+                title="Desktop viewport"
+                className={`p-1.5 rounded-md transition ${device === 'desktop' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'}`}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setDevice('mobile')}
+                title="Mobile viewport (390px)"
+                className={`p-1.5 rounded-md transition ${device === 'mobile' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'}`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -179,13 +214,24 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose 
           <div className="h-full flex items-center justify-center text-white/50 text-xs font-mono">Loading…</div>
         ) : canRender && tab === 'render' ? (
           kind === 'html' ? (
-            <iframe
-              srcDoc={text || undefined}
-              src={!text && fileUrl ? fileUrl : undefined}
-              className="w-full h-full border-0 bg-white"
-              sandbox="allow-scripts allow-popups allow-forms allow-modals"
-              title={file.name}
-            />
+            fileUrl ? (
+              /* Real URL → relative assets (css/js/images) resolve correctly */
+              <div className={`h-full flex justify-center bg-[#0b0c0f] ${device === 'mobile' ? 'items-stretch py-3' : ''}`}>
+                <iframe
+                  src={fileUrl}
+                  className={`h-full border-0 bg-white rounded-md ${device === 'mobile' ? 'w-[390px] max-w-full' : 'w-full'}`}
+                  sandbox="allow-scripts allow-popups allow-forms allow-modals allow-same-origin"
+                  title={file.name}
+                />
+              </div>
+            ) : (
+              <iframe
+                srcDoc={text || undefined}
+                className="w-full h-full border-0 bg-white"
+                sandbox="allow-scripts allow-popups allow-forms allow-modals"
+                title={file.name}
+              />
+            )
           ) : kind === 'svg' ? (
             <div className="h-full overflow-auto p-4 flex items-start justify-center">
               <iframe

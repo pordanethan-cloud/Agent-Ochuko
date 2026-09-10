@@ -495,30 +495,35 @@ async def execute_code_in_sandbox(
                     if file_path not in before_files or mtime > before_files[file_path]:
                         with open(file_path, "rb") as f:
                             file_bytes = f.read()
-                            
+
+                        # Preserve the project-relative path (repo-style uploads):
+                        # css/styles.css lands at generated/{conv}/css/styles.css so
+                        # relative links between files keep working on the CDN.
+                        rel_path = os.path.relpath(file_path, data_dir).replace("\\", "/")
+
                         # Auto-resolve MIME type via guess_type
                         import mimetypes
                         mime, _ = mimetypes.guess_type(file)
                         if not mime:
                             mime = "application/octet-stream"
-                            
+
                         # Upload to R2 for fast preview CDN
                         r2_url = await _upload_generated_file(
                             file_bytes=file_bytes,
-                            filename=file,
+                            filename=rel_path,
                             mime_type=mime,
                             conversation_id=conversation_id,
                             user_id=user_id
                         )
-                        
+
                         # Use Google Drive URL for client download / preview
                         download_url = r2_url
                         gd_match = next((gf for gf in google_uploaded if gf["filename"] == file), None)
                         if gd_match:
                             download_url = gd_match.get("download_url") or r2_url
-                            
+
                         generated_files.append({
-                            "filename": file,
+                            "filename": rel_path,
                             "download_url": download_url,
                             "size_bytes": len(file_bytes)
                         })

@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, RotateCw, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Sliders } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Sliders } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -23,6 +23,38 @@ import { ArtifactPanel } from '../components/ArtifactPanel'
 
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+// ─── Artifact helpers ──────────────────────────────────────────────────────────
+// Single presentation path: every artifact open routes through the
+// `open-file-preview` event → ArtifactPanel (Claude-style right dock).
+// The old inline sidebar/fullscreen artifact UI is retired for text artifacts.
+
+function mimeFromName(name: string): string {
+  const ext = (name || '').toLowerCase().split('.').pop() || ''
+  const map: Record<string, string> = {
+    html: 'text/html', htm: 'text/html', css: 'text/css',
+    js: 'text/javascript', mjs: 'text/javascript',
+    json: 'application/json', md: 'text/markdown', markdown: 'text/markdown',
+    csv: 'text/csv', tsv: 'text/tab-separated-values',
+    svg: 'image/svg+xml', txt: 'text/plain', py: 'text/x-python',
+    ts: 'text/typescript', tsx: 'text/typescript', yaml: 'text/yaml', yml: 'text/yaml',
+  }
+  return map[ext] || 'text/plain'
+}
+
+// When a batch of generated files is a multi-file project, prefer the
+// index.html entry so the preview renders the real site (styles included).
+function pickEntryFile<T extends { filename: string; download_url?: string; size_bytes?: number }>(files: T[]): T | null {
+  const entry = files.find(f => {
+    const n = (f.filename || '').toLowerCase()
+    return n === 'index.html' || n.endsWith('/index.html')
+  })
+  return entry || files[0] || null
+}
+
+function dispatchOpenFilePreview(detail: { name: string; type: string; url?: string; sizeBytes?: number; content?: string }) {
+  window.dispatchEvent(new CustomEvent('open-file-preview', { detail }))
+}
 
 // ─── Visit Tracking ───────────────────────────────────────────────────────────────
 
@@ -420,7 +452,7 @@ interface DocxPreviewProps {
   url: string
 }
 
-function DocxPreview({ url }: DocxPreviewProps) {
+export function DocxPreview({ url }: DocxPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -2171,7 +2203,7 @@ function highlightCode(code: string, language: string): string {
   return escaped
 }
 
-const CodeView: React.FC<{ language: string; content: string }> = ({ language, content }) => {
+export const CodeView: React.FC<{ language: string; content: string }> = ({ language, content }) => {
   const lines = useMemo(() => content.split('\n'), [content])
   const highlightedHtml = useMemo(() => highlightCode(content, language), [content, language])
   const highlightedLines = useMemo(() => highlightedHtml.split('\n'), [highlightedHtml])
@@ -3959,28 +3991,9 @@ export const Dashboard: React.FC = () => {
     }
   }
 
-  interface Artifact {
-    filename: string
-    downloadUrl?: string
-    content?: string
-    sizeBytes?: number
-  }
-
-  const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null)
-  const [artifactTab, setArtifactTab] = useState<'preview' | 'code'>('preview')
-  const [artifactContent, setArtifactContent] = useState<string>('')
-  const [loadingArtifact, setLoadingArtifact] = useState(false)
-  const [artifactError, setArtifactError] = useState<string | null>(null)
-  const [artifactWidth, setArtifactWidth] = useState(480)
-  const isArtifactResizingRef = useRef(false)
-
-  const [isArtifactExpanded, setIsArtifactExpanded] = useState(false)
-  const [copiedArtifact, setCopiedArtifact] = useState(false)
   const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
   const [isConnectorModalOpen, setIsConnectorModalOpen] = useState(false)
-  const [isArtifactCopyOpen, setIsArtifactCopyOpen] = useState(false)
   const headerSettingsRef = useRef<HTMLDivElement>(null)
-  const artifactCopyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!isHeaderSettingsOpen) return
@@ -3993,93 +4006,16 @@ export const Dashboard: React.FC = () => {
     return () => document.removeEventListener('mousedown', handler)
   }, [isHeaderSettingsOpen])
 
-  useEffect(() => {
-    if (!isArtifactCopyOpen) return
-    const handler = (e: MouseEvent) => {
-      if (artifactCopyRef.current && !artifactCopyRef.current.contains(e.target as Node)) {
-        setIsArtifactCopyOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [isArtifactCopyOpen])
-
-  const startArtifactResizing = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    isArtifactResizingRef.current = true
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-  }, [])
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isArtifactResizingRef.current) return
-      const newWidth = Math.max(320, Math.min(window.innerWidth - 300, window.innerWidth - e.clientX))
-      setArtifactWidth(newWidth)
-    }
-    const handleMouseUp = () => {
-      if (!isArtifactResizingRef.current) return
-      isArtifactResizingRef.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!activeArtifact) {
-      setArtifactContent('')
-      setArtifactError(null)
-      return
-    }
-    const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
-    const isPreviewable = ['html', 'htm', 'svg', 'md', 'markdown', 'pdf', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)
-    setArtifactTab(isPreviewable ? 'preview' : 'code')
-
-    if (activeArtifact.content !== undefined) {
-      setArtifactContent(activeArtifact.content)
-      setArtifactError(null)
-      return
-    }
-    if (activeArtifact.downloadUrl) {
-      if (isBinaryFile(activeArtifact.filename) || activeArtifact.filename.toLowerCase().endsWith('.pdf')) {
-        setArtifactContent('')
-        setArtifactError(null)
-        setLoadingArtifact(false)
-        return
-      }
-      setLoadingArtifact(true)
-      setArtifactError(null)
-      fetch(activeArtifact.downloadUrl)
-        .then(res => {
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status}`)
-          }
-          return res.text()
-        })
-        .then(text => {
-          setArtifactContent(text)
-          setLoadingArtifact(false)
-        })
-        .catch((err) => {
-          setArtifactError(err.message || 'Failed to load artifact content')
-          setLoadingArtifact(false)
-        })
-    }
-  }, [activeArtifact])
-
+  // Legacy `open-artifact` events (code-block "View as Artifact") route into the
+  // unified ArtifactPanel via open-file-preview — no separate sidebar anymore.
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail
-      setActiveArtifact({
-        filename: detail.filename,
-        content: detail.content,
-        downloadUrl: ''
+      const detail = (e as CustomEvent).detail || {}
+      const name = detail.filename || 'Artifact'
+      dispatchOpenFilePreview({
+        name,
+        type: mimeFromName(name),
+        content: typeof detail.content === 'string' ? detail.content : undefined,
       })
     }
     window.addEventListener('open-artifact', handler)
@@ -4087,11 +4023,6 @@ export const Dashboard: React.FC = () => {
   }, [])
 
 
-
-  const isBinaryFile = (filename: string) => {
-    const ext = filename.toLowerCase().split('.').pop() || ''
-    return ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'zip', 'tar', 'gz', '7z', 'rar', 'exe', 'bin'].includes(ext)
-  }
 
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -6154,12 +6085,16 @@ export const Dashboard: React.FC = () => {
                 })
               )
               if (newFiles.length > 0) {
-                // Auto-open first generated file in preview sidebar
-                setActiveArtifact({
-                  filename: newFiles[0].filename,
-                  downloadUrl: newFiles[0].download_url,
-                  sizeBytes: newFiles[0].size_bytes,
-                })
+                // Auto-open the entry file (index.html for multi-file sites) in the ArtifactPanel
+                const entry = pickEntryFile(newFiles)
+                if (entry) {
+                  dispatchOpenFilePreview({
+                    name: entry.filename,
+                    type: mimeFromName(entry.filename),
+                    url: entry.download_url,
+                    sizeBytes: entry.size_bytes,
+                  })
+                }
                 setMessages((prev) => {
                   const updated = [...prev]
                   if (updated.length > 0) {
@@ -6223,14 +6158,22 @@ export const Dashboard: React.FC = () => {
 
             } else if (data.type === 'agent_step_complete') {
 
-              // Auto-open newly produced step artifact in preview sidebar
+              // Auto-open newly produced step artifact in the ArtifactPanel
               if (data.artifacts && data.artifacts.length > 0) {
-                const firstArt = data.artifacts[0]
-                setActiveArtifact({
-                  filename: firstArt.filename || firstArt.title || 'Live Preview',
-                  downloadUrl: firstArt.download_url || firstArt.url,
-                  sizeBytes: firstArt.size_bytes || 0,
-                })
+                const arts = data.artifacts.map((a: any) => ({
+                  filename: a.filename || a.title || 'artifact',
+                  download_url: a.download_url || a.url,
+                  size_bytes: a.size_bytes || 0,
+                }))
+                const entry = pickEntryFile(arts)
+                if (entry?.download_url) {
+                  dispatchOpenFilePreview({
+                    name: entry.filename,
+                    type: mimeFromName(entry.filename),
+                    url: entry.download_url,
+                    sizeBytes: entry.size_bytes,
+                  })
+                }
               }
 
               setMessages((prev) => {
@@ -6282,14 +6225,22 @@ export const Dashboard: React.FC = () => {
 
             } else if (data.type === 'agent_task_complete') {
 
-              // Auto-open any final deliverable artifact in preview sidebar
+              // Auto-open the final deliverable (entry file first) in the ArtifactPanel
               if (data.artifacts && data.artifacts.length > 0) {
-                const firstArt = data.artifacts[0]
-                setActiveArtifact({
-                  filename: firstArt.filename || firstArt.title || 'Live Preview',
-                  downloadUrl: firstArt.download_url || firstArt.url,
-                  sizeBytes: firstArt.size_bytes || 0,
-                })
+                const arts = data.artifacts.map((a: any) => ({
+                  filename: a.filename || a.title || 'artifact',
+                  download_url: a.download_url || a.url,
+                  size_bytes: a.size_bytes || 0,
+                }))
+                const entry = pickEntryFile(arts)
+                if (entry?.download_url) {
+                  dispatchOpenFilePreview({
+                    name: entry.filename,
+                    type: mimeFromName(entry.filename),
+                    url: entry.download_url,
+                    sizeBytes: entry.size_bytes,
+                  })
+                }
               }
 
               setMessages((prev) => {
@@ -8429,10 +8380,11 @@ export const Dashboard: React.FC = () => {
 
                                   size_bytes={gf.size_bytes}
 
-                                  onView={() => setActiveArtifact({
-                                    filename: gf.filename,
-                                    downloadUrl: gf.download_url,
-                                    sizeBytes: gf.size_bytes
+                                  onView={() => dispatchOpenFilePreview({
+                                    name: gf.filename,
+                                    type: mimeFromName(gf.filename),
+                                    url: gf.download_url,
+                                    sizeBytes: gf.size_bytes,
                                   })}
 
                                 />
@@ -8947,343 +8899,7 @@ export const Dashboard: React.FC = () => {
 
           {/* Artifact Preview Panel */}
 
-          {activeArtifact && (() => {
-            const parts = activeArtifact.filename.split('.')
-            const ext = parts.length > 1 ? parts.pop()?.toUpperCase() || '' : ''
-            const name = parts.join('.')
-            const titleDisplay = ext ? `${name} · ${ext}` : activeArtifact.filename.toUpperCase()
 
-            const handleCopyArtifactContent = async () => {
-              try {
-                await navigator.clipboard.writeText(artifactContent)
-                setCopiedArtifact(true)
-                setTimeout(() => setCopiedArtifact(false), 2000)
-              } catch (_) {}
-            }
-
-            const handleDownloadArtifact = async () => {
-              if (!activeArtifact.downloadUrl) return
-              await triggerDirectDownload(activeArtifact.downloadUrl, activeArtifact.filename)
-              setIsArtifactCopyOpen(false)
-            }
-
-            const handlePublishArtifact = () => {
-              showToast('Artifact published successfully!', 'info')
-              setIsArtifactCopyOpen(false)
-            }
-
-            const handleReloadArtifact = () => {
-              if (activeArtifact.downloadUrl) {
-                setLoadingArtifact(true)
-                setArtifactError(null)
-                fetch(activeArtifact.downloadUrl)
-                  .then(res => {
-                    if (!res.ok) {
-                      throw new Error(`HTTP ${res.status}`)
-                    }
-                    return res.text()
-                  })
-                  .then(text => {
-                    setArtifactContent(text)
-                    setLoadingArtifact(false)
-                    showToast('Refreshed content', 'info')
-                  })
-                  .catch((err) => {
-                    setArtifactError(err.message || 'Failed to load artifact content')
-                    setLoadingArtifact(false)
-                    showToast('Failed to refresh', 'error')
-                  })
-              } else {
-                showToast('Refreshed content', 'info')
-              }
-            }
-
-            return (
-              <div
-                style={isArtifactExpanded ? undefined : { width: `${artifactWidth}px` }}
-                className={
-                  isArtifactExpanded
-                    ? "fixed inset-0 z-[90] w-screen h-screen bg-[#0b0c0e] flex flex-col p-4 md:p-6 transition-all duration-200"
-                    : "border-l border-[#1a1c1f] bg-[#0b0c0e] flex flex-col relative shrink-0 z-20 transition-all duration-150"
-                }
-              >
-
-                {/* Resizing Handle */}
-                {!isArtifactExpanded && (
-                  <div
-                    onMouseDown={startArtifactResizing}
-                    className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-[#ffffff]/30 active:bg-[#ffffff]/50 transition z-50"
-                  />
-                )}
-
-                {/* Header */}
-                <div className="h-14 border-b border-[#1a1c1f] bg-[#0d0f11]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0 select-none">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
-                    <span className="font-semibold text-[13px] text-brand-text truncate mr-2">
-                      {titleDisplay}
-                    </span>
-                    {(() => {
-                      const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
-                      const showTabs = ['html', 'htm', 'svg', 'md', 'markdown'].includes(ext)
-                      if (!showTabs) return null
-                      return (
-                        <div className="flex items-center bg-[#07080a] border border-[#1e2025] rounded-lg p-0.5 ml-2">
-                          <button
-                            onClick={() => setArtifactTab('preview')}
-                            className={`px-3 py-1 text-[11px] font-medium rounded-md transition duration-150 ${artifactTab === 'preview' ? 'bg-[#1e2025] text-white shadow-sm' : 'text-[#8e95a2] hover:text-white'}`}
-                          >
-                            Preview
-                          </button>
-                          <button
-                            onClick={() => setArtifactTab('code')}
-                            className={`px-3 py-1 text-[11px] font-medium rounded-md transition duration-150 ${artifactTab === 'code' ? 'bg-[#1e2025] text-white shadow-sm' : 'text-[#8e95a2] hover:text-white'}`}
-                          >
-                            Code
-                          </button>
-                        </div>
-                      )
-                    })()}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {/* Copy Split Dropdown */}
-                    <div ref={artifactCopyRef} className="relative flex items-center">
-                      <button
-                        onClick={handleCopyArtifactContent}
-                        className="flex items-center gap-1.5 px-2.5 h-7 text-[10.5px] font-semibold rounded-l-lg border border-r-0 border-[#1e2025] bg-[#0d0f11]/60 hover:bg-[#ffffff]/5 text-[#8e95a2] hover:text-brand-text transition duration-150 select-none"
-                      >
-                        {copiedArtifact ? (
-                          <>
-                            <Check className="w-3 h-3 text-[#3fb950]" />
-                            <span className="text-[#3fb950]">Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" />
-                            <span>Copy</span>
-                          </>
-                        )}
-                      </button>
-                      <button
-                        onClick={() => setIsArtifactCopyOpen(o => !o)}
-                        className="flex items-center justify-center px-1.5 h-7 rounded-r-lg border border-[#1e2025] bg-[#0d0f11]/60 hover:bg-[#ffffff]/5 text-[#8e95a2] hover:text-brand-text transition duration-150"
-                      >
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
-
-                      {isArtifactCopyOpen && (
-                        <div className="absolute top-8 right-0 mt-1 w-44 rounded-lg border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1">
-                          <button
-                            onClick={handleDownloadArtifact}
-                            className="w-full text-left px-3 py-2 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2"
-                          >
-                            <Download className="w-3.5 h-3.5 text-brand-muted" />
-                            <span>Download as {ext || 'FILE'}</span>
-                          </button>
-                          <button
-                            onClick={handlePublishArtifact}
-                            className="w-full text-left px-3 py-2 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 border-t border-[#1e2025]/50"
-                          >
-                            <Globe className="w-3.5 h-3.5 text-brand-muted" />
-                            <span>Publish artifact</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Reload Button */}
-                    <button
-                      onClick={handleReloadArtifact}
-                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
-                      title="Reload"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                    </button>
-
-                    {/* Expand/Minimize Toggle */}
-                    <button
-                      onClick={() => setIsArtifactExpanded(!isArtifactExpanded)}
-                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
-                      title={isArtifactExpanded ? "Minimize panel" : "Maximize panel"}
-                    >
-                      {isArtifactExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-                    </button>
-
-                    {/* Close Button */}
-                    <button
-                      onClick={() => {
-                        setActiveArtifact(null)
-                        setIsArtifactExpanded(false)
-                      }}
-                      className="p-1.5 rounded-lg border border-[#1e2025] hover:border-white/10 hover:bg-white/5 text-[#8e95a2] hover:text-brand-text transition"
-                      title="Close Preview"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Body */}
-                <div className="flex-1 overflow-hidden p-0 bg-[#08090b] flex flex-col min-h-0 w-full">
-                  {artifactError ? (
-                    <div className="h-full flex items-center justify-center p-6">
-                      <div className="max-w-md w-full p-6 rounded-lg border border-red-500/30 bg-red-500/10 flex flex-col items-center text-center space-y-4">
-                        <div className="p-3 rounded-full bg-red-500/20 text-red-400">
-                          <X className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <h3 className="text-red-400 font-semibold text-sm">Failed to load artifact</h3>
-                          <p className="text-red-300/70 text-xs mt-1">{artifactError}</p>
-                        </div>
-                        <button
-                          onClick={handleReloadArtifact}
-                          className="flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition"
-                        >
-                          <RotateCw className="w-3.5 h-3.5" /> Try Again
-                        </button>
-                      </div>
-                    </div>
-                  ) : loadingArtifact ? (
-                    <div className="h-full flex items-center justify-center">
-                      <Loader2 className="w-6 h-6 text-[#ffffff] animate-spin" />
-                    </div>
-                  ) : (() => {
-                    const ext = activeArtifact.filename.toLowerCase().split('.').pop() || ''
-                    const isHtml = ['html', 'htm'].includes(ext)
-                    const isMd = ['md', 'markdown'].includes(ext)
-                    const isDocx = ext === 'docx'
-                    const isOffice = ['doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)
-                    const isPdf = ext === 'pdf'
-                    const isImg = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)
-                    const isSiteUrl = !!activeArtifact.downloadUrl && (activeArtifact.downloadUrl.includes('/v1/sites/') || activeArtifact.downloadUrl.includes('/sites/'))
-
-                    if (artifactTab === 'preview') {
-                      if (isSiteUrl) {
-                        return (
-                          <div className="w-full h-full bg-white overflow-hidden flex-1">
-                            <iframe
-                              src={activeArtifact.downloadUrl}
-                              className="w-full h-full border-0 block"
-                              title={activeArtifact.filename}
-                              sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
-                            />
-                          </div>
-                        )
-                      }
-                      if (isImg) {
-                        return (
-                          <div className="w-full h-full flex items-center justify-center p-2 bg-[#0a0b0d] flex-1">
-                            <img
-                              src={activeArtifact.downloadUrl || `data:image/svg+xml;utf8,${encodeURIComponent(artifactContent)}`}
-                              alt={activeArtifact.filename}
-                              className="max-w-full max-h-full object-contain"
-                            />
-                          </div>
-                        )
-                      }
-                      if (isPdf) {
-                        return (
-                          <div className="w-full h-full bg-[#0a0b0d] overflow-hidden flex-1">
-                            <iframe
-                              src={activeArtifact.downloadUrl}
-                              className="w-full h-full border-0 block"
-                              title={activeArtifact.filename}
-                            />
-                          </div>
-                        )
-                      }
-                      if (isDocx) {
-                        return (
-                          <div className="w-full h-full bg-[#0a0b0d]/30 overflow-auto p-4 flex-1">
-                            <DocxPreview url={activeArtifact.downloadUrl || ''} />
-                          </div>
-                        )
-                      }
-                      if (isOffice) {
-                        return (
-                          <div className="w-full h-full bg-white overflow-hidden flex-1">
-                            <iframe
-                              src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(activeArtifact.downloadUrl || '')}`}
-                              className="w-full h-full border-0 block"
-                              title={activeArtifact.filename}
-                            />
-                          </div>
-                        )
-                      }
-                      if (isHtml) {
-                        return (
-                          <div className="w-full h-full bg-white overflow-hidden flex-1">
-                            <iframe
-                              srcDoc={artifactContent}
-                              sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
-                              className="w-full h-full border-0 block"
-                              title="HTML Preview"
-                            />
-                          </div>
-                        )
-                      }
-                      if (isMd) {
-                        return (
-                          <div className="w-full h-full overflow-auto p-6 bg-[#07080a] flex-1">
-                            <div className="text-brand-text prose prose-invert max-w-none text-[13px] leading-relaxed">
-                              {renderMarkdown(artifactContent)}
-                            </div>
-                          </div>
-                        )
-                      }
-                      if (isBinaryFile(activeArtifact.filename)) {
-                        return (
-                          <div className="h-full flex items-center justify-center p-8 bg-[#0a0b0d]/30 rounded-lg border border-[#1e2025]">
-                            <div className="max-w-md w-full p-6 rounded-lg bg-[#0a0b0d] border border-[#1e2025] flex flex-col items-center text-center space-y-4 shadow-xl">
-                              <div className="p-4 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                <FileText className="w-10 h-10" />
-                              </div>
-                              <div>
-                                <h3 className="text-white font-semibold text-lg truncate max-w-xs">{activeArtifact.filename}</h3>
-                                <p className="text-[#8e95a2] text-xs mt-1">Binary Document File ({(activeArtifact.filename.split('.').pop() || '').toUpperCase()})</p>
-                              </div>
-                              <div className="w-full pt-4 border-t border-[#1e2025] flex flex-col items-center gap-2">
-                                <button
-                                  onClick={async () => {
-                                    if (activeArtifact.downloadUrl) {
-                                      await triggerDirectDownload(activeArtifact.downloadUrl, activeArtifact.filename)
-                                    }
-                                  }}
-                                  className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium text-sm transition shadow-lg shadow-blue-600/15"
-                                >
-                                  <Download className="w-4 h-4" /> Download File
-                                </button>
-                                <p className="text-[#626875] text-[11px] mt-1">Binary files cannot be rendered directly in the editor</p>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      }
-                      // Fallback for code/text files with no preview
-                      return (
-                        <div className="rounded-lg border border-[#1e2025] bg-[#07080a] overflow-hidden">
-                          <CodeView
-                            language={activeArtifact.filename.split('.').pop() || 'text'}
-                            content={artifactContent}
-                          />
-                        </div>
-                      )
-                    } else {
-                      // activeTab === 'code'
-                      return (
-                        <div className="rounded-lg border border-[#1e2025] bg-[#07080a] overflow-hidden">
-                          <CodeView
-                            language={ext === 'md' ? 'markdown' : ext}
-                            content={artifactContent}
-                          />
-                        </div>
-                      )
-                    }
-                  })()}
-                </div>
-              </div>
-            )
-          })()}
 
         </div>
 
@@ -9532,6 +9148,7 @@ export const Dashboard: React.FC = () => {
                 loading={previewLoading}
                 renderMarkdown={renderMarkdown}
                 onClose={() => setPreviewingFile(null)}
+                onPublish={() => showToast('Artifact published successfully!', 'info')}
               />
             </>
           )

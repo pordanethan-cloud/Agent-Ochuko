@@ -9,6 +9,48 @@ from app.core.agent_config import get_max_output_tokens, _OUTPUT_TOKEN_BUDGETS
 from app.core.skills import BASE_IDENTITY, ULTRA_IDENTITY, AGENT_CONDUCT, SKILLS
 
 
+# ── Repo-style multi-file website uploads ────────────────────────────────────
+
+def test_upload_relpath_preserves_project_structure():
+    """Nested project files must keep their relative paths (repo-style keys)."""
+    import tempfile
+    data_dir = os.path.join(tempfile.gettempdir(), "relpath_test_conv", "data")
+    nested = os.path.join(data_dir, "css", "styles.css")
+    rel = os.path.relpath(nested, data_dir).replace("\\", "/")
+    assert rel == "css/styles.css"
+
+    deep = os.path.join(data_dir, "assets", "img", "hero.png")
+    rel2 = os.path.relpath(deep, data_dir).replace("\\", "/")
+    assert rel2 == "assets/img/hero.png"
+
+
+def test_r2_public_url_encoding_keeps_slashes():
+    """R2 URLs must encode path segments but keep / so relative links work."""
+    from app.services.cloudflare_r2 import build_r2_public_url
+
+    url = build_r2_public_url("https://pub-example.r2.dev/", "generated/conv1/css/styles.css")
+    assert url == "https://pub-example.r2.dev/generated/conv1/css/styles.css"
+
+    # Spaces / unicode in segment names are encoded, slashes intact
+    url2 = build_r2_public_url("https://pub-example.r2.dev", "generated/conv1/my page/index.html")
+    assert url2 == "https://pub-example.r2.dev/generated/conv1/my%20page/index.html"
+
+    url3 = build_r2_public_url("https://pub-example.r2.dev", "generated/conv1/über/hero.svg")
+    assert url3 == "https://pub-example.r2.dev/generated/conv1/%C3%BCber/hero.svg"
+
+
+def test_website_project_contract_in_code_skill():
+    """The code skill must mandate repo-style multi-file websites."""
+    code_skill = SKILLS["code"]
+    assert "WEBSITE PROJECT CONTRACT" in code_skill
+    assert "index.html" in code_skill
+    assert "css/styles.css" in code_skill
+    assert "js/main.js" in code_skill
+    assert "README.md" in code_skill
+    assert "RELATIVE" in code_skill  # relative links contract
+    assert "360px" in code_skill and "768px" in code_skill and "1280px" in code_skill
+
+
 @pytest.fixture
 def _config_cache():
     from app.core.config import _CONFIG_CACHE
