@@ -575,7 +575,7 @@ function FileDownloadCard({
         <p className="text-[12.5px] font-semibold text-brand-text truncate leading-tight">{filename}</p>
         {sizeLabel && <p className="text-[10px] text-[#8e95a2] mt-0.5">{sizeLabel}</p>}
         {!hasUrl && (
-          <p className="text-[10px] text-amber-400/70 mt-0.5">Sandbox file — ask me to resend it for a download link</p>
+          <p className="text-[10px] text-white/40 mt-0.5">Sandbox file — ask me to resend it for a download link</p>
         )}
       </div>
 
@@ -606,7 +606,7 @@ function FileDownloadCard({
           </button>
         ) : (
           <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center border border-amber-500/20 bg-amber-500/5 text-amber-500/40 cursor-not-allowed"
+            className="w-8 h-8 rounded-lg flex items-center justify-center border border-white/10 bg-white/[0.03] text-white/25 cursor-not-allowed"
             title="Sandbox-only file — ask the agent to resend for a downloadable link"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1275,7 +1275,7 @@ function MermaidBlock({ code }: { code: string }) {
 
           if (diagramRef.current) {
 
-            diagramRef.current.innerHTML = `<pre class="text-amber-400 text-xs p-2">Diagram error: ${err?.message || 'invalid syntax'}</pre>`
+            diagramRef.current.innerHTML = `<pre class="text-rose-400 text-xs p-2">Diagram error: ${err?.message || 'invalid syntax'}</pre>`
 
           }
 
@@ -1609,7 +1609,7 @@ function SvgBlock({ svg }: { svg: string }) {
 
   if (!dataUri) {
     return (
-      <div className="my-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/5 text-amber-400 text-sm">
+      <div className="my-3 p-3 rounded-lg border border-rose-500/30 bg-rose-500/5 text-rose-300 text-sm">
         Could not render SVG (encoding error).
       </div>
     )
@@ -3630,32 +3630,32 @@ const ThinkingPanel: React.FC<{ content: string; isStreaming?: boolean }> = ({ c
 
   return (
     <div className={`my-2 rounded-lg border overflow-hidden select-none transition-all duration-300 ${
-      isStreaming 
-        ? 'bg-[#0f111a]/95 border-amber-500/25 shadow-[0_0_15px_rgba(245,158,11,0.08)]' 
-        : 'bg-[#0b0c10]/95 border-white/[0.08] shadow-md'
+      isStreaming
+        ? 'bg-brand-card/95 border-white/[0.14]'
+        : 'bg-[#1d1d1b]/95 border-white/[0.08] shadow-md'
     }`}>
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="w-full flex items-center justify-between px-3.5 py-2.5 bg-[#141622]/80 hover:bg-[#1a1d2d] border-b border-white/[0.05] transition-colors duration-150 text-left"
+        className="w-full flex items-center justify-between px-3.5 py-2.5 bg-white/[0.03] hover:bg-white/[0.05] border-b border-white/[0.05] transition-colors duration-150 text-left"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={`relative flex items-center justify-center w-5 h-5 rounded-md ${
-            isStreaming ? 'bg-amber-500/15 text-amber-400' : 'bg-white/[0.05] text-[#8e95a2]'
+            isStreaming ? 'bg-white/[0.08] text-white/80' : 'bg-white/[0.05] text-[#a6a29c]'
           }`}>
             <Brain className={`w-3.5 h-3.5 ${isStreaming ? 'animate-pulse' : ''}`} />
             {isStreaming && (
-              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-white/70 animate-ping" />
             )}
           </div>
-          <span className="text-[12px] font-mono font-medium text-[#c5a880] tracking-wide truncate">
+          <span className="text-[12px] font-mono font-medium text-white/60 tracking-wide truncate">
             {isStreaming ? 'Reasoning step-by-step...' : `Thought process (${wordCount} words)`}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0 text-[#8e95a2]">
           {isStreaming ? (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white/[0.06] border border-white/15 text-[10px] font-mono text-white/70">
+              <span className="w-1.5 h-1.5 rounded-full bg-white/70 animate-pulse" />
               <span>Thinking</span>
             </div>
           ) : (
@@ -8354,8 +8354,8 @@ export const Dashboard: React.FC = () => {
 
                             ) : msg.thinkingContent ? (
                               <div className="inline-flex items-center gap-2 py-1 text-xs select-none">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                                <span className="text-[12px] font-sans font-normal text-amber-200/80 animate-pulse">
+                                <span className="w-1.5 h-1.5 rounded-full bg-white/70 animate-pulse" />
+                                <span className="text-[12px] font-sans font-normal text-white/70 animate-pulse">
                                   Synthesizing answer...
                                 </span>
                               </div>

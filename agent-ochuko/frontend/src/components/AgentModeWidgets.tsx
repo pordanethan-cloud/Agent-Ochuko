@@ -166,7 +166,7 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
                     </span>
                   )}
                   {isMedRisk && (
-                    <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-white/[0.07] text-white/70 border border-white/15">
                       Compute Step
                     </span>
                   )}
@@ -246,12 +246,9 @@ const oodaPhase = (step: PlanStepItem): string => {
   return 'Act'
 }
 
-const OODA_STYLES: Record<string, string> = {
-  Observe: 'text-sky-300/80',
-  Orient: 'text-violet-300/80',
-  Decide: 'text-amber-300/80',
-  Act: 'text-emerald-300/80',
-}
+// Two-colour discipline: neutrals carry the UI; emerald (success) and rose
+// (failure) are the only semantic accents. OODA phase labels stay monochrome.
+const OODA_LABEL_CLASS = 'text-white/55 font-medium'
 
 export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
   task,
@@ -371,7 +368,7 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
                 <p className={`text-[12.5px] leading-snug truncate flex-1 ${
                   isRunning ? 'text-white/90' : isDone ? 'text-white/65' : isFailed ? 'text-rose-300/90' : 'text-white/40'
                 }`}>
-                  <span className={`font-medium mr-1.5 ${OODA_STYLES[phase]}`}>{phase}</span>
+                  <span className={`mr-1.5 ${OODA_LABEL_CLASS}`}>{phase}</span>
                   {isDone && step.result_summary ? step.result_summary.split('\n')[0] : step.description}
                 </p>
 
@@ -425,12 +422,12 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
   onCancel,
 }) => {
   return (
-    <div className="w-full my-3.5 rounded-2xl bg-brand-card border border-amber-500/40 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
-      {/* Background ambient amber flare */}
-      <div className="absolute top-0 right-0 w-36 h-36 bg-amber-500/[0.07] rounded-full blur-2xl pointer-events-none" />
+    <div className="w-full my-3.5 rounded-2xl bg-brand-card border border-white/15 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
+      {/* Background ambient flare — neutral */}
+      <div className="absolute top-0 right-0 w-36 h-36 bg-white/[0.03] rounded-full blur-2xl pointer-events-none" />
 
       <div className="flex items-start gap-3 mb-3">
-        <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+        <div className="w-8 h-8 rounded-xl bg-white/[0.07] border border-white/15 flex items-center justify-center text-white/80 shrink-0 mt-0.5">
           <AlertTriangle className="w-4 h-4" />
         </div>
         <div className="flex-1 min-w-0">
@@ -438,7 +435,7 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
             <h4 className="text-[13px] font-semibold text-white tracking-tight">
               Action Approval Required
             </h4>
-            <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold uppercase tracking-wider">
+            <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-white/[0.07] text-white/70 border border-white/15 font-bold uppercase tracking-wider">
               Step {step.index}
             </span>
           </div>
@@ -446,7 +443,7 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
             {step.description}
           </p>
           {reason && (
-            <p className="text-[11px] text-amber-200/60 mt-1 leading-relaxed">
+            <p className="text-[11px] text-white/50 mt-1 leading-relaxed">
               {reason}
             </p>
           )}
@@ -472,7 +469,7 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
         <button
           type="button"
           onClick={onApprove}
-          className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-[11.5px] font-bold bg-amber-400 hover:bg-amber-300 text-black shadow-md shadow-amber-500/20 transition active:scale-95 cursor-pointer"
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-[11.5px] font-bold bg-emerald-500 hover:bg-emerald-400 text-black shadow-md shadow-emerald-500/20 transition active:scale-95 cursor-pointer"
         >
           <Check className="w-3.5 h-3.5 stroke-[3]" />
           Approve Action
