@@ -7967,7 +7967,7 @@ export const Dashboard: React.FC = () => {
                                         <div className="text-[9px] text-brand-muted/50 font-medium select-none">
                                           {archivedMsg.role === 'user' ? 'You' : 'Agent Ochuko'}
                                         </div>
-                                        <div className={`rounded-lg px-3 py-2 text-brand-text/90 ${archivedMsg.role === 'user' ? 'bg-[#23272d] border border-white/10 rounded-tr-sm' : 'bg-[#1a1d22]/30 border border-[#2e3542]/50 rounded-tl-sm'}`}>
+                                        <div className={`rounded-lg px-3 py-2 text-brand-text/90 ${archivedMsg.role === 'user' ? 'bg-[#0d0f11]/95 backdrop-blur-sm border border-[#1e2025] rounded-tr-sm' : 'bg-[#1a1d22]/30 border border-[#2e3542]/50 rounded-tl-sm'}`}>
                                           {archivedMsg.thinkingContent && (
                                             <div className="mb-2 text-[10px] text-brand-muted/70 italic border-l border-[#2e3542] pl-2 py-0.5 select-none">
                                               {archivedMsg.thinkingContent}
@@ -8033,7 +8033,7 @@ export const Dashboard: React.FC = () => {
 
                         msg.role === 'user'
 
-                          ? 'bg-[#23272d] border border-white/10 text-brand-text rounded-tr-sm px-3.5 py-2.5 shadow-sm'
+                          ? 'bg-[#0d0f11]/95 backdrop-blur-sm border border-[#1e2025] text-brand-text rounded-tr-sm px-3.5 py-2.5 shadow-sm'
 
                           : 'bg-transparent border-transparent py-0.5'
 
