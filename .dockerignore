@@ -1,0 +1,15 @@
+.git
+.github
+.idea
+.agents
+docs
+excel-addin
+agent-ochuko/frontend
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.env*
+!agent-ochuko/backend/.env

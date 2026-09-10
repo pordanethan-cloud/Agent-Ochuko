@@ -133,6 +133,9 @@ $AddinAssets  = Join-Path $AddinPath "assets"
 $ProdManifest = Join-Path $AddinPath "manifest.production.xml"
 $patched      = $false
 
+if (-not (Test-Path $AddinPath)) {
+    Write-Host "`nExcel Add-in folder not found at '$AddinPath' - skipping Excel Add-in deployment." -ForegroundColor Gray
+} else {
 try {
     # 3a. Validate production manifest
     Write-Host "`n[1/5] Validating production manifest..." -ForegroundColor Yellow
@@ -259,6 +262,8 @@ try {
         Write-Host "taskpane.js restored to dev URLs for local development." -ForegroundColor Gray
     }
 }
+}
+
 
 # =============================================================================
 Write-Host ""

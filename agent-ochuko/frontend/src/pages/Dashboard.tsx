@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Sliders } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -18,7 +18,6 @@ import {
   AgentFileChangesCard,
 } from '../components/AgentModeWidgets'
 import type { PlanStepItem, AgentTaskData } from '../components/AgentModeWidgets'
-import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
 import { ArtifactPanel } from '../components/ArtifactPanel'
 
 
@@ -169,9 +168,9 @@ function getVisitContext(visitData: VisitData, hour: number): string {
   // ── Long absence (7+ days) ───────────────────────────────────────────────
   if (daysSinceLast >= 14) {
     const opts = [
-      "Thought you'd forgotten about me.",
-      'Long time. Good to have you back.',
-      "A lot can happen in two weeks. Let's catch up.",
+      'Good to have you back.',
+      'It has been a while. Ready when you are.',
+      'Welcome back. Let\'s get to it.',
     ]
     return opts[Math.floor(Math.random() * opts.length)]
   }
@@ -179,7 +178,7 @@ function getVisitContext(visitData: VisitData, hour: number): string {
     const opts = [
       'Been a minute. Good to see you.',
       'Back after a week — what are we working on?',
-      'Absence makes the work pile up. Let\'s dig in.',
+      'Let\'s pick up where we left off.',
     ]
     return opts[Math.floor(Math.random() * opts.length)]
   }
@@ -187,11 +186,10 @@ function getVisitContext(visitData: VisitData, hour: number): string {
   // ── Same-day return (multiple sessions today) ────────────────────────────
   if (daysSinceLast === 0 && visitCount > 1) {
     const opts = [
-      'Again? I like the dedication.',
-      'Still at it — let\'s keep going.',
-      'Round two. What\'s next?',
+      'Back again — let\'s continue.',
+      'Straight back to it.',
       'Picking up where we left off.',
-      'You don\'t stop, do you.',
+      'Round two. What\'s next?',
     ]
     return opts[Math.floor(Math.random() * opts.length)]
   }
@@ -221,7 +219,7 @@ function getVisitContext(visitData: VisitData, hour: number): string {
     return opts[Math.floor(Math.random() * opts.length)]
   }
   if (hour >= 12 && hour < 14) {
-    const opts = ['Deep into the midday.', 'Powering through.', 'No lunch break needed.']
+    const opts = ['Deep into the midday.', 'Midday focus.', 'Powering through.']
     return opts[Math.floor(Math.random() * opts.length)]
   }
   if (hour >= 14 && hour < 17) {
@@ -237,7 +235,7 @@ function getVisitContext(visitData: VisitData, hour: number): string {
     return opts[Math.floor(Math.random() * opts.length)]
   }
   if (hour >= 22 || hour < 5) {
-    const opts = ['Burning the midnight oil.', 'You and the night.', 'Sleep is overrated anyway.']
+    const opts = ['The quiet hours.', 'Late shift.', 'Good time for deep work.']
     return opts[Math.floor(Math.random() * opts.length)]
   }
 
@@ -549,25 +547,14 @@ function FileDownloadCard({
     ? `${(size_bytes / 1024).toFixed(1)} KB`
     : size_bytes > 0 ? `${size_bytes} B` : ''
 
-  // Determine ext-based accent color
-  const extColor: Record<string, string> = {
-    py: '#3b82f6', js: '#f59e0b', ts: '#3b82f6', tsx: '#06b6d4', jsx: '#06b6d4',
-    pdf: '#ef4444', docx: '#3b82f6', xlsx: '#22c55e', csv: '#22c55e',
-    json: '#a78bfa', txt: '#8e95a2', html: '#f97316', css: '#06b6d4',
-    png: '#ec4899', jpg: '#ec4899', jpeg: '#ec4899', svg: '#f59e0b', zip: '#8b5cf6',
-  }
-  const accentColor = extColor[ext] || '#c5a880'
-
+  // Two-colour discipline: one neutral tile for every file type.
   const hasUrl = download_url && !download_url.startsWith('sandbox:') && !download_url.includes('/mnt/data/')
 
   return (
-    <div className="mt-2 flex items-center gap-3 px-3.5 py-2.5 rounded-lg border border-[#ffffff]/15 bg-[#0d0f11]/60 hover:bg-[#0d0f11]/90 hover:border-[#ffffff]/30 transition-all duration-200 group/dl w-full select-none">
-      {/* File type icon */}
-      <div
-        className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border"
-        style={{ background: `${accentColor}18`, borderColor: `${accentColor}30` }}
-      >
-        <span className="text-[9px] font-black tracking-tight" style={{ color: accentColor }}>{extLabel}</span>
+    <div className="mt-2 flex items-center gap-3 px-3.5 py-2.5 rounded-lg border border-white/10 bg-brand-card/60 hover:bg-brand-card hover:border-white/25 transition-all duration-200 group/dl w-full select-none">
+      {/* File type icon — neutral, palette-consistent */}
+      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-white/10 bg-white/[0.05]">
+        <span className="text-[9px] font-black tracking-tight text-white/70">{extLabel}</span>
       </div>
 
       {/* File info */}
@@ -693,37 +680,37 @@ function WidgetRenderer({
 
     const tokenStyle = `<style>
       :root, svg {
-        --bg-void: #06060a;
-        --bg-deep: #0d0d14;
-        --bg-surface: #14141e;
-        --bg-raised: #1c1c2a;
-        --bg-overlay: #232333;
-        --brass-core: #b8860b;
-        --brass-bright: #d4a832;
-        --brass-dim: #7a5a08;
-        --brass-whisper: rgba(184, 134, 11, 0.12);
-        --brass-glow: rgba(212, 168, 50, 0.25);
-        --text-primary: #e8e0d0;
-        --text-secondary: #9a9090;
-        --text-muted: #5a5465;
-        --text-accent: #d4a832;
-        --border-subtle: rgba(184, 134, 11, 0.15);
-        --border-visible: rgba(184, 134, 11, 0.30);
-        --border-strong: rgba(184, 134, 11, 0.55);
-        --success: #4a9463;
-        --warning: #c4841a;
-        --error: #a83232;
-        --info: #3a6ea8;
+        --bg-void: #161615;
+        --bg-deep: #1a1a18;
+        --bg-surface: #212120;
+        --bg-raised: #262624;
+        --bg-overlay: #2e2e2c;
+        --brass-core: #e8e6e3;
+        --brass-bright: #f0efec;
+        --brass-dim: #8a8880;
+        --brass-whisper: rgba(255, 255, 255, 0.06);
+        --brass-glow: rgba(255, 255, 255, 0.14);
+        --text-primary: #e9e8e6;
+        --text-secondary: #a6a29c;
+        --text-muted: #6e6c68;
+        --text-accent: #e8e6e3;
+        --border-subtle: rgba(255, 255, 255, 0.10);
+        --border-visible: rgba(255, 255, 255, 0.20);
+        --border-strong: rgba(255, 255, 255, 0.35);
+        --success: #34d399;
+        --warning: #fbbf24;
+        --error: #f87171;
+        --info: #93c5fd;
         --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
         --font-ui: 'Inter', system-ui, sans-serif;
       }
       svg {
-        background-color: var(--bg-deep, #0d0d14);
-        color: var(--text-primary, #e8e0d0);
+        background-color: var(--bg-deep, #1a1a18);
+        color: var(--text-primary, #e9e8e6);
         font-family: var(--font-ui, 'Inter', sans-serif);
       }
       text {
-        fill: var(--text-primary, #e8e0d0) !important;
+        fill: var(--text-primary, #e9e8e6) !important;
       }
     </style>`
 
@@ -771,7 +758,7 @@ function WidgetRenderer({
         canvas.height = img.height || 600
         const ctx = canvas.getContext('2d')
         if (ctx) {
-          ctx.fillStyle = '#0d0d14'
+          ctx.fillStyle = '#1a1a18'
           ctx.fillRect(0, 0, canvas.width, canvas.height)
           ctx.drawImage(img, 0, 0)
           const pngUrl = canvas.toDataURL('image/png')
@@ -810,27 +797,27 @@ function WidgetRenderer({
   <meta charset="utf-8">
   <style>
     :root {
-      --bg-void:    #06060a;
-      --bg-deep:    #0d0d14;
-      --bg-surface: #14141e;
-      --bg-raised:  #1c1c2a;
-      --bg-overlay: #232333;
-      --brass-core:    #b8860b;
-      --brass-bright:  #d4a832;
-      --brass-dim:     #7a5a08;
-      --brass-whisper: rgba(184,134,11,0.12);
-      --brass-glow:    rgba(212,168,50,0.25);
-      --text-primary:   #e8e0d0;
-      --text-secondary: #9a9090;
-      --text-muted:     #5a5465;
-      --text-accent:    #d4a832;
-      --border-subtle:  rgba(184,134,11,0.15);
-      --border-visible: rgba(184,134,11,0.30);
-      --border-strong:  rgba(184,134,11,0.55);
-      --success: #4a9463;
-      --warning: #c4841a;
-      --error:   #a83232;
-      --info:    #3a6ea8;
+      --bg-void:    #161615;
+      --bg-deep:    #1a1a18;
+      --bg-surface: #212120;
+      --bg-raised:  #262624;
+      --bg-overlay: #2e2e2c;
+      --brass-core:    #e8e6e3;
+      --brass-bright:  #f0efec;
+      --brass-dim:     #8a8880;
+      --brass-whisper: rgba(255,255,255,0.06);
+      --brass-glow:    rgba(255,255,255,0.14);
+      --text-primary:   #e9e8e6;
+      --text-secondary: #a6a29c;
+      --text-muted:     #6e6c68;
+      --text-accent:    #e8e6e3;
+      --border-subtle:  rgba(255,255,255,0.10);
+      --border-visible: rgba(255,255,255,0.20);
+      --border-strong:  rgba(255,255,255,0.35);
+      --success: #34d399;
+      --warning: #fbbf24;
+      --error:   #f87171;
+      --info:    #93c5fd;
       --font-mono: 'JetBrains Mono','Fira Code',monospace;
       --font-ui:   'Inter',system-ui,sans-serif;
     }
@@ -2710,7 +2697,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
               title={src.title || src.url}
 
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#1e2025] bg-[#0c0d10]/95 hover:border-[#ffffff]/30 hover:bg-[#ffffff]/5 transition-all duration-200 group/badge max-w-[240px] shadow-sm animate-fadeIn"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-brand-border bg-brand-card/95 hover:border-white/30 hover:bg-white/5 transition-all duration-200 group/badge max-w-[240px] shadow-sm animate-fadeIn"
 
             >
 
@@ -4070,7 +4057,6 @@ export const Dashboard: React.FC = () => {
   }
 
   const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
-  const [isConnectorModalOpen, setIsConnectorModalOpen] = useState(false)
   const headerSettingsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -7712,14 +7698,6 @@ export const Dashboard: React.FC = () => {
               </button>
             )}
 
-            <button
-              onClick={() => setIsConnectorModalOpen(true)}
-              className="p-2.5 min-w-[44px] min-h-[44px] rounded-lg border border-brand-border bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center"
-              title="Connected Apps"
-            >
-              <Sliders className="w-4 h-4" />
-            </button>
-
             <div ref={headerSettingsRef} className="relative">
               <button
                 onClick={() => setIsHeaderSettingsOpen(o => !o)}
@@ -7729,18 +7707,7 @@ export const Dashboard: React.FC = () => {
                 <Settings className="w-4 h-4" />
               </button>
               {isHeaderSettingsOpen && (
-                <div className="absolute right-0 mt-1.5 w-52 rounded-lg border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
-                  <button
-                    onClick={() => {
-                      setIsConnectorModalOpen(true)
-                      setIsHeaderSettingsOpen(false)
-                    }}
-                    className="w-full text-left px-4 py-2.5 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold border-b border-[#1e2025]/50"
-                  >
-                    <Sliders className="w-3.5 h-3.5 text-blue-400" />
-                    <span>Connected Apps</span>
-                  </button>
-
+                <div className="absolute right-0 mt-1.5 w-52 rounded-lg border border-brand-border bg-brand-card/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
                   {localStorage.getItem('app_lock_pin') ? (
                     <>
                       <button
@@ -9528,12 +9495,6 @@ export const Dashboard: React.FC = () => {
         </div>
         )
       })()}
-
-      {/* Connected Apps Settings Modal */}
-      <ConnectorSettingsModal
-        isOpen={isConnectorModalOpen}
-        onClose={() => setIsConnectorModalOpen(false)}
-      />
 
     </div>
 
