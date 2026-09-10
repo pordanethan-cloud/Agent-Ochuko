@@ -216,10 +216,39 @@ _TIME_SENSITIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Relative date phrases that must resolve to explicit calendar dates before
+# hitting a search engine — "yesterday night game" is useless to an index,
+# "Champions League results September 9 2026" is not.
+_RELATIVE_DATE_RE = re.compile(
+    r"\b(yesterday(?:'s)?|last night|last evening|tonight|this morning|this afternoon|this evening)\b",
+    re.IGNORECASE,
+)
+
+
+def _resolve_relative_dates(query: str) -> str:
+    """Rewrites relative date phrases into explicit calendar dates (WAT)."""
+    from datetime import timedelta
+    q = (query or "").strip()
+    if not _RELATIVE_DATE_RE.search(q):
+        return q
+
+    now = datetime.now(timezone(timedelta(hours=1)))
+    today_str = now.strftime("%B %d, %Y")
+    yesterday_str = (now - timedelta(days=1)).strftime("%B %d, %Y")
+
+    def _sub(m: "re.Match[str]") -> str:
+        phrase = m.group(0).lower()
+        if phrase.startswith("yesterday") or "last night" in phrase or "last evening" in phrase:
+            return yesterday_str
+        return today_str
+
+    return _RELATIVE_DATE_RE.sub(_sub, q)
+
 
 def _time_aware_query(query: str) -> str:
-    """Append the current year to time-sensitive queries for freshness."""
-    q = (query or "").strip()
+    """Resolve relative dates, then append the current year to time-sensitive
+    queries for freshness."""
+    q = _resolve_relative_dates(query)
     current_year = datetime.now(timezone.utc).year
     if _TIME_SENSITIVE_RE.search(q) and str(current_year) not in q:
         return f"{q} {current_year}"

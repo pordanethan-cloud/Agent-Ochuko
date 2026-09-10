@@ -161,3 +161,22 @@ def test_time_aware_query_appends_year():
     # Static queries stay untouched; explicit years are not duplicated.
     assert _time_aware_query("capital of France") == "capital of France"
     assert _time_aware_query(f"tax reform {year} summary") == f"tax reform {year} summary"
+
+
+def test_relative_dates_resolved_in_query():
+    # "yesterday's games" must become an explicit calendar-date query so
+    # search engines surface exactly the right day's results (regression:
+    # "yesterday night game" used to reach the engine unresolved).
+    from datetime import datetime, timedelta, timezone
+
+    from app.api.v1.endpoints.chat import _time_aware_query, _resolve_relative_dates
+
+    wat = timezone(timedelta(hours=1))
+    yesterday = (datetime.now(wat) - timedelta(days=1)).strftime("%B %d, %Y")
+    today = datetime.now(wat).strftime("%B %d, %Y")
+
+    assert yesterday in _time_aware_query("champions league games last night")
+    assert yesterday in _time_aware_query("yesterday's football results")
+    assert today in _time_aware_query("who won the game this morning")
+    # Non-relative queries pass through untouched.
+    assert _resolve_relative_dates("capital of France") == "capital of France"
