@@ -364,8 +364,9 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
                   )}
                 </div>
 
-                {/* Activity line: OODA phase + description */}
-                <p className={`text-[12.5px] leading-snug truncate flex-1 ${
+                {/* Activity line: OODA phase + description — wraps to 2 lines on
+                    mobile so context is readable; single line + truncate on desktop */}
+                <p className={`text-[12.5px] leading-snug line-clamp-2 sm:truncate flex-1 min-w-0 ${
                   isRunning ? 'text-white/90' : isDone ? 'text-white/65' : isFailed ? 'text-rose-300/90' : 'text-white/40'
                 }`}>
                   <span className={`mr-1.5 ${OODA_LABEL_CLASS}`}>{phase}</span>

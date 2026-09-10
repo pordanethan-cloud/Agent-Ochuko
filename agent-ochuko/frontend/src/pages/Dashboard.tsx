@@ -2385,11 +2385,11 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
   return (
 
-    <div className="group relative bg-[#0b0c0e] border border-[#1a1d20]/80 rounded-lg my-4 shadow-lg z-10">
+    <div className="group relative bg-[#1d1d1b] border border-brand-border rounded-none sm:rounded-lg -mx-2 sm:mx-0 my-4 shadow-lg z-10">
 
-      {/* Split-button — top-right, reveal on hover */}
+      {/* Split-button — top-right; always visible on touch (no hover), hover-reveal on desktop */}
 
-      <div ref={menuRef} className="absolute top-2 right-2 z-50 flex items-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+      <div ref={menuRef} className="absolute top-2 right-2 z-50 flex items-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-150">
 
 
         {/* Copy */}
@@ -2398,7 +2398,7 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
           onClick={handleCopy}
 
-          className="flex items-center gap-1.5 px-2.5 h-7 text-[11px] font-medium rounded-l-md border border-r-0 border-[#30363d] bg-[#161b22] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition-colors select-none"
+          className="flex items-center gap-1.5 px-3 h-9 text-[11px] font-medium rounded-l-md border border-r-0 border-[#30363d] bg-[#262624] text-[#a6a29c] hover:text-[#e9e8e6] hover:bg-[#313130] transition-colors select-none"
 
         >
 
@@ -2434,7 +2434,7 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
             onClick={() => setMenuOpen(o => !o)}
 
-            className="flex items-center justify-center px-2 h-7 rounded-r-md border border-[#30363d] bg-[#161b22] text-[#8b949e] hover:text-[#c9d1d9] hover:bg-[#21262d] transition-colors"
+            className="flex items-center justify-center px-2.5 h-9 rounded-r-md border border-[#30363d] bg-[#262624] text-[#a6a29c] hover:text-[#e9e8e6] hover:bg-[#313130] transition-colors"
 
           >
 
@@ -2546,9 +2546,9 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
       )}
 
-      <pre className="p-4 pb-7 overflow-x-auto">
+      <pre className="p-3 pb-7 sm:p-4 overflow-x-auto">
 
-        <code className="text-[11.5px] font-mono text-[#d4c5a0]/85 leading-relaxed block whitespace-pre">
+        <code className="text-[10.5px] sm:text-[11.5px] font-mono text-[#d4c5a0]/85 leading-[1.55] block whitespace-pre">
 
           {content}
 
@@ -7652,9 +7652,9 @@ export const Dashboard: React.FC = () => {
 
         {/* Header */}
 
-        <header className="relative z-30 h-14 border-b border-[#1a1c1f] bg-[#0a0b0d]/80 backdrop-blur-md flex items-center justify-between px-5 shrink-0">
+        <header className="relative z-30 h-14 border-b border-brand-border bg-brand-bg/80 backdrop-blur-md flex items-center justify-between px-2 sm:px-5 shrink-0">
 
-          <div className="flex items-center gap-3.5">
+          <div className="flex items-center gap-2 sm:gap-3.5">
 
             <button
 
@@ -7662,7 +7662,7 @@ export const Dashboard: React.FC = () => {
 
               onMouseEnter={() => setIsSidebarHovered(true)}
 
-              className="p-[7px] rounded-lg border border-[#1e2025] bg-brand-surface/20 hover:bg-brand-surface text-brand-muted hover:text-brand-text hover:border-[#ffffff]/25 transition duration-150 active:scale-95"
+              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg border border-brand-border bg-brand-surface/20 hover:bg-brand-surface text-brand-muted hover:text-brand-text hover:border-[#ffffff]/25 transition duration-150 active:scale-95"
 
               aria-label="Toggle Sidebar"
 
@@ -7691,42 +7691,42 @@ export const Dashboard: React.FC = () => {
 
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
             {activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000' ? (
               <button
                 onClick={() => setIsShareModalOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1e2025] hover:border-[#ffffff]/20 bg-brand-surface/10 hover:bg-[#ffffff]/5 text-[11px] font-bold text-[#8e95a2] hover:text-brand-text transition duration-150 active:scale-95 mr-1"
+                className="flex items-center min-h-[44px] px-3 py-2 rounded-lg border border-brand-border hover:border-[#ffffff]/20 bg-brand-surface/10 hover:bg-[#ffffff]/5 text-[11px] font-bold text-[#a6a29c] hover:text-brand-text transition duration-150 active:scale-95"
                 title="Share Conversation"
               >
-                <Share2 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Share</span>
+                <Share2 className="w-4 h-4" />
+                <span className="hidden sm:inline sm:ml-1.5">Share</span>
               </button>
             ) : (
               <button
                 disabled
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1e2025]/50 bg-brand-surface/5 text-[11px] font-bold text-[#8e95a2]/30 cursor-not-allowed mr-1 select-none"
+                className="flex items-center min-h-[44px] px-3 py-2 rounded-lg border border-brand-border/50 bg-brand-surface/5 text-[11px] font-bold text-[#a6a29c]/30 cursor-not-allowed select-none"
                 title="Send a message first to share"
               >
-                <Share2 className="w-3.5 h-3.5 opacity-30" />
-                <span className="hidden sm:inline">Share</span>
+                <Share2 className="w-4 h-4 opacity-30" />
+                <span className="hidden sm:inline sm:ml-1.5">Share</span>
               </button>
             )}
 
             <button
               onClick={() => setIsConnectorModalOpen(true)}
-              className="p-1.5 rounded-lg border border-[#1e2025] bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center mr-1"
+              className="p-2.5 min-w-[44px] min-h-[44px] rounded-lg border border-brand-border bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center"
               title="Connected Apps"
             >
-              <Sliders className="w-3.5 h-3.5" />
+              <Sliders className="w-4 h-4" />
             </button>
 
             <div ref={headerSettingsRef} className="relative">
               <button
                 onClick={() => setIsHeaderSettingsOpen(o => !o)}
-                className="p-1.5 rounded-lg border border-[#1e2025] bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center mr-1"
+                className="p-2.5 min-w-[44px] min-h-[44px] rounded-lg border border-brand-border bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center"
                 title="Settings & security"
               >
-                <Settings className="w-3.5 h-3.5" />
+                <Settings className="w-4 h-4" />
               </button>
               {isHeaderSettingsOpen && (
                 <div className="absolute right-0 mt-1.5 w-52 rounded-lg border border-[#1e2025] bg-[#0d0f11]/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
