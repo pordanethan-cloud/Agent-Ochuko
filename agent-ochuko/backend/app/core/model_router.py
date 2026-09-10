@@ -62,6 +62,27 @@ _SIMPLE_PREFIX_RE = re.compile(
     re.IGNORECASE
 )
 
+# Live-data terms that must never be answered by the cheap tier without
+# grounded search — sports/scores (the confabulation class), weather, markets.
+_SPORTS_LIVE_RE = re.compile(
+    r"\b(score|scores|goal|goals|scorer|match|matches|game|games|standings|"
+    r"fixtures?|playoff|tournament|league|brace|hat[\s-]?trick|highlights?|"
+    r"transfer|injur\w+|lineup|kickoff|weather|temperature)\b",
+    re.IGNORECASE,
+)
+
+
+def _needs_grounded_search(message_text: str) -> bool:
+    """
+    True when a query is live-data (sports, scores, weather, news, prices) and
+    must route to a tool-capable grounded model. The cheap tier confabulates
+    plausible match results when search results are thin — these never route
+    to nano/discuss.
+    """
+    if not message_text:
+        return False
+    return bool(_LIVE_QUERY_RE.search(message_text) or _SPORTS_LIVE_RE.search(message_text))
+
 
 @dataclass
 class RoutingDecision:
@@ -184,22 +205,27 @@ async def route(
         nano_max_turns = 3
 
     # ── Layer 0: DISCUSS mode ────────────────────────────────────────────────
-    # Discuss uses nano @ effort "none". System prompt is skill-based (compact).
+    # Discuss uses nano @ effort "low" for chit-chat and static lookups.
+    # Live-data queries escalate to the grounded solve pipeline — the cheap
+    # tier fabricates plausible results when search returns thin snippets.
     if mode == "discuss":
-        effort = await get_reasoning_effort("discuss", tier, nano_deployment)
-        return RoutingDecision(
-            deployment=nano_deployment,
-            system_prompt=skill_prompt,
-            routing_mode="discuss",
-            routing_reason=(
-                f"Mode is DISCUSS — routed to nano | complexity={tier} | "
-                f"effort={effort} | skill={skill}"
-            ),
-            was_intercepted=False,
-            skill=skill,
-            complexity=tier,
-            reasoning_effort=effort,
-        )
+        if _needs_grounded_search(user_message):
+            mode = "solve"  # escalate: fall through to the mode-based path
+        else:
+            effort = await get_reasoning_effort("discuss", tier, nano_deployment)
+            return RoutingDecision(
+                deployment=nano_deployment,
+                system_prompt=skill_prompt,
+                routing_mode="discuss",
+                routing_reason=(
+                    f"Mode is DISCUSS — routed to nano | complexity={tier} | "
+                    f"effort={effort} | skill={skill}"
+                ),
+                was_intercepted=False,
+                skill=skill,
+                complexity=tier,
+                reasoning_effort=effort,
+            )
 
     # ── Layer 1: Silent Nano Interceptor ──────────────────────────────────────
     if skill != "help" and _is_trivial(user_message) and nano_turn_count < nano_max_turns:
@@ -220,7 +246,13 @@ async def route(
         )
 
     # ── Layer 1b: Simple Query Interceptor ───────────────────────────────
-    if _is_simple_request(user_message) and nano_turn_count < nano_max_turns:
+    # Static lookups only — live-data (sports/scores/weather) is excluded so
+    # those get the grounded think/solve pipeline instead of the cheap tier.
+    if (
+        _is_simple_request(user_message)
+        and not _needs_grounded_search(user_message)
+        and nano_turn_count < nano_max_turns
+    ):
         effort = await get_reasoning_effort("nano", tier, nano_deployment)
         return RoutingDecision(
             deployment=nano_deployment,

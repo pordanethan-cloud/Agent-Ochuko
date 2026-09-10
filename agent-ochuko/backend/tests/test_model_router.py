@@ -262,6 +262,53 @@ async def test_agent_mode_effort_floor():
 
 
 @pytest.mark.asyncio
+async def test_discuss_escalates_live_data_to_grounded_pipeline():
+    # Regression: "Olise's goals" in DISCUSS mode used to hit the nano tier and
+    # confabulate match results. Live-data queries must escalate to the grounded
+    # solve pipeline (tool-capable), never the cheap tier.
+    _CONFIG_CACHE["NANO_MODEL_DEPLOYMENT"] = "gpt-5.6-luna"
+    _CONFIG_CACHE["SOLVE_MODEL_DEPLOYMENT"] = "gpt-5.6-luna"
+    _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
+
+    decision = await model_router.route(
+        "Olise's goals today — did he score a brace?", "discuss", "c1", 0
+    )
+    assert decision.routing_mode == "solve"
+    assert decision.deployment == "gpt-5.6-luna"
+    assert decision.complexity in ("medium", "high", "xhigh")  # live-query floor
+
+    decision2 = await model_router.route("who won the game last night", "discuss", "c1", 0)
+    assert decision2.routing_mode == "solve"
+
+
+@pytest.mark.asyncio
+async def test_sports_queries_skip_nano_interception_in_think():
+    # Regression: sports lookups in think mode must not be intercepted to the
+    # cheap tier — they need the grounded search pipeline.
+    _CONFIG_CACHE["NANO_MODEL_DEPLOYMENT"] = "gpt-5.6-luna"
+    _CONFIG_CACHE["THINK_MODEL_DEPLOYMENT"] = "gpt-5.6-terra"
+    _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
+
+    decision = await model_router.route("who won the game last night", "think", "c1", 0)
+    assert decision.routing_mode == "think"
+
+    # Static lookups still intercept (cheap tier is fine for timeless facts).
+    decision2 = await model_router.route("capital of France", "think", "c1", 0)
+    assert decision2.routing_mode == "nano"
+
+
+def test_base_identity_factual_integrity_contract():
+    # Anti-confabulation + anti-sycophancy conduct must live in BASE_IDENTITY
+    # (all modes), locking the fix for invented match results and pressure
+    # flip-flops.
+    assert "Never invent specifics" in BASE_IDENTITY
+    assert "Gaps stay gaps" in BASE_IDENTITY
+    assert "re-verify with search before changing your answer" in BASE_IDENTITY
+    # The old fabrication-inducing line must be gone.
+    assert "'I cannot verify'" not in BASE_IDENTITY
+
+
+@pytest.mark.asyncio
 async def test_is_reasoning_model_includes_gpt56_family():
     from app.core.agent_config import is_reasoning_model
 
