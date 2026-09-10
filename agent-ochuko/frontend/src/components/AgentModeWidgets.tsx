@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   Bot,
   Check,
@@ -10,6 +10,7 @@ import {
   Zap,
   ChevronDown,
   ChevronUp,
+  FileText,
 } from 'lucide-react'
 
 export interface PlanStepItem {
@@ -76,9 +77,9 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
   }
 
   return (
-    <div className="w-full my-3 rounded-2xl bg-[#0f1115] border border-brand-accent/30 p-4 sm:p-5 shadow-xl shadow-black/60 relative overflow-hidden animate-fadeIn select-none">
+    <div className="w-full my-3 rounded-2xl bg-brand-card border border-brand-border p-4 sm:p-5 shadow-xl relative overflow-hidden animate-fadeIn select-none">
       {/* Background ambient glow */}
-      <div className="absolute top-0 right-0 w-48 h-48 bg-brand-accent/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-0 right-0 w-48 h-48 bg-white/[0.02] rounded-full blur-3xl pointer-events-none" />
 
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-white/[0.08] mb-3.5">
@@ -216,16 +217,73 @@ interface AgentExecutionStepperProps {
   onCancel?: () => void
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+   2. EXECUTION STEPPER — Verdent-style activity log.
+   "Working for Xm Ys" live header + OODA-labelled collapsible step rows.
+   Labels are derived client-side from tool_name/description: zero tokens.
+   ─────────────────────────────────────────────────────────────────────────── */
+interface AgentExecutionStepperProps {
+  task: AgentTaskData
+  onPause?: () => void
+  onCancel?: () => void
+}
+
+const formatElapsed = (ms: number): string => {
+  const totalSec = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(totalSec / 60)
+  const s = totalSec % 60
+  if (m === 0) return `${s}s`
+  return `${m}m ${s}s`
+}
+
+// Task-based OODA loop: classify each step into Observe/Orient/Decide/Act
+// from its tool and description (deterministic, client-side, zero cost).
+const oodaPhase = (step: PlanStepItem): string => {
+  const hay = `${step.tool_name || ''} ${step.description || ''}`.toLowerCase()
+  if (/\b(plan|decide|select|choose|strateg|design|determine|identify)\b/.test(hay)) return 'Decide'
+  if (/\b(analy[sz]e|analy[sz]ing|compare|synthesi[sz]e|evaluat|review|summar|extract|compute|calculate)\b/.test(hay)) return 'Orient'
+  if (/\b(search|research|fetch|read|browse|observe|list|check|monitor|gather|find|scan|look)\b/.test(hay)) return 'Observe'
+  return 'Act'
+}
+
+const OODA_STYLES: Record<string, string> = {
+  Observe: 'text-sky-300/80',
+  Orient: 'text-violet-300/80',
+  Decide: 'text-amber-300/80',
+  Act: 'text-emerald-300/80',
+}
+
 export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
   task,
   onPause: _onPause,
   onCancel: _onCancel,
 }) => {
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set())
+  const [, forceTick] = useState(0)
+  const startRef = useRef<number | null>(null)
   const plan = task.plan || []
   const currentStep = task.current_step || 1
   const completedCount = plan.filter((s) => s.status === 'completed').length
   const progressPct = plan.length > 0 ? Math.round((completedCount / plan.length) * 100) : 0
+
+  const isTaskDone = task.state === 'completed' || (plan.length > 0 && completedCount === plan.length)
+
+  // Live client-side timer: counts while executing, freezes on completion.
+  useEffect(() => {
+    if (isTaskDone) return
+    if (startRef.current === null) {
+      startRef.current = Date.now() - (task.elapsed_seconds ? task.elapsed_seconds * 1000 : 0)
+    }
+    const t = window.setInterval(() => forceTick((n) => n + 1), 1000)
+    return () => window.clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTaskDone])
+
+  const elapsedMs = isTaskDone
+    ? (task.elapsed_seconds ? task.elapsed_seconds * 1000 : 0)
+    : startRef.current !== null
+      ? Date.now() - startRef.current
+      : 0
 
   const toggleExpand = (idx: number) => {
     setExpandedSteps((prev) => {
@@ -236,137 +294,104 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
     })
   }
 
-  const isTaskDone = task.state === 'completed' || progressPct === 100
-
   return (
-    <div className="w-full my-3 rounded-2xl bg-[#0c0e12] border border-white/10 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
-      {/* Header bar */}
-      <div className="flex items-center justify-between pb-3 border-b border-white/[0.08] mb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="relative">
-            {isTaskDone ? (
-              <div className="w-6 h-6 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-                <Check className="w-3.5 h-3.5 stroke-[3]" />
-              </div>
-            ) : (
-              <>
-                <div className="w-6 h-6 rounded-lg bg-brand-accent/20 border border-brand-accent/40 flex items-center justify-center text-brand-accent">
-                  <Zap className="w-3.5 h-3.5" />
-                </div>
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              </>
-            )}
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[12.5px] font-semibold text-white/95">
-                {isTaskDone ? 'Task Complete' : 'Executing Task'}
-              </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-white/70">
-                {isTaskDone ? 'All steps completed' : `Step ${currentStep}/${plan.length}`}
-              </span>
+    <div className="w-full my-3 rounded-xl bg-brand-card border border-brand-border p-3.5 sm:p-4 shadow-lg relative overflow-hidden animate-fadeIn select-none">
+      {/* Header — "Working for 2m 41s" */}
+      <div className="flex items-center justify-between pb-2.5 mb-3">
+        <div className="flex items-center gap-2 min-w-0">
+          {isTaskDone ? (
+            <div className="w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+              <Check className="w-3 h-3 stroke-[3]" />
             </div>
-          </div>
+          ) : (
+            <Loader2 className="w-4 h-4 text-brand-muted animate-spin shrink-0" />
+          )}
+          <span className={`text-[13px] font-medium tracking-tight ${isTaskDone ? 'text-white/90' : 'text-white/75'}`}>
+            {isTaskDone ? 'Completed' : 'Working'} {elapsedMs > 0 && (
+              <span className="font-mono text-[11.5px] text-white/45">
+                {isTaskDone ? 'in' : 'for'} {formatElapsed(elapsedMs)}
+              </span>
+            )}
+          </span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 shrink-0">
           {task.total_token_spend && task.total_token_spend > 0 ? (
-            <span className="text-[10px] font-mono text-white/40">
+            <span className="text-[10px] font-mono text-white/35">
               ~{task.total_token_spend.toLocaleString()} tok
             </span>
           ) : null}
-          <div className="flex items-center gap-1 text-[11px] font-medium text-emerald-400">
-            <span>{isTaskDone ? '100%' : `${progressPct}%`}</span>
-          </div>
+          <span className="text-[10.5px] font-mono text-white/40">{progressPct}%</span>
         </div>
       </div>
 
-      {/* Progress Track */}
-      <div className="w-full h-1.5 rounded-full bg-white/[0.06] overflow-hidden mb-4">
-        <div
-          className="h-full bg-gradient-to-r from-brand-accent to-emerald-400 transition-all duration-500 ease-out"
-          style={{ width: `${progressPct}%` }}
-        />
-      </div>
-
-      {/* Steps List */}
-      <div className="space-y-2">
+      {/* Steps — collapsible activity rows */}
+      <div className="space-y-1">
         {plan.map((step) => {
           const isDone = step.status === 'completed'
+          const isSkipped = step.status === 'skipped'
           const isFailed = step.status === 'failed'
-          const isRunning = step.status === 'running' || (!isDone && !isFailed && step.index === currentStep && task.state === 'executing')
+          const isRunning = step.status === 'running' || (!isDone && !isFailed && !isSkipped && step.index === currentStep && task.state === 'executing')
           const isExpanded = expandedSteps.has(step.index)
+          const phase = oodaPhase(step)
 
           return (
             <div
               key={step.index}
-              className={`rounded-xl border transition ${
+              className={`rounded-lg border transition ${
                 isRunning
-                  ? 'bg-brand-accent/[0.06] border-brand-accent/40 shadow-sm shadow-brand-accent/10'
+                  ? 'bg-white/[0.045] border-white/[0.09]'
                   : isDone
-                  ? 'bg-white/[0.02] border-white/[0.06]'
+                  ? 'bg-transparent border-transparent hover:bg-white/[0.02]'
                   : isFailed
-                  ? 'bg-rose-500/[0.05] border-rose-500/30'
-                  : 'bg-white/[0.01] border-white/[0.03] opacity-60'
+                  ? 'bg-rose-500/[0.05] border-rose-500/25'
+                  : 'bg-transparent border-transparent'
               }`}
             >
               <div
                 onClick={() => (step.result_summary ? toggleExpand(step.index) : undefined)}
-                className={`p-2.5 flex items-center justify-between gap-3 ${
-                  step.result_summary ? 'cursor-pointer hover:bg-white/[0.02]' : ''
-                }`}
+                className={`px-2 py-[7px] flex items-center gap-2.5 rounded-lg ${
+                  step.result_summary ? 'cursor-pointer hover:bg-white/[0.03]' : ''
+                } ${isSkipped ? 'opacity-45' : ''}`}
               >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  {/* Status icon */}
-                  <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0">
-                    {isRunning ? (
-                      <Loader2 className="w-3.5 h-3.5 text-brand-accent animate-spin" />
-                    ) : isDone ? (
-                      <div className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                        <Check className="w-2.5 h-2.5 stroke-[3]" />
-                      </div>
-                    ) : isFailed ? (
-                      <div className="w-4 h-4 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center">
-                        <X className="w-2.5 h-2.5 stroke-[3]" />
-                      </div>
-                    ) : (
-                      <span className="text-[10px] font-mono text-white/30">{step.index}</span>
-                    )}
-                  </div>
-
-                  <p
-                    className={`text-[12px] font-medium truncate ${
-                      isRunning
-                        ? 'text-white'
-                        : isDone
-                        ? 'text-white/80'
-                        : isFailed
-                        ? 'text-rose-300'
-                        : 'text-white/40'
-                    }`}
-                  >
-                    {step.description}
-                  </p>
+                {/* Status icon */}
+                <div className="w-4 flex items-center justify-center shrink-0">
+                  {isRunning ? (
+                    <Loader2 className="w-3.5 h-3.5 text-white/70 animate-spin" />
+                  ) : isDone ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400/90 stroke-[3]" />
+                  ) : isFailed ? (
+                    <X className="w-3.5 h-3.5 text-rose-400/90 stroke-[3]" />
+                  ) : (
+                    <span className="text-[10px] font-mono text-white/30">{step.index}</span>
+                  )}
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  {step.duration_ms && (
-                    <span className="text-[9.5px] font-mono text-white/30">
-                      {(step.duration_ms / 1000).toFixed(1)}s
-                    </span>
-                  )}
+                {/* Activity line: OODA phase + description */}
+                <p className={`text-[12.5px] leading-snug truncate flex-1 ${
+                  isRunning ? 'text-white/90' : isDone ? 'text-white/65' : isFailed ? 'text-rose-300/90' : 'text-white/40'
+                }`}>
+                  <span className={`font-medium mr-1.5 ${OODA_STYLES[phase]}`}>{phase}</span>
+                  {isDone && step.result_summary ? step.result_summary.split('\n')[0] : step.description}
+                </p>
+
+                {/* Right: duration + chevron */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {step.duration_ms ? (
+                    <span className="text-[9.5px] font-mono text-white/30">{formatElapsed(step.duration_ms)}</span>
+                  ) : null}
                   {step.result_summary && (
-                    <div className="text-white/40 hover:text-white">
+                    <span className="text-white/35 hover:text-white/70">
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                    </div>
+                    </span>
                   )}
                 </div>
               </div>
 
-              {/* Collapsible Step Result Summary */}
+              {/* Collapsible step detail */}
               {isExpanded && step.result_summary && (
-                <div className="px-3 pb-3 pt-1 border-t border-white/[0.04] text-[11px] text-white/70 leading-relaxed font-sans">
-                  <p className="bg-black/40 rounded-lg p-2.5 border border-white/[0.06]">
+                <div className="px-2 pb-2.5 pt-0.5">
+                  <p className="text-[11.5px] text-white/60 leading-relaxed whitespace-pre-wrap border-l-2 border-white/10 pl-2.5 ml-[7px]">
                     {step.result_summary}
                   </p>
                 </div>
@@ -400,9 +425,9 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
   onCancel,
 }) => {
   return (
-    <div className="w-full my-3.5 rounded-2xl bg-[#14100c] border border-amber-500/40 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
+    <div className="w-full my-3.5 rounded-2xl bg-brand-card border border-amber-500/40 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
       {/* Background ambient amber flare */}
-      <div className="absolute top-0 right-0 w-36 h-36 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+      <div className="absolute top-0 right-0 w-36 h-36 bg-amber-500/[0.07] rounded-full blur-2xl pointer-events-none" />
 
       <div className="flex items-start gap-3 mb-3">
         <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
@@ -483,7 +508,7 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
   }
 
   return (
-    <div className="w-full my-3.5 rounded-lg bg-[#0d0f14] border border-white/10 shadow-lg relative overflow-hidden animate-fadeIn select-none">
+    <div className="w-full my-3.5 rounded-lg bg-brand-card border border-white/10 shadow-lg relative overflow-hidden animate-fadeIn select-none">
       <div className="p-3.5 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-7 h-7 rounded-md bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
@@ -521,6 +546,124 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
           </a>
         </div>
       </div>
+    </div>
+  )
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   5. TURN TRACKER — thin rail on the RIGHT edge of the thread.
+   One tick per assistant turn; active tick pulses while streaming;
+   click jumps to that turn via [data-turn-anchor] elements.
+   ─────────────────────────────────────────────────────────────────────────── */
+interface TurnTrackerProps {
+  /** Message indices of assistant turns, in order */
+  turnIndices: number[]
+  /** Message index currently streaming (or null when idle) */
+  activeIndex: number | null
+}
+
+export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, activeIndex }) => {
+  if (turnIndices.length < 2) return null
+
+  const jumpTo = (idx: number) => {
+    const el = document.querySelector(`[data-turn-anchor="${idx}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  return (
+    <div
+      className="hidden md:flex flex-col items-center gap-[7px] absolute right-1 top-1/2 -translate-y-1/2 z-10 py-2 px-1"
+      aria-label="Conversation turn tracker"
+    >
+      {turnIndices.map((idx) => {
+        const isActive = idx === activeIndex
+        return (
+          <button
+            key={idx}
+            type="button"
+            onClick={() => jumpTo(idx)}
+            title={`Turn ${(turnIndices.indexOf(idx) || 0) + 1}`}
+            className="group/trk flex items-center justify-center w-3 h-3 cursor-pointer"
+          >
+            <span
+              className={`rounded-full transition-all duration-200 ${
+                isActive
+                  ? 'w-[5px] h-[16px] bg-white/80'
+                  : 'w-[4px] h-[4px] bg-white/25 group-hover/trk:bg-white/60'
+              } ${isActive ? 'animate-pulse' : ''}`}
+            />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   6. FILES-CHANGED CARD — one compact chip for everything the agent produced,
+   Verdent-style ("4 files changed"). Rows open in the ArtifactPanel.
+   ─────────────────────────────────────────────────────────────────────────── */
+export interface AgentArtifactItem {
+  filename: string
+  download_url?: string
+  size_bytes?: number
+}
+
+interface AgentFileChangesProps {
+  artifacts: AgentArtifactItem[]
+  onOpen: (file: AgentArtifactItem) => void
+}
+
+export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifacts, onOpen }) => {
+  const [expanded, setExpanded] = useState(false)
+
+  const files = artifacts.filter((a) => a.filename)
+  if (files.length === 0) return null
+
+  const formatSize = (bytes?: number): string => {
+    if (!bytes || bytes <= 0) return ''
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  return (
+    <div className="w-full my-3 rounded-lg bg-brand-card border border-white/10 shadow-sm animate-fadeIn select-none">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        className="w-full px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] rounded-lg transition"
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-6 h-6 rounded-md bg-white/[0.06] border border-white/10 flex items-center justify-center text-white/70 shrink-0">
+            <FileText className="w-3 h-3" />
+          </div>
+          <span className="text-[12.5px] font-medium text-white/85">
+            {files.length} {files.length === 1 ? 'file' : 'files'} changed
+          </span>
+        </div>
+        <span className="text-white/40 hover:text-white/70 shrink-0">
+          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="px-3.5 pb-3 space-y-0.5">
+          {files.map((f, i) => (
+            <button
+              key={`${f.filename}-${i}`}
+              type="button"
+              onClick={() => f.download_url && onOpen(f)}
+              className={`w-full flex items-center justify-between gap-3 px-2 py-1.5 rounded-md text-left ${
+                f.download_url ? 'hover:bg-white/[0.04] cursor-pointer' : 'cursor-default'
+              } transition`}
+            >
+              <span className="text-[11.5px] font-mono text-white/70 truncate">{f.filename}</span>
+              <span className="text-[10px] font-mono text-white/35 shrink-0">{formatSize(f.size_bytes)}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

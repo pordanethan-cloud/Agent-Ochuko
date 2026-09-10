@@ -31,7 +31,7 @@
   to   { transform: translateX(0); opacity: 1; }
 }
 
-/* Minimalist scrollbar styling */
+/* Minimalist scrollbar styling — neutral, no gold tint */
 ::-webkit-scrollbar {
   width: 5px;
   height: 5px;
@@ -42,19 +42,19 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(197, 168, 128, 0.08);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 99px;
   transition: background 0.15s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(197, 168, 128, 0.25);
+  background: rgba(255, 255, 255, 0.22);
 }
 
 /* Firefox support */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(197, 168, 128, 0.08) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 /* Typing indicator dot bounces */
@@ -79,9 +79,9 @@
 
 /* ── Voice UI: mic button pulse ring while recording ──────────────────────── */
 @keyframes voice-ring {
-  0%   { box-shadow: 0 0 0 0   rgba(197, 168, 128, 0.55); }
-  70%  { box-shadow: 0 0 0 6px rgba(197, 168, 128, 0); }
-  100% { box-shadow: 0 0 0 0   rgba(197, 168, 128, 0); }
+  0%   { box-shadow: 0 0 0 0   rgba(255, 255, 255, 0.45); }
+  70%  { box-shadow: 0 0 0 6px rgba(255, 255, 255, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(255, 255, 255, 0); }
 }
 
 .voice-pulse-ring {
@@ -258,7 +258,7 @@ div[aria-live="polite"] > div {
 .mermaid-diagram-container {
   /* Enhanced scrollbar visibility for Mermaid diagrams */
   scrollbar-width: auto;
-  scrollbar-color: rgba(197, 168, 128, 0.3) rgba(0, 0, 0, 0.2);
+  scrollbar-color: rgba(255, 255, 255, 0.25) rgba(0, 0, 0, 0.2);
 }
 
 .mermaid-diagram-container::-webkit-scrollbar {
@@ -272,13 +272,13 @@ div[aria-live="polite"] > div {
 }
 
 .mermaid-diagram-container::-webkit-scrollbar-thumb {
-  background: rgba(197, 168, 128, 0.3);
+  background: rgba(255, 255, 255, 0.25);
   border-radius: 4px;
   transition: background 0.2s ease, width 0.2s ease, height 0.2s ease;
 }
 
 .mermaid-diagram-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(197, 168, 128, 0.5);
+  background: rgba(255, 255, 255, 0.4);
   width: 10px;
   height: 10px;
 }
@@ -295,7 +295,7 @@ div[aria-live="polite"] > div {
   left: 0;
   right: 0;
   height: 20px;
-  background: linear-gradient(to top, rgba(13, 17, 23, 0.8), transparent);
+  background: linear-gradient(to top, rgba(26, 26, 24, 0.85), transparent);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.3s ease;

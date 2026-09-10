@@ -8,15 +8,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        // High-altitude warm dark theme colors
+        // Warm charcoal theme — soft, layered, low-contrast (Verdent-style).
+        // Never pure black/white: lifted base, softened text, hairline borders.
         brand: {
-          bg: "#08090a",         // Deep carbon obsidian
-          surface: "#0f1113",    // Refined slate surface
-          card: "#16181b",       // Dark charcoal base
-          border: "#202328",     // Premium low-contrast border
-          accent: "#ffffff",     // Muted gold/bronze (signals competence)
-          text: "#f3f4f6",       // Clean soft white
-          muted: "#8e95a2",      // Warm muted silver
+          bg: "#1a1a18",         // Warm charcoal base
+          surface: "#212120",    // Panels / sidebar
+          card: "#262624",       // Cards & elevated surfaces
+          border: "#313130",     // Hairline low-contrast border
+          accent: "#e8e6e3",     // Soft ivory primary
+          text: "#e9e8e6",       // Softened off-white body text
+          muted: "#a6a29c",      // Warm gray secondary
         }
       },
       fontFamily: {

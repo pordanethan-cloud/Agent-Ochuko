@@ -8,6 +8,7 @@ import base64
 import httpx
 from html.parser import HTMLParser
 from typing import List, Dict, Any, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -265,6 +266,134 @@ def _search_time_header() -> str:
     )
 
 
+# ── Trusted-source ranking ────────────────────────────────────────────────────
+# The engine (Gemini grounding / Tavily) returns results in its own order with
+# no source-quality weighting, so thin aggregator pages outrank wires and
+# official bodies. We stable-sort trusted domains to the front; relative order
+# of everything else is preserved (trusted results are promoted, never buried).
+
+_TRUSTED_SOURCE_DOMAINS: Dict[str, set] = {
+    "sports": {
+        "espn.com", "espn.co.uk", "skysports.com", "bbc.com", "bbc.co.uk",
+        "tntsports.co.uk", "theathletic.com", "transfermarkt.com",
+        "uefa.com", "fifa.com", "bundesliga.com", "premierleague.com",
+        "laliga.com", "legaseriea.it", "rfeb.es", "olympics.com", "nba.com",
+        "nfl.com", "mlb.com", "nhl.com", "flashscore.com", "reuters.com",
+        "apnews.com", "dazn.com",
+    },
+    "news": {
+        "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "aljazeera.com",
+        "cnn.com", "nytimes.com", "theguardian.com", "washingtonpost.com",
+        "dw.com", "france24.com", "economist.com", "ft.com", "bloomberg.com",
+    },
+    "business": {
+        "bloomberg.com", "ft.com", "wsj.com", "forbes.com", "cnbc.com",
+        "reuters.com", "economist.com", "marketwatch.com", "investing.com",
+        "morningstar.com", "sec.gov", "imf.org",
+    },
+    "tech": {
+        "techcrunch.com", "theverge.com", "wired.com", "arstechnica.com",
+        "engadget.com", "zdnet.com", "venturebeat.com", "reuters.com",
+        "bbc.com", "nature.com", "ieee.org",
+    },
+    "stats": {
+        "statista.com", "data.worldbank.org", "oecd.org", "imf.org",
+        "ourworldindata.org", "census.gov", "europa.eu", "un.org",
+    },
+    "general": {
+        "wikipedia.org", "britannica.org", "britannica.com", "mozilla.org",
+        "github.com", "stackoverflow.com", "python.org", "docs.microsoft.com",
+        "learn.microsoft.com", "developer.mozilla.org",
+    },
+}
+
+_SEARCH_CATEGORY_RES: Dict[str, "re.Pattern"] = {
+    "sports": re.compile(
+        r"\b(score|scores|goal|goals|scorer|scorers|match|matches|game|games|"
+        r"standings|fixtures?|league|cup|braces?|hat[\s-]?trick|highlights?|"
+        r"transfer|transfers|lineup|line-ups?|injur\w+|nfl|nba|mlb|nhl|fifa|uefa|"
+        r"premier\s+league|la\s+liga|bundesliga|serie\s+a|ligue\s+1|champions\s+league|"
+        r"europa\s+league|cricket|tennis|formula\s*1|f1|olympics?|world\s+cup)\b",
+        re.IGNORECASE,
+    ),
+    "business": re.compile(
+        r"\b(stock|stocks|share|shares|market|markets|ipo|earnings|revenue|"
+        r"inflation|interest\s+rate|interest\s+rates|fed|ecb|forex|exchange\s+rate|"
+        r"crypto|bitcoin|ethereum|merger|acquisition|valuation|gdp|unemployment|"
+        r"economy|economic)\b",
+        re.IGNORECASE,
+    ),
+    "tech": re.compile(
+        r"\b(iphone|ipad|android|macbook|windows\s+11|llm|gpt|gemini|claude|"
+        r"openai|anthropic|startup|seed\s+round|series\s+[ab]|funding|gadget|"
+        r"firmware|os\s+update|gpu|cpu|processor|developer|api|framework)\b",
+        re.IGNORECASE,
+    ),
+    "stats": re.compile(
+        r"\b(statistics|stats|statistic|percentage|percent|demographics|"
+        r"market\s+size|population|census|survey|per\s+capita|average)\b",
+        re.IGNORECASE,
+    ),
+}
+
+# Multi-part public suffixes for registrable-domain extraction.
+_MULTIPART_TLDS = {
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "co.za", "com.au",
+    "com.br", "co.in", "com.ng", "co.ke", "com.mx", "co.kr", "com.tr",
+    "co.nz", "org.nz", "com.sg", "com.ar",
+}
+
+
+def _search_categories(query: str) -> set:
+    """Detects query categories (sports/business/tech/stats) via regex — <0.1ms."""
+    cats = set()
+    q = query or ""
+    for cat, rx in _SEARCH_CATEGORY_RES.items():
+        if rx.search(q):
+            cats.add(cat)
+    return cats
+
+
+def _domain_of(url: str) -> str:
+    """Extracts the registrable domain ('https://amp.bbc.co.uk/x' -> 'bbc.co.uk')."""
+    try:
+        netloc = (urlsplit(url).netloc or "").lower()
+        netloc = netloc.split("@")[-1].split(":")[0]
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        labels = netloc.split(".")
+        if len(labels) >= 3 and ".".join(labels[-2:]) in _MULTIPART_TLDS:
+            return ".".join(labels[-3:])
+        if len(labels) >= 2:
+            return ".".join(labels[-2:])
+        return netloc
+    except Exception:
+        return ""
+
+
+def rerank_results_by_trust(results: List[Dict[str, Any]], query: str, url_key: str = "url") -> List[Dict[str, Any]]:
+    """
+    Stable-sorts search results so trusted, on-topic domains come first.
+    Trusted-but-off-topic and untrusted results keep their original relative
+    order — promotion only, never demotion-below-relevance.
+    """
+    if not results:
+        return results
+    cats = _search_categories(query)
+
+    trusted_domains: set = set(_TRUSTED_SOURCE_DOMAINS["general"])
+    for cat in cats:
+        trusted_domains |= _TRUSTED_SOURCE_DOMAINS.get(cat, set())
+
+    def _rank(idx_item):
+        idx, item = idx_item
+        d = _domain_of(item.get(url_key, "") or "")
+        return (0 if d in trusted_domains else 1, idx)
+
+    decorated = sorted(enumerate(results), key=_rank)
+    return [item for _, item in decorated]
+
+
 async def _perform_tavily_search(query: str) -> tuple:
     """
     Primary retrieval via the Tavily Search API (advanced depth).
@@ -289,8 +418,9 @@ async def _perform_tavily_search(query: str) -> tuple:
         "include_raw_content": False,
         "max_results": 8,
     }
-    # News-class queries get recency filtering (last 30 days)
-    if _TIME_SENSITIVE_RE.search(query):
+    # News-class queries get recency filtering (last 30 days). Sports queries
+    # are inherently current-events (scores, transfers) — include them.
+    if _TIME_SENSITIVE_RE.search(query) or _search_categories(query):
         payload["topic"] = "news"
         payload["days"] = 30
 
@@ -300,6 +430,8 @@ async def _perform_tavily_search(query: str) -> tuple:
         data = res.json()
 
     results = data.get("results", []) or []
+    # Promote trusted, on-topic sources (wires, official bodies) to the front.
+    results = rerank_results_by_trust(results, query)
     sources: List[Dict[str, str]] = []
     chunks: List[str] = []
     seen_urls: set = set()
@@ -528,6 +660,8 @@ async def _perform_google_search(
                         f"Search Synthesis: {gemini_text}\n\n"
                         f"Supporting Grounding Context:\n{google_context}"
                     )
+                # Promote trusted sources to the front of the source list.
+                sources = rerank_results_by_trust(sources, query)
                 return google_context, sources[:20]  # Increased cap: frontend de-duplicates across iterations
             except Exception as e:
                 logger.warning("Google search failed with key index %d: %s", idx, e)
@@ -1314,6 +1448,10 @@ async def chat_stream_generator(
                             "include the current year in the query — e.g. 'Nigeria tax reform 2026'. "
                             "AFTER searching: if a result looks central to the answer but the snippet "
                             "is thin, follow up with fetch_url on that result's URL to read the page. "
+                            "TRUST PRIORITY: favour wire services and official bodies (Reuters, AP, "
+                            "BBC, UEFA/league/club sites for sports, Bloomberg/FT for markets) that "
+                            "appear in the results; for scores and breaking figures, confirm across "
+                            "two trusted sources before stating them. "
                             "DUTY: cite web-sourced claims with [n](url) markers. "
                             "For comparing multiple subjects or researching multiple dimensions at once, "
                             "use deep_research instead."

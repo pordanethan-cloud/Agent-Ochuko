@@ -9,9 +9,10 @@ async def test_trivial_and_simple_regex_check():
     assert model_router._is_trivial("thank you") is True
     assert model_router._is_trivial("ok") is True
     
-    # Whitelisted simple informational lookups
-    assert model_router._is_simple_request("football live scores") is True
-    assert model_router._is_simple_request("weather in Lagos") is True
+    # Whitelisted simple informational lookups.
+    # NOTE: live-data queries (sports scores, weather) are intentionally NOT
+    # routed to the cheap tier anymore — they need grounded search (the nano
+    # tier confabulated match results, see test_model_router.py regressions).
     assert model_router._is_simple_request("what is the time in London?") is True
     assert model_router._is_simple_request("who is the president of Nigeria") is True
     
@@ -30,19 +31,20 @@ async def test_model_router_intercept_logic():
     _CONFIG_CACHE["SOLVE_MODEL_DEPLOYMENT"] = "gpt-solve-test"
     _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
 
-    # Case 1: Simple query whitelisted in THINK mode -> gets intercepted to nano
+    # Case 1: Live-data query in THINK mode -> NOT intercepted; sports scores
+    # must get the grounded think pipeline (nano confabulates results).
     decision_1 = await model_router.route(
         user_message="football live scores",
         mode="think",
         nano_turn_count=0
     )
-    assert decision_1.was_intercepted is True
-    assert decision_1.routing_mode == "nano"
-    assert decision_1.deployment == "gpt-nano-test"
+    assert decision_1.was_intercepted is False
+    assert decision_1.routing_mode == "think"
+    assert decision_1.deployment == "gpt-think-test"
 
-    # Case 2: Simple query whitelisted in SOLVE mode -> gets intercepted to nano
+    # Case 2: Timeless simple query in SOLVE mode -> still intercepted to nano
     decision_2 = await model_router.route(
-        user_message="weather in Lagos",
+        user_message="who is the president of Nigeria",
         mode="solve",
         nano_turn_count=0
     )

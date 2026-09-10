@@ -14,6 +14,8 @@ import {
   AgentExecutionStepper,
   AgentHITLApprovalCard,
   AgentSiteDeploymentCard,
+  TurnTracker,
+  AgentFileChangesCard,
 } from '../components/AgentModeWidgets'
 import type { PlanStepItem, AgentTaskData } from '../components/AgentModeWidgets'
 import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
@@ -2185,7 +2187,7 @@ const ImageBubble: React.FC<{ url: string; prompt?: string }> = ({ url, prompt }
             download
             target="_blank"
             rel="noopener noreferrer"
-            className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#ffffff] text-[#08090a] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
+            className="opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-1.5 bg-[#ffffff] text-[#1a1a18] rounded-lg text-[10px] font-bold tracking-wider uppercase shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             ↓ Download
@@ -3834,8 +3836,10 @@ const FileAttachmentChip: React.FC<{
 const LazyMessage: React.FC<{
   children: React.ReactNode
   estimatedHeight?: number
-}> = ({ children }) => {
-  return <>{children}</>
+  turnIndex?: number
+}> = ({ children, turnIndex }) => {
+  // Anchor div doubles as the TurnTracker scroll target for this turn.
+  return <div data-turn-anchor={turnIndex}>{children}</div>
 }
 
 
@@ -5276,30 +5280,167 @@ export const Dashboard: React.FC = () => {
 
   }
 
-  const handleApproveTask = async (taskId?: string) => {
-    if (!taskId) return
-    try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token
-      if (!token) return
-      await fetch(`${API_BASE}/v1/agent-tasks/${taskId}/approve`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ action: 'approve' }),
+  // ── Shared agent-task SSE event updater ────────────────────────────────────
+  // Consumed by BOTH the main chat stream and the approve-resume stream, so
+  // plan/step/artifact/approval state updates live in exactly one place.
+  const applyAgentTaskEvent = (data: any) => {
+    if (data.type === 'agent_plan') {
+      const planData: PlanStepItem[] = data.plan || []
+      setMessages((prev) => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          const last = { ...updated[updated.length - 1] }
+          last.agentTaskData = {
+            id: data.task_id,
+            task_id: data.task_id,
+            state: data.state || 'executing',
+            plan: planData,
+            current_step: 1,
+          }
+          updated[updated.length - 1] = last
+        }
+        return updated
       })
-      showToast('Plan approved! Agent executing...', 'info')
-    } catch (e) {
-      console.error('Failed to approve plan:', e)
+    } else if (data.type === 'agent_step_start') {
+      setMessages((prev) => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          const last = { ...updated[updated.length - 1] }
+          if (last.agentTaskData) {
+            const plan = [...(last.agentTaskData.plan || [])]
+            const stepIdx = data.step_index
+            const step = plan.find((s) => s.index === stepIdx)
+            if (step) {
+              step.status = 'running'
+            }
+            last.agentTaskData = {
+              ...last.agentTaskData,
+              current_step: stepIdx,
+              plan,
+            }
+          }
+          updated[updated.length - 1] = last
+        }
+        return updated
+      })
+    } else if (data.type === 'agent_step_complete') {
+      // Auto-open newly produced step artifact in the ArtifactPanel
+      if (data.artifacts && data.artifacts.length > 0) {
+        const arts = data.artifacts.map((a: any) => ({
+          filename: a.filename || a.title || 'artifact',
+          download_url: a.download_url || a.url,
+          size_bytes: a.size_bytes || 0,
+        }))
+        const entry = pickEntryFile(arts)
+        if (entry?.download_url) {
+          dispatchOpenFilePreview({
+            name: entry.filename,
+            type: mimeFromName(entry.filename),
+            url: entry.download_url,
+            sizeBytes: entry.size_bytes,
+          })
+        }
+      }
+      setMessages((prev) => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          const last = { ...updated[updated.length - 1] }
+          if (last.agentTaskData) {
+            const plan = [...(last.agentTaskData.plan || [])]
+            const stepIdx = data.step_index
+            const step = plan.find((s) => s.index === stepIdx)
+            if (step) {
+              step.status = data.status === 'failed' ? 'failed' : 'completed'
+              step.result_summary = data.result_summary || null
+              step.duration_ms = data.duration_ms
+              step.token_spend = data.token_spend
+              if (data.artifacts) {
+                step.artifacts = data.artifacts
+              }
+            }
+            const newArtifacts = data.artifacts || []
+            const currentArtifacts = last.agentTaskData.artifacts || []
+            last.agentTaskData = {
+              ...last.agentTaskData,
+              plan,
+              artifacts: [...currentArtifacts, ...newArtifacts],
+              total_token_spend: (last.agentTaskData.total_token_spend || 0) + (data.token_spend || 0),
+            }
+          }
+          updated[updated.length - 1] = last
+        }
+        return updated
+      })
+    } else if (data.type === 'agent_approval_required') {
+      setMessages((prev) => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          const last = { ...updated[updated.length - 1] }
+          last.agentApprovalRequired = {
+            step: data.step,
+            taskId: data.task_id,
+            reason: data.reason,
+          }
+          updated[updated.length - 1] = last
+        }
+        return updated
+      })
+    } else if (data.type === 'agent_task_complete') {
+      // Auto-open the final deliverable (entry file first) in the ArtifactPanel
+      if (data.artifacts && data.artifacts.length > 0) {
+        const arts = data.artifacts.map((a: any) => ({
+          filename: a.filename || a.title || 'artifact',
+          download_url: a.download_url || a.url,
+          size_bytes: a.size_bytes || 0,
+        }))
+        const entry = pickEntryFile(arts)
+        if (entry?.download_url) {
+          dispatchOpenFilePreview({
+            name: entry.filename,
+            type: mimeFromName(entry.filename),
+            url: entry.download_url,
+            sizeBytes: entry.size_bytes,
+          })
+        }
+      }
+      setMessages((prev) => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          const last = { ...updated[updated.length - 1] }
+          if (last.agentTaskData) {
+            const plan: PlanStepItem[] = (last.agentTaskData.plan || []).map((s) => ({
+              ...s,
+              status: s.status === 'failed' ? ('failed' as const) : ('completed' as const),
+            }))
+            last.agentTaskData = {
+              ...last.agentTaskData,
+              plan,
+              state: 'completed',
+              current_step: plan.length,
+              total_token_spend: data.total_token_spend || last.agentTaskData.total_token_spend,
+              artifacts: data.artifacts || last.agentTaskData.artifacts,
+              elapsed_seconds: data.duration_seconds || last.agentTaskData.elapsed_seconds,
+            }
+          }
+          last.agentApprovalRequired = undefined
+          updated[updated.length - 1] = last
+        }
+        return updated
+      })
+    } else if (data.type === 'agent_time_warning') {
+      showToast(data.message || 'Approaching task time limit...', 'info')
     }
   }
 
-  const handleApproveHITL = async (taskId: string, stepIndex: number, action: 'approve' | 'skip' | 'cancel') => {
+  // ── Approve/resume stream ──────────────────────────────────────────────────
+  // The /approve endpoint returns an SSE stream that resumes execution.
+  // Reading it here keeps steps, approvals, artifacts and the final synthesis
+  // flowing into the SAME message bubble (this was the old approve-stall bug).
+  const streamApproval = async (taskId: string, stepIndex: number | undefined, action: 'approve' | 'skip' | 'cancel') => {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token
       if (!token) return
-      await fetch(`${API_BASE}/v1/agent-tasks/${taskId}/approve`, {
+      const res = await fetch(`${API_BASE}/v1/agent-tasks/${taskId}/approve`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -5307,25 +5448,91 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({ action, step_index: stepIndex }),
       })
-      // Clear approval card from message
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.agentApprovalRequired?.taskId === taskId
-            ? { ...m, agentApprovalRequired: undefined }
-            : m
-        )
-      )
-      showToast(
-        action === 'approve'
-          ? 'Action approved! Continuing...'
-          : action === 'skip'
-          ? 'Step skipped.'
-          : 'Task cancelled.',
-        'info'
-      )
+
+      const contentType = res.headers.get('content-type') || ''
+      if (!res.ok || !contentType.includes('text/event-stream')) {
+        // Cancel (JSON) or an error — surface a plain toast, no stream.
+        let detail = ''
+        try {
+          const j = await res.json()
+          detail = j?.detail || ''
+        } catch { /* non-JSON */ }
+        if (action === 'cancel') showToast('Task cancelled.', 'info')
+        else if (detail) showToast(detail, 'error')
+        return
+      }
+
+      setIsStreaming(true)
+      const reader = res.body?.getReader()
+      if (!reader) return
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() || ''
+        for (const part of parts) {
+          const line = part.trim()
+          if (!line.startsWith('data:')) continue
+          const raw = line.slice(5).trim()
+          if (!raw || raw === '[DONE]') continue
+          try {
+            const data = JSON.parse(raw)
+            if (data.type === 'content_block_delta') {
+              const chunk = data?.delta?.text || ''
+              if (chunk) {
+                setMessages((prev) => {
+                  const updated = [...prev]
+                  const last = updated[updated.length - 1]
+                  if (last && last.role === 'assistant') {
+                    updated[updated.length - 1] = { ...last, content: (last.content || '') + chunk }
+                  }
+                  return updated
+                })
+              }
+            } else if (typeof data.type === 'string' && data.type.startsWith('agent_')) {
+              applyAgentTaskEvent(data)
+            } else if (data.type === 'error') {
+              showToast(`Agent error: ${data.error || 'unknown'}`, 'error')
+            }
+          } catch { /* partial JSON chunk — ignore */ }
+        }
+      }
     } catch (e) {
       console.error('Failed to process approval action:', e)
+      showToast('Failed to continue the task. Try again.', 'error')
+    } finally {
+      setIsStreaming(false)
     }
+  }
+
+  const handleApproveTask = async (taskId?: string) => {
+    if (!taskId) return
+    showToast('Plan approved! Agent executing...', 'info')
+    await streamApproval(taskId, undefined, 'approve')
+  }
+
+  const handleApproveHITL = async (taskId: string, stepIndex: number, action: 'approve' | 'skip' | 'cancel') => {
+    // Clear approval card from message
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.agentApprovalRequired?.taskId === taskId
+          ? { ...m, agentApprovalRequired: undefined }
+          : m
+      )
+    )
+    showToast(
+      action === 'approve'
+        ? 'Action approved! Continuing...'
+        : action === 'skip'
+        ? 'Step skipped.'
+        : 'Task cancelled.',
+      'info'
+    )
+    await streamApproval(taskId, stepIndex, action)
   }
 
   const triggerStream = async (history: Message[], newUserMessage: string | Message, overrideConvoId?: string, attachments?: any[]) => {
@@ -6202,163 +6409,10 @@ export const Dashboard: React.FC = () => {
                 })
               }
 
-            } else if (data.type === 'agent_plan') {
+            } else if (typeof data.type === 'string' && data.type.startsWith('agent_')) {
 
-              const planData: PlanStepItem[] = data.plan || []
-              setMessages((prev) => {
-                const updated = [...prev]
-                if (updated.length > 0) {
-                  const last = { ...updated[updated.length - 1] }
-                  last.agentTaskData = {
-                    id: data.task_id,
-                    task_id: data.task_id,
-                    state: data.state || 'executing',
-                    plan: planData,
-                    current_step: 1,
-                  }
-                  updated[updated.length - 1] = last
-                }
-                return updated
-              })
-
-            } else if (data.type === 'agent_step_start') {
-
-              setMessages((prev) => {
-                const updated = [...prev]
-                if (updated.length > 0) {
-                  const last = { ...updated[updated.length - 1] }
-                  if (last.agentTaskData) {
-                    const plan = [...(last.agentTaskData.plan || [])]
-                    const stepIdx = data.step_index
-                    const step = plan.find((s) => s.index === stepIdx)
-                    if (step) {
-                      step.status = 'running'
-                    }
-                    last.agentTaskData = {
-                      ...last.agentTaskData,
-                      current_step: stepIdx,
-                      plan,
-                    }
-                  }
-                  updated[updated.length - 1] = last
-                }
-                return updated
-              })
-
-            } else if (data.type === 'agent_step_complete') {
-
-              // Auto-open newly produced step artifact in the ArtifactPanel
-              if (data.artifacts && data.artifacts.length > 0) {
-                const arts = data.artifacts.map((a: any) => ({
-                  filename: a.filename || a.title || 'artifact',
-                  download_url: a.download_url || a.url,
-                  size_bytes: a.size_bytes || 0,
-                }))
-                const entry = pickEntryFile(arts)
-                if (entry?.download_url) {
-                  dispatchOpenFilePreview({
-                    name: entry.filename,
-                    type: mimeFromName(entry.filename),
-                    url: entry.download_url,
-                    sizeBytes: entry.size_bytes,
-                  })
-                }
-              }
-
-              setMessages((prev) => {
-                const updated = [...prev]
-                if (updated.length > 0) {
-                  const last = { ...updated[updated.length - 1] }
-                  if (last.agentTaskData) {
-                    const plan = [...(last.agentTaskData.plan || [])]
-                    const stepIdx = data.step_index
-                    const step = plan.find((s) => s.index === stepIdx)
-                    if (step) {
-                      step.status = data.status === 'failed' ? 'failed' : 'completed'
-                      step.result_summary = data.result_summary || null
-                      step.duration_ms = data.duration_ms
-                      step.token_spend = data.token_spend
-                      if (data.artifacts) {
-                        step.artifacts = data.artifacts
-                      }
-                    }
-                    const newArtifacts = data.artifacts || []
-                    const currentArtifacts = last.agentTaskData.artifacts || []
-                    last.agentTaskData = {
-                      ...last.agentTaskData,
-                      plan,
-                      artifacts: [...currentArtifacts, ...newArtifacts],
-                      total_token_spend: (last.agentTaskData.total_token_spend || 0) + (data.token_spend || 0),
-                    }
-                  }
-                  updated[updated.length - 1] = last
-                }
-                return updated
-              })
-
-            } else if (data.type === 'agent_approval_required') {
-
-              setMessages((prev) => {
-                const updated = [...prev]
-                if (updated.length > 0) {
-                  const last = { ...updated[updated.length - 1] }
-                  last.agentApprovalRequired = {
-                    step: data.step,
-                    taskId: data.task_id,
-                    reason: data.reason,
-                  }
-                  updated[updated.length - 1] = last
-                }
-                return updated
-              })
-
-            } else if (data.type === 'agent_task_complete') {
-
-              // Auto-open the final deliverable (entry file first) in the ArtifactPanel
-              if (data.artifacts && data.artifacts.length > 0) {
-                const arts = data.artifacts.map((a: any) => ({
-                  filename: a.filename || a.title || 'artifact',
-                  download_url: a.download_url || a.url,
-                  size_bytes: a.size_bytes || 0,
-                }))
-                const entry = pickEntryFile(arts)
-                if (entry?.download_url) {
-                  dispatchOpenFilePreview({
-                    name: entry.filename,
-                    type: mimeFromName(entry.filename),
-                    url: entry.download_url,
-                    sizeBytes: entry.size_bytes,
-                  })
-                }
-              }
-
-              setMessages((prev) => {
-                const updated = [...prev]
-                if (updated.length > 0) {
-                  const last = { ...updated[updated.length - 1] }
-                  if (last.agentTaskData) {
-                    const plan: PlanStepItem[] = (last.agentTaskData.plan || []).map((s) => ({
-                      ...s,
-                      status: s.status === 'failed' ? ('failed' as const) : ('completed' as const),
-                    }))
-                    last.agentTaskData = {
-                      ...last.agentTaskData,
-                      plan,
-                      state: 'completed',
-                      current_step: plan.length,
-                      total_token_spend: data.total_token_spend || last.agentTaskData.total_token_spend,
-                      artifacts: data.artifacts || last.agentTaskData.artifacts,
-                    }
-                  }
-                  last.agentApprovalRequired = undefined
-                  updated[updated.length - 1] = last
-                }
-                return updated
-              })
-
-            } else if (data.type === 'agent_time_warning') {
-
-              showToast(data.message || 'Approaching task time limit...', 'info')
+              // Shared agent-task event path — also used by the approve-resume stream
+              applyAgentTaskEvent(data)
 
             } else if (data.type === 'error') {
 
@@ -7086,7 +7140,7 @@ export const Dashboard: React.FC = () => {
 
             onClick={() => handleNewSession()}
 
-            className="w-full h-10 border border-[#1e2025] bg-black/30 hover:bg-black/50 text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
+            className="w-full h-10 border border-brand-border bg-brand-card hover:bg-[#2e2e2c] text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
 
           >
 
@@ -7884,7 +7938,7 @@ export const Dashboard: React.FC = () => {
                   if (msg.isArchived) return null;
 
                   return (
-                    <LazyMessage key={i} estimatedHeight={msg.content.length > 400 ? 200 : 80}>
+                    <LazyMessage key={i} estimatedHeight={msg.content.length > 400 ? 200 : 80} turnIndex={i}>
 
                       {/* ── Compaction Marker Banner ─────────────────────────────────── */}
                       {msg.isCompactionMarker ? (
@@ -8069,7 +8123,7 @@ export const Dashboard: React.FC = () => {
 
                                 onClick={() => handleEditSubmit(i)}
 
-                                className="px-3 py-1.5 bg-[#ffffff] text-[#08090a] hover:bg-[#f3f4f6] rounded-lg text-[11px] font-bold transition duration-150 shadow-md shadow-[#ffffff]/5"
+                                className="px-3 py-1.5 bg-[#ffffff] text-[#1a1a18] hover:bg-[#e9e8e6] rounded-lg text-[11px] font-bold transition duration-150 shadow-md shadow-[#ffffff]/5"
 
                               >
 
@@ -8451,6 +8505,26 @@ export const Dashboard: React.FC = () => {
                             ))
                           })()}
 
+                          {/* Compact files-changed chip (Verdent-style) */}
+                          {msg.agentTaskData?.artifacts && msg.agentTaskData.artifacts.length > 1 && (
+                            <AgentFileChangesCard
+                              artifacts={msg.agentTaskData.artifacts.map((a: any) => ({
+                                filename: a.filename || a.title || 'artifact',
+                                download_url: a.download_url || a.url,
+                                size_bytes: a.size_bytes,
+                              }))}
+                              onOpen={(f) =>
+                                f.download_url &&
+                                dispatchOpenFilePreview({
+                                  name: f.filename,
+                                  type: mimeFromName(f.filename),
+                                  url: f.download_url,
+                                  sizeBytes: f.size_bytes,
+                                })
+                              }
+                            />
+                          )}
+
                           {/* Generated file download cards — shown BEFORE image so files are always reachable */}
 
                           {msg.generatedFiles && msg.generatedFiles.length > 0 && (
@@ -8670,6 +8744,18 @@ export const Dashboard: React.FC = () => {
             </div>
 
           )}
+
+          {/* Right-edge turn tracker (Verdent-style) */}
+          <TurnTracker
+            turnIndices={messages
+              .map((m, i) => (m.role === 'assistant' && !m.isArchived ? i : -1))
+              .filter((i) => i >= 0)}
+            activeIndex={
+              isStreaming && messages.length > 0 && messages[messages.length - 1].role === 'assistant'
+                ? messages.length - 1
+                : null
+            }
+          />
 
         </div>
 
@@ -9074,7 +9160,7 @@ export const Dashboard: React.FC = () => {
                     Anyone with this link can view the conversation history and export it as JSON.
                   </p>
                   
-                  <div className="flex items-center gap-2 bg-[#08090a] border border-[#1e2025] rounded-lg p-2">
+                  <div className="flex items-center gap-2 bg-brand-card border border-brand-border rounded-lg p-2">
                     <input
                       type="text"
                       readOnly
@@ -9230,7 +9316,7 @@ export const Dashboard: React.FC = () => {
         if (!pIsImg && !pIsPdf && !pIsBin) {
           return (
             <>
-              <div className="fixed inset-0 bg-black/40 z-[99] max-md:bg-[#07080a]/95" onClick={() => setPreviewingFile(null)} />
+              <div className="fixed inset-0 bg-black/40 z-[99] max-md:bg-[#1a1a18]/95" onClick={() => setPreviewingFile(null)} />
               <ArtifactPanel
                 file={previewingFile}
                 content={loadedPreviewContent}

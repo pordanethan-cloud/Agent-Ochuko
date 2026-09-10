@@ -155,8 +155,8 @@ class AgentTaskManager:
         yield f"data: {json.dumps({'type': 'agent_plan', 'task_id': self.task.id, 'plan': [s.model_dump() for s in self.task.plan], 'state': 'executing'})}\n\n"
 
         for step in self.task.plan:
-            # Skip already completed steps if resuming
-            if step.status == StepStatus.COMPLETED:
+            # Skip already completed/skipped steps if resuming
+            if step.status in (StepStatus.COMPLETED, StepStatus.SKIPPED):
                 continue
 
             self.task.current_step = step.index

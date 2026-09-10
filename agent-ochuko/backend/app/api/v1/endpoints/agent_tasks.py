@@ -10,6 +10,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.jwt_validator import verify_jwt
@@ -17,7 +18,12 @@ from app.core.agent_task_models import AgentTask, TaskState, PlanStep, StepStatu
 from app.core.agent_task_manager import AgentTaskManager
 from app.core.agent_config import get_agent_mode_config
 from app.core.agent_planner import refine_plan
-from app.api.v1.endpoints.chat import get_openai_client, get_supabase_admin
+from app.api.v1.endpoints.chat import (
+    get_openai_client,
+    get_supabase_admin,
+    _perform_google_search,
+    _perform_parallel_searches,
+)
 
 logger = logging.getLogger("app.api.v1.endpoints.agent_tasks")
 
@@ -116,6 +122,11 @@ async def approve_agent_task(
     - 'approve': Approves plan to start executing, or approves a paused HITL step
     - 'skip': Skips a paused high-risk step
     - 'cancel': Cancels task execution
+
+    approve/skip return an SSE stream: execution is RESUMED in-process by
+    re-running execute_plan_stream (completed/skipped steps are skipped, the
+    approved step runs, later risky steps still pause). This closes the old
+    stall where approve only patched the DB and nothing continued.
     """
     user_id = user["sub"]
     supabase = get_supabase_admin()
@@ -140,7 +151,30 @@ async def approve_agent_task(
     if action == "cancel":
         task.state = TaskState.CANCELLED
         task.completed_at = datetime.utcnow()
-    elif action == "skip" and task.state == TaskState.PAUSED_FOR_HITL:
+        await asyncio.to_thread(
+            lambda: supabase.table("agent_tasks")
+            .update({
+                "state": task.state.value,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+            .eq("id", task_id)
+            .execute()
+        )
+        return {
+            "task_id": task.id,
+            "state": task.state.value,
+            "action": action,
+            "plan": [s.model_dump() for s in task.plan],
+        }
+
+    if task.state not in (TaskState.AWAITING_APPROVAL, TaskState.PAUSED_FOR_HITL):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not awaiting approval (state={task.state.value}).",
+        )
+
+    if action == "skip" and task.state == TaskState.PAUSED_FOR_HITL:
         # Mark current step skipped
         step_idx = payload.step_index or task.current_step
         for s in task.plan:
@@ -151,7 +185,13 @@ async def approve_agent_task(
     elif action == "approve":
         if task.state == TaskState.AWAITING_APPROVAL:
             task.state = TaskState.EXECUTING
-            task.started_at = datetime.utcnow()
+            task.started_at = task.started_at or datetime.utcnow()
+            # Resume-critical: mark the first pending step RUNNING so the HITL
+            # gate does not instantly re-pause on the plan the user just approved.
+            for s in task.plan:
+                if s.status == StepStatus.PENDING:
+                    s.status = StepStatus.RUNNING
+                    break
         elif task.state == TaskState.PAUSED_FOR_HITL:
             # Mark step approved and running
             step_idx = payload.step_index or task.current_step
@@ -159,6 +199,8 @@ async def approve_agent_task(
                 if s.index == step_idx:
                     s.status = StepStatus.RUNNING
             task.state = TaskState.EXECUTING
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action '{action}'.")
 
     # Save update
     await asyncio.to_thread(
@@ -174,12 +216,22 @@ async def approve_agent_task(
         .execute()
     )
 
-    return {
-        "task_id": task.id,
-        "state": task.state.value,
-        "action": action,
-        "plan": [s.model_dump() for s in task.plan],
-    }
+    # Resume execution and stream the remainder of the plan back to the client.
+    config = await get_agent_mode_config()
+    manager = AgentTaskManager(
+        task=task,
+        openai_client=get_openai_client(),
+        config=config,
+        supabase_client=supabase,
+    )
+    return StreamingResponse(
+        manager.execute_plan_stream(
+            search_fn=_perform_google_search,
+            deep_research_fn=_perform_parallel_searches,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{task_id}/edit-plan")
