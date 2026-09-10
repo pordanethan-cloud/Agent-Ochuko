@@ -549,9 +549,10 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
-   5. TURN TRACKER — thin rail on the RIGHT edge of the thread.
-   One tick per assistant turn; active tick pulses while streaming;
-   click jumps to that turn via [data-turn-anchor] elements.
+   5. TURN TRACKER — thin scrubber rail on the RIGHT edge of the thread.
+   Short line-ticks, one per assistant turn; the active tick is taller and
+   brighter while streaming. Tap a tick to jump, or DRAG along the rail to
+   scrub through turns (pointer-capture slider, works with touch).
    ─────────────────────────────────────────────────────────────────────────── */
 interface TurnTrackerProps {
   /** Message indices of assistant turns, in order */
@@ -561,36 +562,52 @@ interface TurnTrackerProps {
 }
 
 export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, activeIndex }) => {
+  const railRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+
   if (turnIndices.length < 2) return null
 
   const jumpTo = (idx: number) => {
     const el = document.querySelector(`[data-turn-anchor="${idx}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    el?.scrollIntoView({ behavior: dragging ? 'auto' : 'smooth', block: 'start' })
+  }
+
+  const seekFromPointer = (clientY: number) => {
+    const rail = railRef.current
+    if (!rail) return
+    const rect = rail.getBoundingClientRect()
+    const frac = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
+    const i = Math.round(frac * (turnIndices.length - 1))
+    jumpTo(turnIndices[i])
   }
 
   return (
     <div
-      className="hidden md:flex flex-col items-center gap-[7px] absolute right-1 top-1/2 -translate-y-1/2 z-10 py-2 px-1"
-      aria-label="Conversation turn tracker"
+      ref={railRef}
+      onPointerDown={(e) => {
+        setDragging(true)
+        try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* noop */ }
+        seekFromPointer(e.clientY)
+      }}
+      onPointerMove={(e) => { if (dragging) seekFromPointer(e.clientY) }}
+      onPointerUp={() => setDragging(false)}
+      onPointerCancel={() => setDragging(false)}
+      className="absolute right-0.5 md:right-1 top-1/2 -translate-y-1/2 z-40 flex flex-col items-center justify-between gap-1 py-2 w-5 touch-none cursor-ns-resize select-none"
+      aria-label="Conversation turn scrubber"
+      role="slider"
+      aria-valuemin={1}
+      aria-valuemax={turnIndices.length}
+      aria-valuenow={(activeIndex !== null ? turnIndices.indexOf(activeIndex) : -1) + 1}
     >
       {turnIndices.map((idx) => {
         const isActive = idx === activeIndex
         return (
-          <button
+          <span
             key={idx}
-            type="button"
-            onClick={() => jumpTo(idx)}
-            title={`Turn ${(turnIndices.indexOf(idx) || 0) + 1}`}
-            className="group/trk flex items-center justify-center w-3 h-3 cursor-pointer"
-          >
-            <span
-              className={`rounded-full transition-all duration-200 ${
-                isActive
-                  ? 'w-[5px] h-[16px] bg-white/80'
-                  : 'w-[4px] h-[4px] bg-white/25 group-hover/trk:bg-white/60'
-              } ${isActive ? 'animate-pulse' : ''}`}
-            />
-          </button>
+            className={`rounded-full transition-all duration-200 ${
+              isActive ? 'w-[4px] h-5 bg-white/85' : 'w-[3px] h-3 bg-white/25'
+            }`}
+          />
         )
       })}
     </div>
