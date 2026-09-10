@@ -42,8 +42,8 @@ class AgentTaskManager:
         self,
         task: AgentTask,
         openai_client: Optional[AsyncAzureOpenAI] = None,
-        deployment: str = "gpt-5.4",
-        nano_deployment: str = "gpt-5.4-nano",
+        deployment: str = "gpt-5.6-terra",
+        nano_deployment: str = "gpt-5.6-luna",
         config: Optional[Dict[str, Any]] = None,
         supabase_client=None,
     ):
@@ -54,6 +54,8 @@ class AgentTaskManager:
         self.config = config or {}
         self.supabase = supabase_client
         self.sub_agents = SubAgentPool(openai_client=openai_client, nano_deployment=nano_deployment)
+        self._effort_cache: Optional[str] = None
+        self._effort_resolved = False
         
         max_duration = int(self.config.get("max_duration_seconds", 300))
         step_timeout = int(self.config.get("step_timeout_seconds", 90))
@@ -66,6 +68,24 @@ class AgentTaskManager:
         )
         self.reflexion = create_reflexion_engine(max_attempts=2)
         self.start_time: Optional[float] = None
+
+    async def _get_effort(self) -> Optional[str]:
+        """
+        Rule-classified reasoning effort for this task's goal (cached).
+        Ultra/agent requests floor at medium complexity; the effort value
+        comes from TERRA_EFFORT_MAP via App Config (runtime-tunable).
+        """
+        if not self._effort_resolved:
+            self._effort_resolved = True
+            try:
+                from app.core.complexity_router import classify
+                from app.core.agent_config import get_reasoning_effort
+                tier = classify(self.task.goal, floor="medium").tier
+                self._effort_cache = await get_reasoning_effort("agent", tier, self.deployment)
+            except Exception as effort_err:
+                logger.debug(f"Effort resolution failed, defaulting to high: {effort_err}")
+                self._effort_cache = "high"
+        return self._effort_cache
 
     async def init_plan(self, history: Optional[List[Dict]] = None) -> List[PlanStep]:
         """Generates initial structured plan and sets state to AWAITING_APPROVAL."""
@@ -238,12 +258,16 @@ class AgentTaskManager:
                 accumulated_synthesis = ""
                 from app.core.agent_config import get_max_output_tokens
                 ultra_budget = await get_max_output_tokens("ultra")
+                ultra_effort = await self._get_effort()
                 if hasattr(self.client, "responses") and hasattr(self.client.responses, "stream"):
-                    async with self.client.responses.stream(
-                        model=self.deployment,
-                        input=input_payload,
-                        max_output_tokens=ultra_budget,
-                    ) as stream:
+                    synth_stream_kwargs: Dict[str, Any] = {
+                        "model": self.deployment,
+                        "input": input_payload,
+                        "max_output_tokens": ultra_budget,
+                    }
+                    if ultra_effort:
+                        synth_stream_kwargs["reasoning"] = {"effort": ultra_effort}
+                    async with self.client.responses.stream(**synth_stream_kwargs) as stream:
                         async for event in stream:
                             event_type = getattr(event, "type", "")
                             if event_type == "response.output_text.delta":
@@ -252,12 +276,15 @@ class AgentTaskManager:
                                     accumulated_synthesis += chunk
                                     yield f"data: {json.dumps({'type': 'content_block_delta', 'delta': {'text': chunk}})}\n\n"
                 elif hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
-                    stream_resp = await self.client.chat.completions.create(
-                        model=self.deployment,
-                        messages=input_payload,
-                        max_tokens=ultra_budget,
-                        stream=True,
-                    )
+                    synth_cc_kwargs: Dict[str, Any] = {
+                        "model": self.deployment,
+                        "messages": input_payload,
+                        "max_tokens": ultra_budget,
+                        "stream": True,
+                    }
+                    if ultra_effort:
+                        synth_cc_kwargs["reasoning_effort"] = ultra_effort
+                    stream_resp = await self.client.chat.completions.create(**synth_cc_kwargs)
                     async for chunk in stream_resp:
                         if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                             delta_text = chunk.choices[0].delta.content
@@ -607,17 +634,24 @@ class AgentTaskManager:
         ]
 
         try:
+            code_effort = await self._get_effort()
             if hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
-                resp = await self.client.chat.completions.create(
-                    model=self.deployment,
-                    messages=prompt,
-                )
+                code_cc_kwargs: Dict[str, Any] = {
+                    "model": self.deployment,
+                    "messages": prompt,
+                }
+                if code_effort:
+                    code_cc_kwargs["reasoning_effort"] = code_effort
+                resp = await self.client.chat.completions.create(**code_cc_kwargs)
                 code_text = resp.choices[0].message.content or ""
             else:
-                resp = await self.client.responses.create(
-                    model=self.deployment,
-                    input=prompt,
-                )
+                code_rs_kwargs: Dict[str, Any] = {
+                    "model": self.deployment,
+                    "input": prompt,
+                }
+                if code_effort:
+                    code_rs_kwargs["reasoning"] = {"effort": code_effort}
+                resp = await self.client.responses.create(**code_rs_kwargs)
                 code_text = getattr(resp, "output_text", "") or ""
 
             # Extract python code block

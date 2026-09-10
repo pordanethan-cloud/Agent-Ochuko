@@ -568,7 +568,7 @@ async def _perform_google_search(
         synthesis_deployment
         or os.getenv("SOLVE_MODEL_DEPLOYMENT")
         or os.getenv("AZURE_OPENAI_SOLVE_DEPLOYMENT")
-        or "gpt-4o-mini"
+        or "gpt-5.6-luna"
     )
 
     system_prompt = (
@@ -971,7 +971,7 @@ async def compact_conversation_history(conversation_id: str) -> Optional[str]:
         deploy = (
             os.getenv("SOLVE_MODEL_DEPLOYMENT")
             or os.getenv("AZURE_OPENAI_SOLVE_DEPLOYMENT")
-            or "gpt-4o-mini"
+            or "gpt-5.6-luna"
         )
         
         system_prompt = (
@@ -1024,6 +1024,23 @@ async def compact_conversation_history(conversation_id: str) -> Optional[str]:
         return None
 
 
+def _is_effort_param_error(err_text: str) -> bool:
+    """
+    Detects API rejection of the reasoning effort parameter (400-class).
+    Used for one-shot degradation: retry the request without the reasoning
+    parameter instead of failing the whole turn.
+    """
+    t = (err_text or "").lower()
+    return (
+        "reasoning" in t
+        or "effort" in t
+        or "unknown parameter" in t
+        or "unsupported parameter" in t
+        or ("unrecognized" in t and "parameter" in t)
+        or "invalid parameter" in t
+    )
+
+
 async def chat_stream_generator(
     messages: List[Dict[str, Any]],
     deployment: str,
@@ -1038,6 +1055,8 @@ async def chat_stream_generator(
     user_timezone: Optional[str] = None,
     viewport: Optional[str] = None,  # "mobile" | "desktop" | None
     compaction_summary: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,  # GPT-5.6 reasoning effort tier
+    complexity: Optional[str] = None,        # Rule-classified complexity tier
 ):
     """
     Streams a response from the Azure OpenAI Responses API (ADR-002).
@@ -1064,6 +1083,8 @@ async def chat_stream_generator(
             "type": "routing_info",
             "deployment": deployment,
             "routing_mode": routing_mode,
+            "complexity": complexity,
+            "reasoning_effort": reasoning_effort,
         })
         + "\n\n"
     )
@@ -1275,7 +1296,12 @@ async def chat_stream_generator(
             stream_kwargs: Dict[str, Any] = {
                 "model": deployment,
                 "max_output_tokens": output_budget,
-                "tools": [
+            }
+            if reasoning_effort:
+                # GPT-5.6 family: reasoning effort derived from the
+                # rule-classified complexity tier (Responses API shape).
+                stream_kwargs["reasoning"] = {"effort": reasoning_effort}
+            stream_kwargs["tools"] = [
                     # Two-tool inline widget renderer (read_me + show_widget)
                     *WIDGET_TOOLS,
                     {
@@ -1536,9 +1562,8 @@ async def chat_stream_generator(
                             "required": ["prompt"],
                         },
                     },
-                ],
-                "tool_choice": "none" if is_final_step else "auto",
-            }
+            ]
+            stream_kwargs["tool_choice"] = "none" if is_final_step else "auto"
 
             # We use stateful multi-turn only on iteration 0 when previous_response_id is set
             if iteration == 0 and previous_response_id:
@@ -1672,6 +1697,23 @@ async def chat_stream_generator(
                                 )
                             thinking_buffer = ""
                     except Exception as iter_err:
+                        # One-shot degradation: if the deployment rejects the
+                        # reasoning effort parameter before producing anything,
+                        # drop it and retry the same iteration without it.
+                        _err_text = str(iter_err).lower()
+                        if (
+                            reasoning_effort
+                            and not assistant_content
+                            and not accumulated_thinking
+                            and not current_tool_calls
+                            and _is_effort_param_error(_err_text)
+                        ):
+                            logger.warning(
+                                "Reasoning effort '%s' rejected by %s — retrying without the reasoning parameter: %s",
+                                reasoning_effort, deployment, iter_err,
+                            )
+                            reasoning_effort = None
+                            continue
                         current_stream_failed = True
                         current_error_message = str(iter_err)
                         logger.error(f"Error during stream iteration: {iter_err}")
@@ -1721,6 +1763,23 @@ async def chat_stream_generator(
                                 current_error_message = str(final_err)
 
             except Exception as stream_init_err:
+                # One-shot degradation: a 400 rejecting the reasoning effort
+                # parameter surfaces at stream init before any content — retry
+                # the same iteration without the parameter.
+                _err_text = str(stream_init_err).lower()
+                if (
+                    reasoning_effort
+                    and not assistant_content
+                    and not accumulated_thinking
+                    and not current_tool_calls
+                    and _is_effort_param_error(_err_text)
+                ):
+                    logger.warning(
+                        "Reasoning effort '%s' rejected by %s at stream init — retrying without the reasoning parameter: %s",
+                        reasoning_effort, deployment, stream_init_err,
+                    )
+                    reasoning_effort = None
+                    continue
                 current_stream_failed = True
                 current_error_message = str(stream_init_err)
                 logger.error(f"Error initializing stream: {stream_init_err}")
@@ -2309,11 +2368,14 @@ async def chat_stream_generator(
                     {"role": "assistant", "content": f"<thinking>\n{accumulated_thinking}\n</thinking>"},
                     {"role": "user", "content": "Based on your thorough reasoning above, deliver your complete, detailed final response directly to the user."}
                 ]
-                async with client.responses.stream(
-                    model=deployment,
-                    input=[normalize_responses_message(m) for m in synth_input],
-                    max_output_tokens=output_budget,
-                ) as synth_stream:
+                synth_kwargs: Dict[str, Any] = {
+                    "model": deployment,
+                    "input": [normalize_responses_message(m) for m in synth_input],
+                    "max_output_tokens": output_budget,
+                }
+                if reasoning_effort:
+                    synth_kwargs["reasoning"] = {"effort": reasoning_effort}
+                async with client.responses.stream(**synth_kwargs) as synth_stream:
                     async for s_event in synth_stream:
                         if s_event.type == "response.output_text.delta":
                             s_chunk = s_event.delta
@@ -2927,6 +2989,8 @@ async def stream_chat(
             user_timezone=payload.get("timezone"),
             viewport=payload.get("viewport"),  # "mobile" | "desktop" | None
             compaction_summary=compaction_summary,
+            reasoning_effort=decision.reasoning_effort,
+            complexity=decision.complexity,
         ),
         media_type="text/event-stream"
     )

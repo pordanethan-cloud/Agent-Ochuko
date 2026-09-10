@@ -509,11 +509,11 @@ async def get_azure_billing_info() -> Dict[str, Any]:
                 t_out = msg.get("tokens_output") or 0
 
                 # Current Azure OpenAI rates (per token)
-                if model == "gpt-5.4": # Think (GPT-4o)
+                if model in ("gpt-5.4", "gpt-5.6-terra"): # Think tier (premium)
                     total_est += (t_in * 0.0000025) + (t_out * 0.0000100)
-                elif model in ("gpt-5.4-mini", "gpt-5.4-pro"): # Solve (GPT-4o-mini)
+                elif model in ("gpt-5.4-mini", "gpt-5.4-pro", "gpt-5.6-luna"): # Solve/Luna tier
                     total_est += (t_in * 0.00000015) + (t_out * 0.00000060)
-                elif model == "gpt-5.4-nano": # Discuss (Nano)
+                elif model == "gpt-5.4-nano": # Legacy Discuss (Nano)
                     total_est += (t_in * 0.00000050) + (t_out * 0.00000150)
                 else:
                     total_est += (t_in * 0.00000015) + (t_out * 0.00000060)

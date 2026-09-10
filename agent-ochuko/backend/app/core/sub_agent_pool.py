@@ -20,7 +20,7 @@ class SubAgentPool:
     def __init__(
         self,
         openai_client: Optional[AsyncAzureOpenAI] = None,
-        nano_deployment: str = "gpt-5.4-nano",
+        nano_deployment: str = "gpt-5.6-luna",
     ):
         self.client = openai_client
         self.nano_deployment = nano_deployment
@@ -66,26 +66,52 @@ class SubAgentPool:
                 },
             ]
 
-            if hasattr(self.client, "responses") and hasattr(self.client.responses, "create"):
-                response = await asyncio.wait_for(
-                    self.client.responses.create(
-                        model=self.nano_deployment,
-                        input=prompt_input,
-                    ),
-                    timeout=4.0,
+            use_responses = hasattr(self.client, "responses") and hasattr(self.client.responses, "create")
+            base_kwargs: Dict[str, Any] = (
+                {"model": self.nano_deployment, "input": prompt_input}
+                if use_responses
+                else {"model": self.nano_deployment, "messages": prompt_input}
+            )
+            # Compression is a cheap utility path — run luna at effort "none".
+            # One-shot retry without the parameter if the deployment rejects it.
+            try:
+                effort_kwargs = (
+                    {"reasoning": {"effort": "none"}} if use_responses else {"reasoning_effort": "none"}
                 )
+                if use_responses:
+                    response = await asyncio.wait_for(
+                        self.client.responses.create(**base_kwargs, **effort_kwargs),
+                        timeout=4.0,
+                    )
+                else:
+                    response = await asyncio.wait_for(
+                        self.client.chat.completions.create(**base_kwargs, **effort_kwargs),
+                        timeout=4.0,
+                    )
+            except Exception as effort_err:
+                t = str(effort_err).lower()
+                is_param_err = (
+                    "reasoning" in t or "effort" in t
+                    or "unknown parameter" in t or "unsupported parameter" in t
+                    or "invalid parameter" in t
+                )
+                if not is_param_err:
+                    raise
+                if use_responses:
+                    response = await asyncio.wait_for(
+                        self.client.responses.create(**base_kwargs),
+                        timeout=4.0,
+                    )
+                else:
+                    response = await asyncio.wait_for(
+                        self.client.chat.completions.create(**base_kwargs),
+                        timeout=4.0,
+                    )
+
+            if use_responses:
                 summary = (getattr(response, "output_text", "") or "").strip()
-            elif hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
-                response = await asyncio.wait_for(
-                    self.client.chat.completions.create(
-                        model=self.nano_deployment,
-                        messages=prompt_input,
-                    ),
-                    timeout=4.0,
-                )
-                summary = (response.choices[0].message.content or "").strip()
             else:
-                summary = ""
+                summary = (response.choices[0].message.content or "").strip()
 
             if summary:
                 return summary

@@ -110,11 +110,46 @@ def _is_complex(message: str) -> bool:
     return bool(_COMPLEX_VERBS.search(stripped))
 
 
+def _effort_api_kwargs(effort: Optional[str], responses_api: bool) -> Dict[str, Any]:
+    """Builds the reasoning-effort kwargs for the target API shape."""
+    if not effort:
+        return {}
+    return {"reasoning": {"effort": effort}} if responses_api else {"reasoning_effort": effort}
+
+
+def _is_param_error(err: Exception) -> bool:
+    """Detects API rejection of the reasoning-effort parameter (400-class)."""
+    t = str(err).lower()
+    return (
+        "reasoning" in t
+        or "effort" in t
+        or "unknown parameter" in t
+        or "unsupported parameter" in t
+        or "invalid parameter" in t
+        or ("unrecognized" in t and "parameter" in t)
+    )
+
+
+async def _resolve_planner_effort(
+    text: str,
+    nano_deployment: str,
+    floor: Optional[str] = None,
+) -> Optional[str]:
+    """Rule-classified reasoning effort for planner calls (non-fatal)."""
+    try:
+        from app.core.complexity_router import classify
+        from app.core.agent_config import get_reasoning_effort
+        tier = classify(text, floor=floor).tier
+        return await get_reasoning_effort("solve", tier, nano_deployment)
+    except Exception:
+        return None
+
+
 async def generate_plan(
     user_message: str,
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     openai_client: Optional[AsyncAzureOpenAI] = None,
-    nano_deployment: str = "gpt-5.4-nano",
+    nano_deployment: str = "gpt-5.6-luna",
 ) -> Optional[str]:
     """Generates a numbered text execution plan for chat system prompt injection."""
     is_research = bool(_RESEARCH_INTENSIVE_RE.search(user_message))
@@ -142,27 +177,35 @@ async def generate_plan(
         else:
             planner_input.append({"role": "user", "content": user_message})
 
+        use_responses = hasattr(openai_client, "responses") and hasattr(openai_client.responses, "create")
+        planner_system_input = [{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input
+        effort = await _resolve_planner_effort(user_message, nano_deployment)
+
+        async def _planner_call(with_effort: bool):
+            kwargs: Dict[str, Any] = (
+                {"model": nano_deployment, "input": planner_system_input}
+                if use_responses
+                else {"model": nano_deployment, "messages": planner_system_input}
+            )
+            if with_effort:
+                kwargs.update(_effort_api_kwargs(effort, use_responses))
+            if use_responses:
+                return await asyncio.wait_for(openai_client.responses.create(**kwargs), timeout=4.0)
+            return await asyncio.wait_for(openai_client.chat.completions.create(**kwargs), timeout=4.0)
+
         try:
-            if hasattr(openai_client, "responses") and hasattr(openai_client.responses, "create"):
-                response = await asyncio.wait_for(
-                    openai_client.responses.create(
-                        model=nano_deployment,
-                        input=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
-                    ),
-                    timeout=2.5
-                )
+            try:
+                response = await _planner_call(True)
+            except Exception as call_err:
+                if effort and _is_param_error(call_err):
+                    logger.debug(f"Planner effort '{effort}' rejected — retrying without it: {call_err}")
+                    response = await _planner_call(False)
+                else:
+                    raise
+            if use_responses:
                 plan_text = (getattr(response, "output_text", "") or "").strip()
-            elif hasattr(openai_client, "chat") and hasattr(openai_client.chat, "completions"):
-                response = await asyncio.wait_for(
-                    openai_client.chat.completions.create(
-                        model=nano_deployment,
-                        messages=[{"role": "system", "content": _PLANNER_SYSTEM}] + planner_input,
-                    ),
-                    timeout=2.5
-                )
-                plan_text = (response.choices[0].message.content or "").strip()
             else:
-                plan_text = ""
+                plan_text = (response.choices[0].message.content or "").strip()
         except Exception as api_err:
             logger.debug(f"Planner API call skipped (non-fatal): {api_err}")
             return None
@@ -262,7 +305,7 @@ async def generate_structured_plan(
     goal: str,
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     openai_client: Optional[AsyncAzureOpenAI] = None,
-    nano_deployment: str = "gpt-5.4-nano",
+    nano_deployment: str = "gpt-5.6-luna",
     auto_approve_level: str = "low",
 ) -> List[PlanStep]:
     """
@@ -319,24 +362,37 @@ async def generate_structured_plan(
         ]
 
         raw_json = ""
-        if hasattr(openai_client, "responses") and hasattr(openai_client.responses, "create"):
-            response = await asyncio.wait_for(
-                openai_client.responses.create(
-                    model=nano_deployment,
-                    input=prompt_input,
-                ),
-                timeout=3.5,
+        use_responses = hasattr(openai_client, "responses") and hasattr(openai_client.responses, "create")
+        effort = await _resolve_planner_effort(goal, nano_deployment, floor="medium")
+
+        async def _structured_call(with_effort: bool):
+            kwargs: Dict[str, Any] = (
+                {"model": nano_deployment, "input": prompt_input}
+                if use_responses
+                else {"model": nano_deployment, "messages": prompt_input}
             )
-            raw_json = (getattr(response, "output_text", "") or "").strip()
-        elif hasattr(openai_client, "chat") and hasattr(openai_client.chat, "completions"):
-            response = await asyncio.wait_for(
-                openai_client.chat.completions.create(
-                    model=nano_deployment,
-                    messages=prompt_input,
-                ),
-                timeout=3.5,
-            )
-            raw_json = (response.choices[0].message.content or "").strip()
+            if with_effort:
+                kwargs.update(_effort_api_kwargs(effort, use_responses))
+            if use_responses:
+                return await asyncio.wait_for(openai_client.responses.create(**kwargs), timeout=8.0)
+            return await asyncio.wait_for(openai_client.chat.completions.create(**kwargs), timeout=8.0)
+
+        try:
+            try:
+                response = await _structured_call(True)
+            except Exception as call_err:
+                if effort and _is_param_error(call_err):
+                    logger.debug(f"Structured planner effort '{effort}' rejected — retrying without it: {call_err}")
+                    response = await _structured_call(False)
+                else:
+                    raise
+            if use_responses:
+                raw_json = (getattr(response, "output_text", "") or "").strip()
+            else:
+                raw_json = (response.choices[0].message.content or "").strip()
+        except Exception as api_err:
+            logger.warning(f"Structured planner API call failed (falling back): {api_err}")
+            return _programmatic_fallback_plan(goal, auto_approve_level=auto_approve_level)
 
         # Clean JSON markdown formatting if present
         if raw_json.startswith("```"):

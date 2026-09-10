@@ -56,7 +56,7 @@ def _get_groq_client() -> Groq:
 # ---------------------------------------------------------------------------
 
 def _get_nano_deployment() -> str:
-    deployment = os.getenv("NANO_MODEL_DEPLOYMENT", "gpt-5.4-nano")
+    deployment = os.getenv("NANO_MODEL_DEPLOYMENT", "gpt-5.6-luna")
     if not deployment:
         raise RuntimeError("NANO_MODEL_DEPLOYMENT is not configured.")
     return deployment

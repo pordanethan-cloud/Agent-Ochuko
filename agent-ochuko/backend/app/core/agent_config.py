@@ -23,19 +23,35 @@ Agent Mode Settings:
 """
 
 from typing import Optional, Dict, Any
+import json
+
 from app.core.config import get_config
 
 
-_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "o1-mini", "o3-mini")
+_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5.6")
+
+# Mode → App Config key holding the JSON complexity→effort map.
+# Terra (think/agent) and Luna (solve) share the same low→xhigh complexity
+# scale; maps are runtime-tunable via App Config without redeploying.
+_EFFORT_MAP_KEYS = {
+    "think": "TERRA_EFFORT_MAP",
+    "agent": "TERRA_EFFORT_MAP",
+    "ultra": "TERRA_EFFORT_MAP",
+    "solve": "LUNA_EFFORT_MAP",
+}
+
+_DEFAULT_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"}
+_VALID_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 
 
 async def is_reasoning_model(deployment: Optional[str] = None) -> bool:
     """
     Returns True if *deployment* (or the current think deployment) is an
-    o-series reasoning model that accepts reasoning_effort / max_completion_tokens.
+    o-series or GPT-5.6-family reasoning model that accepts
+    reasoning_effort / max_completion_tokens parameters.
     """
     if deployment is None:
-        deployment = await get_config("THINK_MODEL_DEPLOYMENT", "gpt-5.4")
+        deployment = await get_config("THINK_MODEL_DEPLOYMENT", "gpt-5.6-terra")
     name = (deployment or "").lower()
     return any(name.startswith(p) for p in _REASONING_MODEL_PREFIXES)
 
@@ -114,23 +130,53 @@ async def get_agent_mode_config() -> Dict[str, Any]:
     }
 
 
-async def get_reasoning_effort(mode: str = "think", deployment: Optional[str] = None) -> Optional[str]:
+async def get_reasoning_effort(
+    mode: str = "think",
+    complexity: Optional[str] = None,
+    deployment: Optional[str] = None,
+) -> Optional[str]:
     """
-    Returns the reasoning effort level ('low', 'medium', 'high') or None if not applicable.
-    Only applicable for o-series reasoning models — always returns None for GPT models.
+    Returns the reasoning effort for the given mode + complexity tier.
+
+    - nano/discuss routes to gpt-5.6-luna with effort "none" (cheapest).
+    - think/agent/ultra resolve via TERRA_EFFORT_MAP; solve via LUNA_EFFORT_MAP.
+      Maps are JSON objects: {"low": "...", "medium": "...", "high": "...", "xhigh": "..."}
+      keyed by complexity tier, runtime-tunable via App Config.
+    - complexity=None on a non-5.6 deployment preserves legacy o-series
+      behavior (REASONING_EFFORT_THINK / REASONING_EFFORT_SOLVE).
+    - Returns None when the deployment does not accept reasoning effort.
     """
     if not await is_reasoning_model(deployment):
         return None
-    if mode.lower() == "think":
-        val = await get_config("REASONING_EFFORT_THINK", "high")
-    elif mode.lower() == "solve":
-        val = await get_config("REASONING_EFFORT_SOLVE", "medium")
-    else:
-        return None
 
-    if val and val.lower() in ("low", "medium", "high"):
-        return val.lower()
-    return None
+    mode_lower = (mode or "think").lower()
+
+    # Nano tier on the 5.6 family always runs at effort "none".
+    if mode_lower in ("nano", "discuss"):
+        return "none"
+
+    # Legacy path for o-series deployments without complexity routing.
+    if complexity is None and not (deployment or "").lower().startswith("gpt-5.6"):
+        if mode_lower == "think":
+            val = await get_config("REASONING_EFFORT_THINK", "high")
+        elif mode_lower == "solve":
+            val = await get_config("REASONING_EFFORT_SOLVE", "medium")
+        else:
+            return None
+        return val.lower() if val and val.lower() in ("low", "medium", "high") else None
+
+    map_key = _EFFORT_MAP_KEYS.get(mode_lower, "TERRA_EFFORT_MAP")
+    raw = await get_config(map_key, json.dumps(_DEFAULT_EFFORT_MAP))
+    try:
+        effort_map = json.loads(raw)
+        if not isinstance(effort_map, dict):
+            effort_map = {}
+    except (ValueError, TypeError):
+        effort_map = {}
+
+    tier = (complexity or "medium").lower()
+    effort = effort_map.get(tier) or _DEFAULT_EFFORT_MAP.get(tier, "medium")
+    return effort if effort in _VALID_EFFORTS else "medium"
 
 
 async def get_max_completion_tokens(mode: str = "think", deployment: Optional[str] = None) -> Optional[int]:

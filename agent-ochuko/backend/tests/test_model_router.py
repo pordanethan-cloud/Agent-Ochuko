@@ -180,3 +180,91 @@ def test_relative_dates_resolved_in_query():
     assert today in _time_aware_query("who won the game this morning")
     # Non-relative queries pass through untouched.
     assert _resolve_relative_dates("capital of France") == "capital of France"
+
+
+# ── GPT-5.6 family + complexity routing tests ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_default_deployments_are_gpt56_family():
+    # Clear cached deployments so router defaults apply.
+    _CONFIG_CACHE.pop("THINK_MODEL_DEPLOYMENT", None)
+    _CONFIG_CACHE.pop("SOLVE_MODEL_DEPLOYMENT", None)
+    _CONFIG_CACHE.pop("NANO_MODEL_DEPLOYMENT", None)
+
+    think = await model_router.route("Explain quantum computing in detail.", "think", "c1", 0)
+    solve = await model_router.route("Explain quantum computing in detail.", "solve", "c1", 0)
+    discuss = await model_router.route("hello", "discuss", "c1", 0)
+
+    assert think.deployment == "gpt-5.6-terra"
+    assert solve.deployment == "gpt-5.6-luna"
+    assert discuss.deployment == "gpt-5.6-luna"
+
+
+@pytest.mark.asyncio
+async def test_routing_decision_carries_complexity_and_effort():
+    _CONFIG_CACHE["THINK_MODEL_DEPLOYMENT"] = "gpt-5.6-terra"
+    _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
+
+    decision = await model_router.route(
+        "Build and deploy a complete production-ready FastAPI app with authentication, "
+        "database migrations, unit tests, and CI/CD.",
+        "think", "c1", 0,
+    )
+    assert decision.complexity in ("high", "xhigh")
+    assert decision.reasoning_effort in ("high", "xhigh")
+    assert "complexity=" in decision.routing_reason
+
+
+@pytest.mark.asyncio
+async def test_nano_and_discuss_effort_none():
+    _CONFIG_CACHE["NANO_MODEL_DEPLOYMENT"] = "gpt-5.6-luna"
+    _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
+
+    d1 = await model_router.route("hello", "think", "c1", 1)  # intercepted
+    assert d1.routing_mode == "nano"
+    assert d1.reasoning_effort == "none"
+
+    d2 = await model_router.route("hello", "discuss", "c1", 0)
+    assert d2.reasoning_effort == "none"
+
+
+@pytest.mark.asyncio
+async def test_terra_effort_map_override():
+    _CONFIG_CACHE["THINK_MODEL_DEPLOYMENT"] = "gpt-5.6-terra"
+    _CONFIG_CACHE["TERRA_EFFORT_MAP"] = (
+        '{"low":"low","medium":"low","high":"medium","xhigh":"medium"}'
+    )
+    _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
+
+    decision = await model_router.route(
+        "Build and deploy a complete production-ready FastAPI app with authentication, "
+        "database migrations, unit tests, and CI/CD.",
+        "think", "c1", 0,
+    )
+    assert decision.complexity in ("high", "xhigh")
+    assert decision.reasoning_effort == "medium"
+
+    _CONFIG_CACHE.pop("TERRA_EFFORT_MAP", None)
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_effort_floor():
+    _CONFIG_CACHE["THINK_MODEL_DEPLOYMENT"] = "gpt-5.6-terra"
+    _CONFIG_CACHE["NANO_MAX_TURNS"] = "3"
+    _CONFIG_CACHE.pop("TERRA_EFFORT_MAP", None)
+
+    # Trivial message beyond nano max turns → think branch for agent requests.
+    decision = await model_router.route("hello", "agent", "c1", 99)
+    assert decision.routing_mode == "think"
+    # Agent/Ultra never runs below medium complexity.
+    assert decision.complexity == "medium"
+    assert decision.reasoning_effort == "medium"
+
+
+@pytest.mark.asyncio
+async def test_is_reasoning_model_includes_gpt56_family():
+    from app.core.agent_config import is_reasoning_model
+
+    assert await is_reasoning_model("gpt-5.6-terra") is True
+    assert await is_reasoning_model("gpt-5.6-luna") is True
+    assert await is_reasoning_model("gpt-think-test") is False

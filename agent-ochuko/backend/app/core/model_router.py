@@ -3,13 +3,16 @@
 ModelRouter — 3-layer intelligent model routing (ADR-002 aligned).
 
 Routing layers:
-  Layer 0: DISCUSS mode → always gpt-5.4-nano (cheapest, no interception)
+  Layer 0: DISCUSS mode → always gpt-5.6-luna @ reasoning effort "none" (cheapest)
   Layer 1: Silent Nano Interceptor → trivial messages in THINK/SOLVE mode
-           get routed to nano for NANO_MAX_TURNS turns before handing off
-  Layer 2: Mode-based → THINK=gpt-5.4, SOLVE=gpt-5.4-mini
+           get routed to nano (gpt-5.6-luna @ "none") for NANO_MAX_TURNS
+           turns before handing off
+  Layer 2: Mode + complexity-based → THINK=gpt-5.6-terra, SOLVE=gpt-5.6-luna,
+           each with a rule-classified reasoning-effort tier (low→xhigh)
+           from app.core.complexity_router (<1ms, zero cost, deterministic)
 
-All deployment names and prompts are read from Azure App Configuration
-so they can be updated at runtime without redeploying.
+All deployment names, effort maps, and prompts are read from Azure App
+Configuration so they can be updated at runtime without redeploying.
 """
 
 import re
@@ -19,6 +22,8 @@ from typing import Optional
 
 from app.core.config import get_config
 from app.core.skills import get_skill_prompt, get_skill_name, BASE_IDENTITY
+from app.core.complexity_router import classify, TIER_ORDER
+from app.core.agent_config import get_reasoning_effort
 
 logger = logging.getLogger("app.core.model_router")
 
@@ -61,12 +66,14 @@ _SIMPLE_PREFIX_RE = re.compile(
 @dataclass
 class RoutingDecision:
     """Result of the model router's decision."""
-    deployment: str        # Azure OpenAI deployment name (e.g. "gpt-5.4")
+    deployment: str        # Azure OpenAI deployment name (e.g. "gpt-5.6-terra")
     system_prompt: str     # System prompt text for this mode
     routing_mode: str      # "think", "solve", "discuss", or "nano"
     routing_reason: str    # Human-readable explanation for audit/debug
     was_intercepted: bool  # True if Nano interceptor fired (silent redirect)
     skill: str = "general" # Skill module injected for this request
+    complexity: str = "medium"              # Rule-classified tier: low|medium|high|xhigh
+    reasoning_effort: Optional[str] = None  # Reasoning effort passed to the API
 
 
 def _is_trivial(message_text: str) -> bool:
@@ -144,10 +151,10 @@ async def route(
         RoutingDecision with deployment, prompt, mode, and reasoning.
     """
     # Load deployment names from App Configuration (cached in memory)
-    think_deployment = await get_config("THINK_MODEL_DEPLOYMENT", "gpt-5.4")
+    think_deployment = await get_config("THINK_MODEL_DEPLOYMENT", "gpt-5.6-terra")
 
-    solve_deployment = await get_config("SOLVE_MODEL_DEPLOYMENT", "gpt-5.4-mini")
-    nano_deployment  = await get_config("NANO_MODEL_DEPLOYMENT",  "gpt-5.4-nano")
+    solve_deployment = await get_config("SOLVE_MODEL_DEPLOYMENT", "gpt-5.6-luna")
+    nano_deployment  = await get_config("NANO_MODEL_DEPLOYMENT",  "gpt-5.6-luna")
 
     # Nano override prompts (App Config only — skill system handles think/solve/discuss)
     nano_prompt = await get_config("NANO_PROMPT", (
@@ -158,6 +165,17 @@ async def route(
     skill = get_skill_name(user_message)
     skill_prompt = get_skill_prompt(user_message)
 
+    # ── Rule-based complexity classification (<1ms, zero cost) ────────────
+    # Runs on every request; feeds the reasoning-effort tier for terra/luna.
+    # Runtime toggle: COMPLEXITY_ROUTER_ENABLED=false falls back to "medium".
+    complexity_enabled = (await get_config("COMPLEXITY_ROUTER_ENABLED", "true")).lower() != "false"
+    cd = classify(user_message) if complexity_enabled else None
+    tier = cd.tier if cd else "medium"
+
+    # Agent/Ultra requests never run at low effort — floor at medium.
+    if mode == "agent":
+        tier = max(tier, "medium", key=lambda x: TIER_ORDER.get(x, 1))
+
     # Load nano interceptor config
     nano_max_turns_str = await get_config("NANO_MAX_TURNS", "3")
     try:
@@ -166,62 +184,91 @@ async def route(
         nano_max_turns = 3
 
     # ── Layer 0: DISCUSS mode ────────────────────────────────────────────────
-    # Discuss uses nano. System prompt is skill-based (compact).
+    # Discuss uses nano @ effort "none". System prompt is skill-based (compact).
     if mode == "discuss":
+        effort = await get_reasoning_effort("discuss", tier, nano_deployment)
         return RoutingDecision(
             deployment=nano_deployment,
             system_prompt=skill_prompt,
             routing_mode="discuss",
-            routing_reason=f"Mode is DISCUSS — routed to nano | skill={skill}",
+            routing_reason=(
+                f"Mode is DISCUSS — routed to nano | complexity={tier} | "
+                f"effort={effort} | skill={skill}"
+            ),
             was_intercepted=False,
             skill=skill,
+            complexity=tier,
+            reasoning_effort=effort,
         )
 
     # ── Layer 1: Silent Nano Interceptor ──────────────────────────────────────
     if skill != "help" and _is_trivial(user_message) and nano_turn_count < nano_max_turns:
+        effort = await get_reasoning_effort("nano", tier, nano_deployment)
         return RoutingDecision(
             deployment=nano_deployment,
             system_prompt=nano_prompt,
             routing_mode="nano",
             routing_reason=(
                 f"Nano intercepted: trivial message "
-                f"(turn {nano_turn_count + 1}/{nano_max_turns})"
+                f"(turn {nano_turn_count + 1}/{nano_max_turns}) | "
+                f"complexity={tier} | effort={effort}"
             ),
             was_intercepted=True,
             skill="general",
+            complexity=tier,
+            reasoning_effort=effort,
         )
 
     # ── Layer 1b: Simple Query Interceptor ───────────────────────────────
     if _is_simple_request(user_message) and nano_turn_count < nano_max_turns:
+        effort = await get_reasoning_effort("nano", tier, nano_deployment)
         return RoutingDecision(
             deployment=nano_deployment,
             system_prompt=skill_prompt,  # skill-based even for simple queries
             routing_mode="nano",
             routing_reason=(
                 f"Nano intercepted: simple query "
-                f"(turn {nano_turn_count + 1}/{nano_max_turns}) | skill={skill}"
+                f"(turn {nano_turn_count + 1}/{nano_max_turns}) | skill={skill} | "
+                f"complexity={tier} | effort={effort}"
             ),
             was_intercepted=True,
             skill=skill,
+            complexity=tier,
+            reasoning_effort=effort,
         )
 
-    # ── Layer 2: Mode-based routing ──────────────────────────────────────
+    # ── Layer 2: Mode + complexity-based routing ─────────────────────────
     if mode == "solve":
+        effort = await get_reasoning_effort("solve", tier, solve_deployment)
         return RoutingDecision(
             deployment=solve_deployment,
             system_prompt=skill_prompt,
             routing_mode="solve",
-            routing_reason=f"Mode is SOLVE — routed to gpt-5.4-mini | skill={skill}",
+            routing_reason=(
+                f"Mode is SOLVE — routed to {solve_deployment} | "
+                f"complexity={tier} (score={cd.score if cd else 0}) | "
+                f"effort={effort} | skill={skill}"
+            ),
             was_intercepted=False,
             skill=skill,
+            complexity=tier,
+            reasoning_effort=effort,
         )
 
-    # Default: THINK mode
+    # Default: THINK mode (also serves agent/ultra requests via the router)
+    effort = await get_reasoning_effort("think", tier, think_deployment)
+    mode_label = "ULTRA/agent" if mode == "agent" else "THINK"
     return RoutingDecision(
         deployment=think_deployment,
         system_prompt=skill_prompt,
         routing_mode="think",
-        routing_reason=f"Mode is THINK — routed to gpt-5.4 | skill={skill}",
+        routing_reason=(
+            f"Mode is {mode_label} — routed to {think_deployment} | "
+            f"complexity={tier} (score={cd.score if cd else 0}) | "
+            f"effort={effort} | skill={skill}"
+        ),
         was_intercepted=False,
         skill=skill,
+        complexity=tier,
+        reasoning_effort=effort,
     )

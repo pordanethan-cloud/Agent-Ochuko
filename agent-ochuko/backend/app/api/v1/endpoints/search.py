@@ -120,7 +120,7 @@ async def ask_hybrid_engine(
         answer=answer,
         sources=sources,
         search_engine="google-search+azure-openai",
-        model=result.get("model", "gpt-5.4-mini"),
+        model=result.get("model", "gpt-5.6-luna"),
         tokens_input=result.get("tokens_input", 0),
         tokens_output=result.get("tokens_output", 0),
     )
