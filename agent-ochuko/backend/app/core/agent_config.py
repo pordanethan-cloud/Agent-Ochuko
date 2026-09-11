@@ -16,10 +16,16 @@ Settings exposed:
 
 Agent Mode Settings:
   AGENT_MODE_ENABLED         Feature flag for autonomous Agent Mode (default: true)
-  AGENT_MODE_MAX_STEPS       Max plan steps per task (default: 12)
-  AGENT_MODE_MAX_DURATION    Max wall-clock task runtime in seconds (default: 300 / 5 min)
+  AGENT_MODE_MAX_STEPS       Max plan steps per task (default: 50; "0" = unlimited)
+  AGENT_MODE_MAX_DURATION    Max wall-clock task runtime in seconds (default: 1800 / 30 min)
   AGENT_MODE_STEP_TIMEOUT    Max timeout per step in seconds (default: 90)
   AGENT_MODE_AUTO_APPROVE    Risk threshold for auto-approval: 'low' | 'medium' | 'high' | 'none'
+
+Generation budget (Phase 5):
+  MAX_OUTPUT_TOKENS_AGENT    Agent-mode output budget (default "0" = UNCAPPED — the
+                             max_output_tokens parameter is omitted from the API call so
+                             multi-file websites and builds are never truncated).
+  TERMINAL_TIMEOUT_SECS      Build-grade timeout for terminal commands (default: 600).
 """
 
 from typing import Optional, Dict, Any
@@ -78,15 +84,31 @@ async def get_max_iterations(mode: str = "think") -> int:
         "solve":   ("MAX_AGENT_ITERS_SOLVE",  "6"),
         "discuss": ("MAX_AGENT_ITERS_DISCUSS", "3"),
         "nano":    ("MAX_AGENT_ITERS_DISCUSS", "3"),
-        "agent":   ("AGENT_MODE_MAX_STEPS",    "12"),
+        "agent":   ("AGENT_MODE_MAX_STEPS",    "50"),
     }
 
     key, default = mode_key_map.get(mode.lower(), ("MAX_AGENT_ITERATIONS", str(global_cap)))
     raw = await get_config(key, default)
     try:
-        return max(1, int(raw))
+        parsed = int(raw)
     except (ValueError, TypeError):
-        return global_cap
+        try:
+            parsed = int(default)
+        except (ValueError, TypeError):
+            parsed = global_cap
+    # Phase 5: "0" means UNLIMITED (agent mode never capped on steps).
+    # Callers treat 0 as unbounded (see chat_stream_generator).
+    return 0 if parsed == 0 else max(1, parsed)
+
+
+async def get_terminal_timeout() -> int:
+    """Returns the build-grade timeout for terminal commands (default: 600s)."""
+    raw = await get_config("TERMINAL_TIMEOUT_SECS", "600")
+    try:
+        return max(30, int(raw))
+    except (ValueError, TypeError):
+        return 600
+
 
 
 async def get_step_timeout() -> int:
@@ -101,20 +123,20 @@ async def get_step_timeout() -> int:
 async def get_agent_mode_config() -> Dict[str, Any]:
     """Returns runtime parameters for Agent Mode execution."""
     enabled_val = await get_config("AGENT_MODE_ENABLED", "true")
-    max_steps_val = await get_config("AGENT_MODE_MAX_STEPS", "12")
-    max_dur_val = await get_config("AGENT_MODE_MAX_DURATION", "300")
+    max_steps_val = await get_config("AGENT_MODE_MAX_STEPS", "50")
+    max_dur_val = await get_config("AGENT_MODE_MAX_DURATION", "1800")
     step_to_val = await get_config("AGENT_MODE_STEP_TIMEOUT", "90")
     auto_app_val = await get_config("AGENT_MODE_AUTO_APPROVE", "medium")
 
     try:
         max_steps = int(max_steps_val)
     except (ValueError, TypeError):
-        max_steps = 12
+        max_steps = 50
 
     try:
         max_duration = int(max_dur_val)
     except (ValueError, TypeError):
-        max_duration = 300
+        max_duration = 1800
 
     try:
         step_timeout = int(step_to_val)
@@ -199,26 +221,41 @@ async def get_max_completion_tokens(mode: str = "think", deployment: Optional[st
 
 
 # Mode → (App Config key, default output-token budget).
-# Ultra (agent mode) and THINK get full Claude-grade headroom so generated
-# files are never truncated; everything is runtime-tunable via App Config.
+# THINK keeps Claude-grade headroom; AGENT mode defaults to UNCAPPED ("0") so
+# generated multi-file websites and builds are never truncated — the
+# max_output_tokens parameter is simply omitted from the API call.
+# Everything is runtime-tunable via App Config.
 _OUTPUT_TOKEN_BUDGETS = {
     "ultra":   ("MAX_OUTPUT_TOKENS_ULTRA",   "32768"),
-    "agent":   ("MAX_OUTPUT_TOKENS_ULTRA",   "32768"),
+    "agent":   ("MAX_OUTPUT_TOKENS_AGENT",   "0"),  # 0 = uncapped
     "think":   ("MAX_OUTPUT_TOKENS_THINK",   "32768"),
     "solve":   ("MAX_OUTPUT_TOKENS_SOLVE",   "16384"),
     "discuss": ("MAX_OUTPUT_TOKENS_DISCUSS", "4096"),
     "nano":    ("MAX_OUTPUT_TOKENS_DISCUSS", "4096"),
 }
 
+# Values meaning "no explicit cap — let the model use its full budget".
+_UNCAPPED_SENTINELS = {"0", "", "auto", "unset", "none", "unlimited"}
 
-async def get_max_output_tokens(mode: str = "think") -> int:
+
+async def get_max_output_tokens(mode: str = "think") -> Optional[int]:
     """
-    Returns the max_output_tokens budget for the given routing mode.
-    Reads from App Configuration at call time (runtime-tunable).
+    Returns the max_output_tokens budget for the given routing mode,
+    or None when the mode is UNCAPPED (parameter must be omitted from
+    the API call). Reads from App Configuration at call time (runtime-tunable).
     """
     key, default = _OUTPUT_TOKEN_BUDGETS.get(mode.lower(), ("MAX_OUTPUT_TOKENS_THINK", "32768"))
     raw = await get_config(key, default)
+    val = str(raw).strip().lower()
+    if val in _UNCAPPED_SENTINELS:
+        return None
     try:
-        return max(1024, int(raw))
+        return max(1024, int(val))
     except (ValueError, TypeError):
-        return int(default)
+        # Garbage value: fall back to the key default; a "0" default = uncapped.
+        try:
+            dflt = int(default)
+        except (ValueError, TypeError):
+            dflt = 32768
+        return None if dflt == 0 else max(1024, dflt)
+

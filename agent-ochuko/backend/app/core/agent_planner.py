@@ -56,7 +56,7 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "  {\n"
     "    \"index\": 1,\n"
     "    \"description\": \"Specific step action description (e.g. Scrape pricing data from URL, Look up @handle on GitHub, Deploy landing page)\",\n"
-    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"sandbox_ls\" | \"sandbox_read\" | \"sandbox_write\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
+    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"terminal\" | \"fetch_stock_image\" | \"sandbox_ls\" | \"sandbox_read\" | \"sandbox_write\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
     "    \"risk_level\": \"low\" | \"medium\" | \"high\"\n"
     "  }\n"
     "]\n\n"

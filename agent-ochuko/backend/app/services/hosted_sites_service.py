@@ -9,6 +9,7 @@ Includes in-memory cache fallback for resilient zero-downtime deployment.
 import os
 import re
 import uuid
+import base64
 import secrets
 import asyncio
 import logging
@@ -91,6 +92,91 @@ def bundle_html(
 </html>"""
 
 
+# ── Phase 5 (B): multi-file site helpers ─────────────────────────────────────
+
+_SITE_MIME_MAP = {
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
+    ".xml": "application/xml",
+    ".webmanifest": "application/manifest+json",
+}
+
+_TRAVERSAL_RE = re.compile(r"(^|[/\\])\.\.($|[/\\])")
+
+
+def guess_content_type(filename: str) -> str:
+    ext = os.path.splitext(filename.lower())[1]
+    if ext in _SITE_MIME_MAP:
+        return _SITE_MIME_MAP[ext]
+    if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".avif"):
+        return f"image/{'jpeg' if ext == '.jpg' else ext.lstrip('.')}"
+    if ext in (".woff", ".woff2", ".ttf", ".otf"):
+        return "font/" + ext.lstrip(".")
+    return "application/octet-stream"
+
+
+def normalize_file_map(files: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """
+    Validates a repo-style file map: traversal-safe relative paths, posix
+    normalization, drops empties. Raises ValueError on path escapes.
+    """
+    if not files:
+        return {}
+    normalized: Dict[str, str] = {}
+    for raw_path, content in files.items():
+        rel = (raw_path or "").replace("\\", "/").lstrip("/").strip()
+        if not rel:
+            continue
+        if _TRAVERSAL_RE.search(rel) or ":" in rel or rel.startswith("/"):
+            raise ValueError(f"Site file path escapes the site root: {raw_path!r}")
+        if content is None:
+            continue
+        normalized[rel] = str(content)
+    return normalized
+
+
+async def _mirror_files_to_r2(
+    slug: str,
+    files: Dict[str, str],
+    user_id: Optional[str],
+    conversation_id: Optional[str],
+) -> Dict[str, str]:
+    """
+    Best-effort mirror of site files to the R2 GENERATED bucket under
+    sites/{slug}/<relpath>. Returns {relpath: public_url}. Failures are
+    non-fatal (memory + DB rows carry content).
+    """
+    from app.services.cloudflare_r2 import upload_file_bytes
+
+    urls: Dict[str, str] = {}
+    for rel, content in files.items():
+        data: bytes
+        if content.startswith("data:"):
+            # data URI (bundled binary assets): decode the base64 payload.
+            header, _, payload = content.partition(",")
+            mime = header[5:].split(";")[0] or "application/octet-stream"
+            data = base64.b64decode(payload)
+        else:
+            mime = guess_content_type(rel)
+            data = content.encode("utf-8")
+        url = await upload_file_bytes(
+            file_bytes=data,
+            filename=f"sites/{slug}/{rel}",
+            mime_type=mime,
+            bucket_type="GENERATED",
+        )
+        if url:
+            urls[rel] = url
+    return urls
+
+
 class HostedSitesService:
     """Handles static site deployment, retrieval, and lifecycle management."""
 
@@ -105,14 +191,24 @@ class HostedSitesService:
         is_public: bool = True,
         supabase_client=None,
         base_url: str = "",
+        files: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Deploys a static site and returns the site metadata and live preview URL.
+
+        Phase 5 (B): `files` maps repo-style relative paths to text content
+        ({"index.html": ..., "css/styles.css": ..., "js/main.js": ...}). When a
+        file map with index.html is supplied, the site is deployed MULTI-FILE:
+        `/{slug}` serves index.html and `/{slug}/{path}` serves any bundled
+        file, so relative links resolve. The legacy single-HTML path is
+        unchanged and remains valid for snippets and quick mockups.
         """
         slug = generate_slug(title)
         full_html = bundle_html(title=title, html_content=html_content, css_content=css_content, js_content=js_content)
         site_id = str(uuid.uuid4())
         now_iso = datetime.utcnow().isoformat()
+
+        normalized_files = normalize_file_map(files) if files else {}
 
         site_record = {
             "id": site_id,
@@ -123,11 +219,24 @@ class HostedSitesService:
             "html_content": full_html,
             "css_content": css_content,
             "js_content": js_content,
+            "files": normalized_files,
             "is_public": is_public,
             "view_count": 0,
             "created_at": now_iso,
             "updated_at": now_iso,
         }
+
+        # Best-effort R2 mirror so files survive backend restarts on the CDN.
+        # Memory + Supabase rows always carry the content as fallback.
+        if normalized_files:
+            try:
+                urls = await _mirror_files_to_r2(
+                    slug, normalized_files, user_id, conversation_id
+                )
+                if urls:
+                    site_record["files_urls"] = urls
+            except Exception as r2_err:
+                logger.warning(f"Hosted-site R2 mirror skipped: {r2_err}")
 
         # Cache in memory immediately for ultra-fast response
         _MEMORY_HOSTED_SITES[slug] = site_record
@@ -164,6 +273,31 @@ class HostedSitesService:
             "preview_url": preview_url,
             "is_public": is_public,
             "created_at": now_iso,
+            "files": sorted(normalized_files.keys()),
+            "multi_file": bool(normalized_files),
+        }
+
+    @staticmethod
+    async def get_site_file(
+        slug_or_id: str, file_path: str, supabase_client=None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves one file of a multi-file hosted site. Returns
+        {'content': str, 'content_type': str, 'url': Optional[str]} or None.
+        """
+        site = await HostedSitesService.get_site(slug_or_id, supabase_client)
+        if not site:
+            return None
+        rel = (file_path or "").replace("\\", "/").lstrip("/")
+        files = site.get("files") or {}
+        if rel not in files:
+            return None
+        urls = site.get("files_urls") or {}
+        content = files[rel]
+        return {
+            "content": content,
+            "content_type": guess_content_type(rel),
+            "url": urls.get(rel),
         }
 
     @staticmethod

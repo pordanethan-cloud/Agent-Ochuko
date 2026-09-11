@@ -164,6 +164,18 @@ async def mount_conversation_files(user_id: str, conversation_id: str, work_dir:
 
 _SANDBOX_IGNORED_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 
+# Phase 5 (#17) read-only zones: the sandbox workspace mirrors a security
+# architecture with writable and read-only mounts. User uploads and skills are
+# read-only — modifications must copy the file into the writable workspace
+# first ("copy-to-a-writable-location-first" workflow).
+READ_ONLY_ZONE_PREFIXES = ("uploads/", "skills/", "uploads\\", "skills\\")
+
+
+def _is_read_only_zone(subpath: str) -> bool:
+    norm = (subpath or "").replace("\\", "/").lstrip("/")
+    return any(norm == p.rstrip("/").replace("\\", "/") or norm.startswith(p.replace("\\", "/"))
+               for p in READ_ONLY_ZONE_PREFIXES)
+
 
 def _resolve_sandbox_path(conversation_id: str, subpath: str = "") -> str:
     """Resolve a sandbox-relative path, refusing traversal outside data/."""
@@ -174,6 +186,20 @@ def _resolve_sandbox_path(conversation_id: str, subpath: str = "") -> str:
     if target != data_dir and not target.startswith(data_dir + os.sep):
         raise ValueError(f"Path escapes the sandbox: {subpath!r}")
     return target
+
+
+def _resolve_sandbox_write_path(conversation_id: str, subpath: str = "") -> str:
+    """
+    Write-path resolver: traversal-safe AND read-only-zone enforced.
+    uploads/ and skills/ are read-only mounts — copy the file to the
+    writable workspace root (or another writable dir) instead.
+    """
+    if _is_read_only_zone(subpath):
+        raise ValueError(
+            f"'{subpath}' is in a READ-ONLY zone (uploads/ and skills/ are mounted read-only). "
+            "Copy the file into the writable workspace first (e.g. 'work/<name>'), then modify it there."
+        )
+    return _resolve_sandbox_path(conversation_id, subpath)
 
 
 async def sandbox_list_files(conversation_id: str, subpath: str = "") -> str:
@@ -225,9 +251,10 @@ async def sandbox_read_file(conversation_id: str, subpath: str, offset: int = 0,
 
 
 async def sandbox_write_file(conversation_id: str, subpath: str, content: str) -> str:
-    """Writes a complete file into the sandbox data/ dir. Returns a one-line receipt."""
+    """Writes a complete file into the sandbox data/ dir. Returns a one-line receipt.
+    Refuses traversal and read-only zones (uploads/, skills/) — copy-first workflow."""
     def _write():
-        target = _resolve_sandbox_path(conversation_id, subpath)
+        target = _resolve_sandbox_write_path(conversation_id, subpath)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         data = content.encode("utf-8")
         with open(target, "wb") as f:
@@ -235,6 +262,41 @@ async def sandbox_write_file(conversation_id: str, subpath: str, content: str) -
         preview = content.strip().replace("\n", " ")[:200]
         return f"WROTE {subpath} · {len(data)} bytes · starts: {preview!r}"
     return await asyncio.to_thread(_write)
+
+
+async def sandbox_edit_file(conversation_id: str, subpath: str, old_str: str, new_str: str) -> str:
+    """
+    Claude-style str_replace: old_str must match EXACTLY ONCE in the file.
+    Surgical edit without a full rewrite. Refuses traversal and read-only zones.
+    """
+    def _edit():
+        target = _resolve_sandbox_write_path(conversation_id, subpath)
+        if not os.path.isfile(target):
+            return f"sandbox_edit error: '{subpath}' not found. Use sandbox_ls to list files."
+        try:
+            with open(target, "r", encoding="utf-8", errors="strict") as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            return f"sandbox_edit error: '{subpath}' is binary — use execute_code to modify it."
+        count = content.count(old_str)
+        if count == 0:
+            return (
+                f"sandbox_edit error: old_str not found in '{subpath}'. "
+                "Use sandbox_read to check the exact content (whitespace matters)."
+            )
+        if count > 1:
+            return (
+                f"sandbox_edit error: old_str matches {count} times in '{subpath}' — "
+                "it must match EXACTLY ONCE. Include more surrounding context."
+            )
+        updated = content.replace(old_str, new_str, 1)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(updated)
+        return (
+            f"EDITED {subpath} · replaced 1 occurrence "
+            f"({len(old_str.encode('utf-8'))} → {len(new_str.encode('utf-8'))} bytes)"
+        )
+    return await asyncio.to_thread(_edit)
 
 
 async def execute_code_in_sandbox(
@@ -319,6 +381,29 @@ async def execute_code_in_sandbox(
         
     env["PYTHONPATH"] = PYTHON_LIBS_DIR
     env["NODE_PATH"] = NODE_LIBS_DIR
+
+    # Phase 5 (#12): sandbox egress allowlist. Empty/unset = allow-all
+    # (backward compatible). When set, DNS/socket guard shims are injected so
+    # Python AND Node subprocesses are limited to the configured host globs.
+    from app.services.sandbox_net_guard import apply_net_guard
+    try:
+        allowlist_raw = os.environ.get("SANDBOX_NET_ALLOWLIST", "")
+        if not allowlist_raw:
+            try:
+                from app.core.config import get_config
+                allowlist_raw = await get_config("SANDBOX_NET_ALLOWLIST", "")
+            except Exception:
+                allowlist_raw = ""
+        guard_info = apply_net_guard(src_dir, allowlist_raw)
+        if guard_info.get("python_shim"):
+            env["PYTHONPATH"] = src_dir + os.pathsep + PYTHON_LIBS_DIR
+        if guard_info.get("node_shim"):
+            env["NODE_OPTIONS"] = (
+                env.get("NODE_OPTIONS", "") + f" --require {guard_info['node_shim']}"
+            ).strip()
+        env["SANDBOX_NET_ALLOWLIST"] = allowlist_raw or ""
+    except Exception as guard_err:
+        logger.warning(f"Net guard setup skipped: {guard_err}")
 
     stdout_str = ""
     stderr_str = ""

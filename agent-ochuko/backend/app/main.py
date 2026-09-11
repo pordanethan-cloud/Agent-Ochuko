@@ -20,6 +20,7 @@ from app.api.v1.endpoints.shared import router as shared_router
 from app.api.v1.endpoints.hosted_sites import router as hosted_sites_router
 from app.api.v1.endpoints.connectors import router as connectors_router
 from app.api.v1.endpoints.user_settings import router as user_settings_router
+from app.api.v1.endpoints.artifact_kv import router as artifact_kv_router
 from app.middleware import (
     MaintenanceGuardMiddleware,
     BlockGuardMiddleware,
@@ -146,6 +147,7 @@ app.include_router(shared_router, prefix="/v1/shared", tags=["shared"])
 app.include_router(hosted_sites_router, prefix="/v1/sites", tags=["sites"])
 app.include_router(connectors_router, prefix="/v1", tags=["connectors"])
 app.include_router(user_settings_router, prefix="/v1/user/settings", tags=["user-settings"])
+app.include_router(artifact_kv_router, prefix="/v1/artifacts/kv", tags=["artifacts-kv"])
 
 
 

@@ -17,8 +17,9 @@ LOW_RISK_TOOLS = {
     "sandbox_ls", "sandbox_read",
     "gmail_search", "gmail_read", "calendar_list_events", "calendar_check_availability",
     "photos_search", "photos_list", "photos_get",
+    "fetch_stock_image",
 }
-MEDIUM_RISK_TOOLS = {"visualize__show_widget"}
+MEDIUM_RISK_TOOLS = {"visualize__show_widget", "terminal"}
 HIGH_RISK_TOOLS = {
     "generate_image", "browse_web", "deploy_site",
     "gmail_send", "calendar_create_event", "photos_upload",

@@ -27,6 +27,9 @@ from app.core.verification_gates import verification_gates
 from app.core.circuit_breaker import create_turn_circuit_breaker
 from app.core.prompt_defense import prompt_defense
 from app.core.reflexion_engine import create_reflexion_engine
+from app.core.agent_tools import AGENT_TOOLS
+from app.core.category_gate import route_tools as _route_tools
+from app.core.memory_guard import check_pii, apply_memory_edit, describe_memory_version_conflict
 
 logger = logging.getLogger("app.api.v1.endpoints.chat")
 router = APIRouter()
@@ -1395,6 +1398,7 @@ async def chat_stream_generator(
         accumulated_image_jobs = []
         accumulated_files = []
         accumulated_widgets = []  # [{type, title, mode, code, widget_type}] — persisted to content_parts
+        accumulated_display_cards = []  # [{card_type, payload, summary}] — Phase 6 display cards
 
         assistant_content = ""
         response_id = None
@@ -1408,13 +1412,22 @@ async def chat_stream_generator(
         iteration = 0
         from app.core.agent_config import get_max_iterations, get_max_output_tokens
         max_iterations = await get_max_iterations(routing_mode)
+        # Phase 5: max_iterations == 0 means UNLIMITED steps (agent mode).
+        # The wall-clock / error circuit breaker still applies; the step loop
+        # uses a large sentinel so duration, not step count, is the ceiling.
+        effective_max_iterations = max_iterations if max_iterations > 0 else 100000
         output_budget = await get_max_output_tokens(routing_mode)
-        logger.info("Agent loop budget: mode=%s iterations=%d output_tokens=%d", routing_mode, max_iterations, output_budget)
-        circuit_breaker = create_turn_circuit_breaker(max_steps=max_iterations)
-        reflexion = create_reflexion_engine(max_attempts=max_iterations)
+        logger.info(
+            "Agent loop budget: mode=%s iterations=%s output_tokens=%s",
+            routing_mode,
+            "unlimited" if max_iterations == 0 else max_iterations,
+            "uncapped" if output_budget is None else output_budget,
+        )
+        circuit_breaker = create_turn_circuit_breaker(max_steps=effective_max_iterations)
+        reflexion = create_reflexion_engine(max_attempts=max_iterations if max_iterations > 0 else 3)
         active_tool_step = 0
 
-        while iteration < max_iterations:
+        while iteration < effective_max_iterations:
             current_tool_calls = []
             current_stream_failed = False
             current_error_message = ""
@@ -1424,284 +1437,50 @@ async def chat_stream_generator(
             except Exception as cb_err:
                 logger.warning(f"Circuit breaker budget threshold: {cb_err}")
 
-            is_final_step = (iteration == max_iterations - 1)
+            is_final_step = (iteration == effective_max_iterations - 1)
             
             from app.core.widget_tools import WIDGET_TOOLS
             stream_kwargs: Dict[str, Any] = {
                 "model": deployment,
-                "max_output_tokens": output_budget,
             }
+            # Phase 5: when the budget is uncapped (None) omit the parameter
+            # entirely so the model uses its full generation budget.
+            if output_budget is not None:
+                stream_kwargs["max_output_tokens"] = output_budget
             if reasoning_effort:
                 # GPT-5.6 family: reasoning effort derived from the
                 # rule-classified complexity tier (Responses API shape).
                 stream_kwargs["reasoning"] = {"effort": reasoning_effort}
-            stream_kwargs["tools"] = [
-                    # Two-tool inline widget renderer (read_me + show_widget)
-                    *WIDGET_TOOLS,
-                    {
-                        "type": "function",
-                        "name": "search_web",
-                        "description": (
-                            "Search the web for current, real-time information. "
-                            "Call this for a SINGLE, focused lookup. "
-                            "For anything time-sensitive (news, prices, laws, releases, scores), "
-                            "include the current year in the query — e.g. 'Nigeria tax reform 2026'. "
-                            "AFTER searching: if a result looks central to the answer but the snippet "
-                            "is thin, follow up with fetch_url on that result's URL to read the page. "
-                            "TRUST PRIORITY: favour wire services and official bodies (Reuters, AP, "
-                            "BBC, UEFA/league/club sites for sports, Bloomberg/FT for markets) that "
-                            "appear in the results; for scores and breaking figures, confirm across "
-                            "two trusted sources before stating them. "
-                            "DUTY: cite web-sourced claims with [n](url) markers. "
-                            "For comparing multiple subjects or researching multiple dimensions at once, "
-                            "use deep_research instead."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The precise search query to submit to Google",
-                                }
-                            },
-                            "required": ["query"],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "deep_research",
-                        "description": (
-                            "Run multiple parallel web searches simultaneously for complex comparative, "
-                            "multi-topic, or multi-dimensional queries. "
-                            "Use this whenever the user asks to compare subjects (phones, products, policies, people), "
-                            "requests info across multiple dimensions/aspects/ramifications, or needs a structured research report. "
-                            "Pass a list of 2-6 specific, targeted search strings — one per subject or dimension. "
-                            "For time-sensitive topics, include the current year in each query. "
-                            "Results from all queries are merged and returned together. "
-                            "PREFER this over calling search_web multiple times."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "queries": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "description": "List of 2-6 precise, targeted Google search strings",
-                                    "minItems": 2,
-                                    "maxItems": 6,
-                                }
-                            },
-                            "required": ["queries"],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "fetch_url",
-                        "description": (
-                            "Read the full text content of a specific web page. "
-                            "WHEN to call: after search_web surfaces a promising result and you need "
-                            "the page's actual content (not just a snippet); or when the user pastes a "
-                            "link and asks about its content. "
-                            "WHEN NOT to call: for PDF/document files (attach or use the document "
-                            "pipeline instead); for site-wide crawling (call once per page, pick the "
-                            "most relevant). "
-                            "DUTY: facts taken from a fetched page must be cited with a [n](url) "
-                            "marker referencing that page's URL."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "url": {
-                                    "type": "string",
-                                    "description": "The complete http(s) URL of the page to read",
-                                }
-                            },
-                            "required": ["url"],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "memory_save",
-                        "description": (
-                            "Persist a durable fact or preference about the user to conversation "
-                            "memory. WHEN to call: the user states a stable preference, goal, project "
-                            "detail, or correction worth remembering for later turns (e.g. 'I prefer "
-                            "concise answers', 'my startup is X'). NEVER save credentials, tokens, "
-                            "passwords, or other sensitive data. Keys are short slugs "
-                            "(e.g. 'tone_preference'); values are one crisp sentence."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "key": {
-                                    "type": "string",
-                                    "description": "Short snake_case slug identifying the fact",
-                                },
-                                "value": {
-                                    "type": "string",
-                                    "description": "The fact or preference, one crisp sentence",
-                                },
-                            },
-                            "required": ["key", "value"],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "memory_recall",
-                        "description": (
-                            "Read facts previously saved with memory_save for this conversation. "
-                            "WHEN to call: at the start of a task where remembered preferences or "
-                            "facts could change your answer, or when the user asks what you remember. "
-                            "Call with a specific key when you know it, or no key to dump all saved "
-                            "facts."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "key": {
-                                    "type": "string",
-                                    "description": "Optional specific memory key to recall. Omit to recall all saved facts.",
-                                }
-                            },
-                            "required": [],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "sandbox_ls",
-                        "description": (
-                            "List the files in your conversation sandbox workspace, with sizes. "
-                            "WHEN to call: before reading or overwriting files, when the user refers "
-                            "to earlier files, or when you need to check what a previous execution "
-                            "produced. Cheap and safe — call it whenever in doubt."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "subpath": {
-                                    "type": "string",
-                                    "description": "Optional subdirectory to list. Omit for the root.",
-                                }
-                            },
-                            "required": [],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "sandbox_read",
-                        "description": (
-                            "Read a slice of a text file from your sandbox workspace. "
-                            "WHEN to call: to inspect a file's content before editing it, verifying a "
-                            "generated file, or continuing work across turns. Returns up to 4000 bytes "
-                            "per call with a continuation offset for larger files."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "path": {
-                                    "type": "string",
-                                    "description": "File path relative to the sandbox root, e.g. 'report.csv'",
-                                },
-                                "offset": {
-                                    "type": "integer",
-                                    "description": "Byte offset to start reading from (default 0).",
-                                },
-                                "max_bytes": {
-                                    "type": "integer",
-                                    "description": "Max bytes to return per call (default 4000, max 16000).",
-                                },
-                            },
-                            "required": ["path"],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "sandbox_write",
-                        "description": (
-                            "Write a COMPLETE file into your sandbox workspace. Files written here are "
-                            "uploaded and surfaced to the user as downloadable artifacts. "
-                            "QUALITY BAR: write the full file in one call — complete, runnable, no "
-                            "stubs or placeholders. Never truncate to save tokens. "
-                            "For binary/chart outputs, use execute_code instead. "
-                            "AFTER writing large multi-file deliverables, verify with sandbox_read."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "path": {
-                                    "type": "string",
-                                    "description": "File path relative to the sandbox root, e.g. 'app/main.py'",
-                                },
-                                "content": {
-                                    "type": "string",
-                                    "description": "The complete file content (UTF-8 text).",
-                                },
-                            },
-                            "required": ["path", "content"],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "execute_code",
-                        "description": (
-                            "Execute Python, JavaScript (Node.js), or Bash code in a persistent sandbox "
-                            "with FULL internet access. "
-                            "STRUCTURE: files persist between calls — read inputs from "
-                            "`../data/filename.ext` and write outputs there too; anything you save is "
-                            "automatically uploaded and returned to the user as a download link "
-                            "(synced to cloud storage). "
-                            "WHEN to call: run/test code, analyse data, plot charts, fetch live data "
-                            "in code, convert or process files, perform computation. "
-                            "QUALITY BAR: generated files must be complete and immediately usable — "
-                            "never stubs or truncated snippets. "
-                            "Do NOT use for SVG display (visualize__show_widget) or AI images "
-                            "(generate_image)."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "code": {
-                                    "type": "string",
-                                    "description": "The complete code to execute. Must be self-contained and runnable.",
-                                },
-                                "language": {
-                                    "type": "string",
-                                    "enum": ["python", "javascript", "bash"],
-                                    "description": "Programming language of the code snippet",
-                                },
-                            },
-                            "required": ["code", "language"],
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "name": "generate_image",
-                        "description": (
-                            "Generate a brand-new image using AI (FLUX) from a natural language text description. "
-                            "Use ONLY when the user wants an AI-synthesised picture from a text prompt — "
-                            "e.g. 'draw a dragon', 'generate a photo of a sunset', 'create an illustration of X'. "
-                            "Do NOT call this to render, convert, or execute code. "
-                            "Do NOT call this for SVG-to-image conversion (use visualize__show_widget instead). "
-                            "Do NOT call this for data plots or charts (use execute_code with matplotlib instead)."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "prompt": {
-                                    "type": "string",
-                                    "description": "Detailed, descriptive image generation prompt",
-                                },
-                                "style": {
-                                    "type": "string",
-                                    "enum": ["photorealistic", "illustration", "abstract", "sketch"],
-                                    "description": "Visual style for the image",
-                                },
-                            },
-                            "required": ["prompt"],
-                        },
-                    },
-            ]
-            stream_kwargs["tool_choice"] = "none" if is_final_step else "auto"
+            # ── Phase 6: Category Gate — dynamic tool schema pruning ──────────
+            # On iteration 0, classify intent and load ONLY the matching category
+            # of tool schemas. Conversational turns ("none") pass tools=None,
+            # eliminating schema tokens entirely. Mid-loop iterations always get
+            # the full roster so the agent can use any tool freely.
+            _last_user_content_for_gate = ""
+            if messages:
+                for _gm in reversed(messages):
+                    if _gm.get("role") == "user":
+                        _c = _gm.get("content", "")
+                        _last_user_content_for_gate = _c if isinstance(_c, str) else " ".join(
+                            p.get("text", "") if isinstance(p, dict) else str(p)
+                            for p in _c
+                            if isinstance(p, (str, dict))
+                        )
+                        break
+            _gate_category, _gated_tools = _route_tools(
+                _last_user_content_for_gate, AGENT_TOOLS, iteration=iteration
+            )
+            if is_final_step:
+                # Final step: force tool_choice=none regardless of category
+                stream_kwargs["tool_choice"] = "none"
+                if _gated_tools:
+                    stream_kwargs["tools"] = _gated_tools
+            elif _gate_category == "none":
+                # Pure conversational — skip tool schemas entirely
+                stream_kwargs["tool_choice"] = "none"
+            else:
+                stream_kwargs["tools"] = _gated_tools
+                stream_kwargs["tool_choice"] = "auto"
 
             # We use stateful multi-turn only on iteration 0 when previous_response_id is set
             if iteration == 0 and previous_response_id:
@@ -1970,6 +1749,12 @@ async def chat_stream_generator(
                         elif t_name == "sandbox_write":
                             p = args.get("path", "")
                             step_label = f"Writing {p[:50]}" if p else "Writing sandbox file..."
+                        elif t_name == "sandbox_edit":
+                            p = args.get("path", "")
+                            step_label = f"Editing {p[:50]}" if p else "Editing sandbox file..."
+                        elif t_name == "memory_edit":
+                            k = args.get("key", "")
+                            step_label = f"Patching memory '{k[:30]}'..." if k else "Patching memory..."
                         elif t_name == "execute_code":
                             code_text = args.get("code", "").lower()
                             if any(kw in code_text for kw in ["fitz", "pdf", "docx", "signature", "document"]):
@@ -1980,6 +1765,20 @@ async def chat_stream_generator(
                                 step_label = "Running Python code in sandbox..."
                         elif t_name == "generate_image":
                             step_label = "Synthesizing image with FLUX..."
+                        elif t_name == "fetch_stock_image":
+                            step_label = "Searching stock photos..."
+                        elif t_name == "terminal":
+                            cmd = args.get("command", "")
+                            step_label = f"Running terminal: {cmd[:50]}" if cmd else "Running terminal command..."
+                        elif t_name == "weather_fetch":
+                            loc = args.get("location", "")
+                            step_label = f"Checking weather for {loc[:40]}..." if loc else "Checking weather..."
+                        elif t_name == "ask_user_input":
+                            step_label = "Requesting user input options..."
+                        elif t_name == "end_conversation":
+                            step_label = "Ending conversation..."
+                        elif t_name.startswith("render_"):
+                            step_label = f"Displaying {t_name.replace('render_', '').replace('_', ' ')}..."
                     except Exception:
                         pass
 
@@ -2139,25 +1938,53 @@ async def chat_stream_generator(
                             args = json.loads(t_args_str or "{}")
                             mem_key = (args.get("key", "") or "").strip()[:80]
                             mem_value = (args.get("value", "") or "").strip()[:500]
+                            if_version = args.get("if_version")  # optional int
                             if mem_key and mem_value:
-                                def _save_memory():
-                                    current = (
-                                        supabase.table("conversations")
-                                        .select("agent_memory")
-                                        .eq("id", conversation_id)
-                                        .single()
-                                        .execute()
-                                    )
-                                    mem = (current.data or {}).get("agent_memory") or {}
-                                    if not isinstance(mem, dict):
-                                        mem = {}
-                                    mem[mem_key] = mem_value
-                                    supabase.table("conversations").update(
-                                        {"agent_memory": mem}
-                                    ).eq("id", conversation_id).execute()
-                                    return mem
-                                await asyncio.to_thread(_save_memory)
-                                tool_outputs.append(f"Memory saved: '{mem_key}' = {mem_value}")
+                                # ── Privacy gate (deterministic, not prompt-based) ──
+                                is_clean, pii_reason = check_pii(mem_key, mem_value)
+                                if not is_clean:
+                                    tool_outputs.append(f"memory_save blocked: {pii_reason}")
+                                else:
+                                    def _save_memory():
+                                        current = (
+                                            supabase.table("conversations")
+                                            .select("agent_memory")
+                                            .eq("id", conversation_id)
+                                            .single()
+                                            .execute()
+                                        )
+                                        mem = (current.data or {}).get("agent_memory") or {}
+                                        if not isinstance(mem, dict):
+                                            mem = {}
+                                        # ── Optimistic concurrency check ──
+                                        if if_version is not None:
+                                            entry = mem.get(mem_key)
+                                            current_version = 0
+                                            if isinstance(entry, dict):
+                                                current_version = entry.get("_version", 0)
+                                            if current_version != if_version:
+                                                # Return conflict descriptor for in-loop merge
+                                                current_val = entry.get("value", "") if isinstance(entry, dict) else str(entry or "")
+                                                return describe_memory_version_conflict(
+                                                    mem_key, if_version, current_version, current_val
+                                                )
+                                        # Resolve current version and bump
+                                        existing = mem.get(mem_key)
+                                        prev_version = 0
+                                        if isinstance(existing, dict):
+                                            prev_version = existing.get("_version", 0)
+                                        mem[mem_key] = {"value": mem_value, "_version": prev_version + 1}
+                                        supabase.table("conversations").update(
+                                            {"agent_memory": mem}
+                                        ).eq("id", conversation_id).execute()
+                                        return mem
+                                    result = await asyncio.to_thread(_save_memory)
+                                    if isinstance(result, dict) and result.get("conflict"):
+                                        tool_outputs.append(
+                                            f"memory_save conflict: {json.dumps(result)}"
+                                        )
+                                    else:
+                                        tool_outputs.append(f"Memory saved: '{mem_key}' = {mem_value}")
                             else:
                                 tool_outputs.append("memory_save error: both key and value are required.")
                         except Exception as e:
@@ -2195,6 +2022,69 @@ async def chat_stream_generator(
                         except Exception as e:
                             logger.error(f"Agent memory_recall failed: {e}")
                             tool_outputs.append(f"memory_recall error: {str(e)}")
+
+                    elif t_name == "memory_edit":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            mem_key = (args.get("key", "") or "").strip()[:80]
+                            old_str = args.get("old_str", "")
+                            new_str = (args.get("new_str", "") or "").strip()[:500]
+                            if_version = args.get("if_version")
+                            if not mem_key or not old_str:
+                                tool_outputs.append("memory_edit error: key and old_str are required.")
+                            else:
+                                # PII gate on new_str
+                                is_clean, pii_reason = check_pii(mem_key, new_str)
+                                if not is_clean:
+                                    tool_outputs.append(f"memory_edit blocked: {pii_reason}")
+                                else:
+                                    def _edit_memory():
+                                        current = (
+                                            supabase.table("conversations")
+                                            .select("agent_memory")
+                                            .eq("id", conversation_id)
+                                            .single()
+                                            .execute()
+                                        )
+                                        mem = (current.data or {}).get("agent_memory") or {}
+                                        if not isinstance(mem, dict):
+                                            return {"error": "No memory store found."}
+                                        entry = mem.get(mem_key)
+                                        if entry is None:
+                                            return {"error": f"Key '{mem_key}' not found in memory."}
+                                        # Support both versioned dict and plain string storage
+                                        if isinstance(entry, dict):
+                                            current_version = entry.get("_version", 0)
+                                            current_value = entry.get("value", "")
+                                        else:
+                                            current_version = 0
+                                            current_value = str(entry)
+                                        # Optimistic concurrency check
+                                        if if_version is not None and current_version != if_version:
+                                            return describe_memory_version_conflict(
+                                                mem_key, if_version, current_version, current_value
+                                            )
+                                        # Apply surgical edit
+                                        success, patched = apply_memory_edit(current_value, old_str, new_str)
+                                        if not success:
+                                            return {"error": patched}
+                                        mem[mem_key] = {"value": patched, "_version": current_version + 1}
+                                        supabase.table("conversations").update(
+                                            {"agent_memory": mem}
+                                        ).eq("id", conversation_id).execute()
+                                        return {"success": True, "key": mem_key, "new_value": patched}
+                                    result = await asyncio.to_thread(_edit_memory)
+                                    if result.get("conflict"):
+                                        tool_outputs.append(f"memory_edit conflict: {json.dumps(result)}")
+                                    elif result.get("error"):
+                                        tool_outputs.append(f"memory_edit error: {result['error']}")
+                                    else:
+                                        tool_outputs.append(
+                                            f"Memory '{mem_key}' patched: '{old_str}' → '{new_str}'"
+                                        )
+                        except Exception as e:
+                            logger.error(f"Agent memory_edit failed: {e}")
+                            tool_outputs.append(f"memory_edit error: {str(e)}")
 
                     elif t_name == "sandbox_ls":
                         try:
@@ -2281,6 +2171,22 @@ async def chat_stream_generator(
                         except Exception as e:
                             logger.error(f"Agent sandbox_write failed: {e}")
                             tool_outputs.append(f"sandbox_write error: {str(e)}")
+
+                    elif t_name == "sandbox_edit":
+                        try:
+                            from app.services.code_sandbox import sandbox_edit_file
+                            args = json.loads(t_args_str or "{}")
+                            target = (args.get("path", "") or "").strip()
+                            old_str = args.get("old_str", "")
+                            new_str = args.get("new_str", "")
+                            if target and old_str:
+                                receipt = await sandbox_edit_file(conversation_id, target, old_str, new_str)
+                                tool_outputs.append(receipt)
+                            else:
+                                tool_outputs.append("sandbox_edit error: both 'path' and 'old_str' are required.")
+                        except Exception as e:
+                            logger.error(f"Agent sandbox_edit failed: {e}")
+                            tool_outputs.append(f"sandbox_edit error: {str(e)}")
 
                     elif t_name == "execute_code":
                         try:
@@ -2388,6 +2294,88 @@ async def chat_stream_generator(
                                 tool_outputs.append("Image prompt was empty.")
                         except Exception as err:
                             tool_outputs.append(f"Image generation error: {err}")
+
+                    elif t_name == "fetch_stock_image":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            stock_query = str(args.get("query") or "").strip()
+                            if stock_query:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Searching stock photos: {stock_query[:50]}...",
+                                    })
+                                    + "\n\n"
+                                )
+                                from app.services.pexels_service import get_stock_service, PexelsService
+                                stock = await get_stock_service()
+                                stock_result = await stock.search(
+                                    stock_query,
+                                    per_page=int(args.get("per_page") or 6),
+                                    orientation=args.get("orientation"),
+                                )
+                                tool_outputs.append(PexelsService.format_for_model(stock_result, stock_query))
+                            else:
+                                tool_outputs.append("fetch_stock_image error: no query provided.")
+                        except Exception as e:
+                            logger.error(f"Agent fetch_stock_image failed: {e}")
+                            tool_outputs.append(f"fetch_stock_image error: {str(e)}")
+
+                    elif t_name == "terminal":
+                        try:
+                            from app.core.agent_config import get_terminal_timeout
+                            from app.services.code_sandbox import execute_code_in_sandbox
+                            args = json.loads(t_args_str or "{}")
+                            terminal_cmd = str(args.get("command") or "").strip()
+                            if terminal_cmd:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Running terminal: {terminal_cmd[:60]}...",
+                                    })
+                                    + "\n\n"
+                                )
+                                term_output, term_files = await execute_code_in_sandbox(
+                                    code=terminal_cmd,
+                                    language="bash",
+                                    conversation_id=conversation_id,
+                                    user_id=user_id,
+                                    timeout_seconds=await get_terminal_timeout(),
+                                )
+                                if term_files:
+                                    accumulated_files.extend(term_files)
+                                    yield (
+                                        "data: "
+                                        + json.dumps({"type": "generated_files", "files": term_files})
+                                        + "\n\n"
+                                    )
+                                _T_HEAD, _T_TAIL = 4000, 1000
+                                if len(term_output) > _T_HEAD + _T_TAIL + 64:
+                                    term_capped = (
+                                        term_output[:_T_HEAD]
+                                        + f"\n[... {len(term_output) - _T_HEAD - _T_TAIL} chars truncated — use sandbox_ls / sandbox_read to inspect files ...]\n"
+                                        + term_output[-_T_TAIL:]
+                                    )
+                                else:
+                                    term_capped = term_output
+                                tool_outputs.append(f"Terminal output:\n{term_capped}")
+                                # Reflexion on build failures (same channel as execute_code).
+                                if any(sig in term_output.lower() for sig in ("error", "not found", "cannot", "failed")):
+                                    try:
+                                        trial = reflexion.record_trial(f"terminal: {terminal_cmd[:120]}", term_output[:500])
+                                        tool_outputs.append(f"[Self-correction] {trial.self_critique}")
+                                    except Exception as ref_err:
+                                        logger.debug("reflexion skip: %s", ref_err)
+                            else:
+                                tool_outputs.append("terminal error: no command provided.")
+                        except Exception as e:
+                            logger.error(f"Agent terminal failed: {e}")
+                            tool_outputs.append(f"terminal error: {str(e)}")
+
                     elif t_name == "visualize__read_me":
                         # Returns design tokens + module rules as a tool result.
                         # No SSE event — this is purely context injection for the model.
@@ -2471,6 +2459,115 @@ async def chat_stream_generator(
                             logger.error(f"Agent visualize__show_widget failed: {e}")
                             tool_outputs.append(f"Widget render error: {str(e)}")
 
+                    elif t_name in (
+                        "render_options_card", "render_step_flow", "render_itinerary",
+                        "render_map", "render_quiz", "render_translation",
+                    ):
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            # Phase 6 §4: schema verification gate
+                            card_ok, card_err = verification_gates.verify_render_card_schema(t_name, args)
+                            if not card_ok:
+                                tool_outputs.append(f"{t_name} schema error: {card_err}")
+                            else:
+                                # Emit SSE display_card event — frontend renders native UI component
+                                card_summary = args.get("summary") or args.get("title") or t_name
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "display_card",
+                                        "card_type": t_name,
+                                        "payload": args,
+                                        "summary": card_summary,
+                                    })
+                                    + "\n\n"
+                                )
+                                tool_outputs.append(
+                                    f"Display card '{t_name}' rendered on client. "
+                                    "Do NOT re-list its content in prose — add one takeaway sentence only."
+                                )
+                                # Persist in message content_parts for conversation history
+                                accumulated_display_cards.append({
+                                    "card_type": t_name,
+                                    "payload": args,
+                                    "summary": card_summary,
+                                })
+                        except Exception as e:
+                            logger.error(f"Agent {t_name} failed: {e}")
+                            tool_outputs.append(f"{t_name} error: {str(e)}")
+
+                    elif t_name == "weather_fetch":
+                        try:
+                            from app.services.weather_service import fetch_weather
+                            args = json.loads(t_args_str or "{}")
+                            loc = (args.get("location", "") or "").strip()
+                            days = int(args.get("days", 3) or 3)
+                            if loc:
+                                weather_result = await fetch_weather(loc, days=days)
+                                tool_outputs.append(weather_result)
+                            else:
+                                tool_outputs.append("weather_fetch error: 'location' is required.")
+                        except Exception as e:
+                            logger.error(f"Agent weather_fetch failed: {e}")
+                            tool_outputs.append(f"weather_fetch error: {str(e)}")
+
+                    elif t_name == "ask_user_input":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            q = (args.get("question", "") or "").strip()
+                            opts = args.get("options") or []
+                            sel_type = args.get("select_type", "single_select")
+                            if q and opts and isinstance(opts, list):
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "ask_user_input",
+                                        "question": q,
+                                        "options": opts,
+                                        "select_type": sel_type,
+                                    })
+                                    + "\n\n"
+                                )
+                                tool_outputs.append(
+                                    f"Presented question with tappable options to user: '{q}' "
+                                    f"Options: {', '.join(str(o) for o in opts)}. "
+                                    "Awaiting user selection on next turn."
+                                )
+                            else:
+                                tool_outputs.append("ask_user_input error: 'question' and non-empty 'options' list required.")
+                        except Exception as e:
+                            logger.error(f"Agent ask_user_input failed: {e}")
+                            tool_outputs.append(f"ask_user_input error: {str(e)}")
+
+                    elif t_name == "end_conversation":
+                        try:
+                            from app.core.abuse_policy import STATE_ENDED, TERMINATION_MESSAGE
+                            try:
+                                supabase = get_supabase_admin()
+                                await asyncio.to_thread(
+                                    lambda: supabase.table("conversations")
+                                    .update({"abuse_state": STATE_ENDED})
+                                    .eq("id", conversation_id)
+                                    .execute()
+                                )
+                            except Exception as db_err:
+                                logger.warning(f"Could not persist abuse_state: {db_err}")
+
+                            yield (
+                                "data: "
+                                + json.dumps({
+                                    "type": "conversation_ended",
+                                    "reason": "Abusive treatment after warning.",
+                                    "message": TERMINATION_MESSAGE,
+                                })
+                                + "\n\n"
+                            )
+                            tool_outputs.append("Conversation ended permanently per safety policy.")
+                            break
+                        except Exception as e:
+                            logger.error(f"Agent end_conversation failed: {e}")
+                            tool_outputs.append(f"end_conversation error: {str(e)}")
+
                     else:
                         tool_outputs.append(f"Unknown tool name: {t_name}")
 
@@ -2512,8 +2609,9 @@ async def chat_stream_generator(
                 synth_kwargs: Dict[str, Any] = {
                     "model": deployment,
                     "input": [normalize_responses_message(m) for m in synth_input],
-                    "max_output_tokens": output_budget,
                 }
+                if output_budget is not None:
+                    synth_kwargs["max_output_tokens"] = output_budget
                 if reasoning_effort:
                     synth_kwargs["reasoning"] = {"effort": reasoning_effort}
                 async with client.responses.stream(**synth_kwargs) as synth_stream:
@@ -2601,6 +2699,8 @@ async def chat_stream_generator(
                 ]
             if accumulated_widgets:
                 content_parts["widgets"] = accumulated_widgets
+            if accumulated_display_cards:
+                content_parts["display_cards"] = accumulated_display_cards
             if content_parts:
                 assistant_msg_insert["content_parts"] = content_parts
             supabase = get_supabase_admin()
