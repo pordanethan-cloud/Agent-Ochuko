@@ -151,123 +151,15 @@ function getDisplayName(preferredName: string | null, userEmail: string | null):
 function getTimeGreeting(hour: number): string {
   if (hour >= 5  && hour < 12) return 'Good morning'
   if (hour >= 12 && hour < 17) return 'Good afternoon'
-  if (hour >= 17 && hour < 21) return 'Good evening'
-  return 'Still up'
-}
-
-/** Suffix appended after the name — encodes visit context, streak, and time cues. */
-function getVisitContext(visitData: VisitData, hour: number): string {
-  const now      = Date.now()
-  const oneDay   = 24 * 60 * 60 * 1000
-  const daysSinceLast = Math.floor((now - visitData.lastVisit) / oneDay)
-  const { visitCount, consecutiveDays } = visitData
-
-  // ── First ever visit ─────────────────────────────────────────────────────
-  if (visitCount === 1) {
-    const opts = [
-      "Glad you're here.",
-      "Let's see what we can do.",
-      'You\'re in the right place.',
-      'Something interesting is about to happen.',
-    ]
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-
-  // ── Long absence (7+ days) ───────────────────────────────────────────────
-  if (daysSinceLast >= 14) {
-    const opts = [
-      'Good to have you back.',
-      'It has been a while. Ready when you are.',
-      'Welcome back. Let\'s get to it.',
-    ]
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-  if (daysSinceLast >= 7) {
-    const opts = [
-      'Been a minute. Good to see you.',
-      'Back after a week — what are we working on?',
-      'Let\'s pick up where we left off.',
-    ]
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-
-  // ── Same-day return (multiple sessions today) ────────────────────────────
-  if (daysSinceLast === 0 && visitCount > 1) {
-    const opts = [
-      'Back again — let\'s continue.',
-      'Straight back to it.',
-      'Picking up where we left off.',
-      'Round two. What\'s next?',
-    ]
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-
-  // ── High streak (daily consistency) ─────────────────────────────────────
-  if (consecutiveDays >= 14) {
-    return `${consecutiveDays} days in a row. That kind of consistency compounds.`
-  }
-  if (consecutiveDays >= 7) {
-    return `${consecutiveDays} days straight. You\'re on a proper streak.`
-  }
-  if (consecutiveDays >= 3) {
-    const opts = [
-      `${consecutiveDays} days running. Don't break the chain.`,
-      `${consecutiveDays} days in a row — momentum is building.`,
-    ]
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-
-  // ── Time-of-day cues ─────────────────────────────────────────────────────
-  if (hour >= 5  && hour < 9)  {
-    const opts = ['Early bird.', 'First light. Good start.', 'Up before the world.']
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-  if (hour >= 9  && hour < 12) {
-    const opts = ['Morning\'s best hours.', 'Good time to get things done.', 'Sharp and ready.']
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-  if (hour >= 12 && hour < 14) {
-    const opts = ['Deep into the midday.', 'Midday focus.', 'Powering through.']
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-  if (hour >= 14 && hour < 17) {
-    const opts = ['Afternoon momentum.', 'Best part of the day.', 'Still going strong.']
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-  if (hour >= 17 && hour < 20) {
-    const opts = ['Evening shift.', 'Work doesn\'t clock out.', 'Into the evening.']
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-  if (hour >= 20 && hour < 22) {
-    const opts = ['Late push.', 'Night mode.', 'The quiet hours.']
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-  if (hour >= 22 || hour < 5) {
-    const opts = ['The quiet hours.', 'Late shift.', 'Good time for deep work.']
-    return opts[Math.floor(Math.random() * opts.length)]
-  }
-
-  return 'Good to have you back.'
+  return 'Good evening'
 }
 
 function getDynamicGreeting(preferredName: string | null, userEmail: string | null): string {
-  const visitData  = updateVisitData()
-  const hour       = new Date().getHours()
-  const firstName  = getDisplayName(preferredName, userEmail)
-  const timeGreet  = getTimeGreeting(hour)
-  const context    = getVisitContext(visitData, hour)
-
-  // Late night: collapsed single-line variant
-  if (hour >= 22 || hour < 5) {
-    return `${timeGreet}, ${firstName}. ${context}`
-  }
-
-  // First ever visit: skip time greeting, lead with welcome
-  if (visitData.visitCount === 1) {
-    return `${context.replace('.', ',')} ${firstName}.`
-  }
-
-  return `${timeGreet}, ${firstName}. ${context}`
+  updateVisitData()
+  const hour      = new Date().getHours()
+  const firstName = getDisplayName(preferredName, userEmail)
+  const greeting  = getTimeGreeting(hour)
+  return `${greeting}, ${firstName}`
 }
 
 // ─── Chat Auto-Title (client-side, no server call) ───────────────────────────
@@ -7197,6 +7089,354 @@ export const Dashboard: React.FC = () => {
 
   }
 
+  const renderInputConsole = (isCentered = false) => (
+    <div className="max-w-2xl w-full mx-auto">
+      <form
+        ref={formRef}
+        onSubmit={handleSend}
+        className={`w-full max-w-full bg-[#0d0f11]/95 border ${
+          isCentered
+            ? 'border-[#262a33] shadow-[0_12px_40px_rgba(0,0,0,0.5)] rounded-2xl p-3 sm:p-4'
+            : 'border-[#1e2025] rounded-xl pt-2 px-2.5 sm:px-3.5 pb-2 shadow-2xl'
+        } flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/25 pointer-events-auto overflow-hidden box-border`}
+      >
+        {/* Uploading progress indicator */}
+        {uploading && (
+          <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 text-brand-text animate-spin shrink-0" />
+              <span className="text-[11px] text-brand-text font-semibold tracking-wide">
+                Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Voice recording status strip */}
+        {voice.isRecording && (
+          <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
+            <div className="flex items-center gap-2.5">
+              <VoiceWaveform volume={voice.currentVolume} />
+              <span className="text-[10px] font-bold text-brand-text tracking-widest uppercase">Listening...</span>
+              {voice.isTranscribing && <Loader2 className="w-3 h-3 text-brand-muted animate-spin" />}
+            </div>
+            <button
+              type="button"
+              onClick={() => voice.stopRecording()}
+              className="text-[9px] text-brand-muted hover:text-red-400 font-bold tracking-widest uppercase transition"
+            >
+              Stop
+            </button>
+          </div>
+        )}
+
+        {/* Claude-style Attached Files Deck — positioned prominently above textarea */}
+        {(attachedFiles.length > 0 || pastedSnippets.length > 0) && (
+          <div className="flex flex-wrap items-center gap-2 px-1 py-1.5 border-b border-white/[0.08] mb-1 max-w-full overflow-x-auto">
+            {attachedFiles.map((file, idx) => {
+              const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)
+              const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE'
+              const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+              const sizeLabel = file.sizeBytes ? (
+                file.sizeBytes > 1024 * 1024 ? `${(file.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                : file.sizeBytes > 1024 ? `${(file.sizeBytes / 1024).toFixed(0)} KB`
+                : `${file.sizeBytes} B`
+              ) : ''
+
+              if (isImg) {
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => setPreviewingFile({
+                      name: file.name,
+                      type: file.type,
+                      url: file.blobUrl,
+                      localObjectUrl: file.localObjectUrl,
+                      sizeBytes: file.sizeBytes
+                    })}
+                    className="relative group w-24 h-18 sm:w-32 sm:h-24 rounded-lg overflow-hidden border border-white/15 bg-[#121418] cursor-pointer hover:border-white/35 transition shrink-0 shadow-md animate-fadeIn select-none"
+                    title="Click to preview image"
+                  >
+                    <img
+                      src={file.localObjectUrl || file.blobUrl}
+                      alt={file.name}
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end p-1.5 pointer-events-none">
+                      <span className="text-[10px] text-white/90 font-medium truncate w-full">{file.name}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
+                        setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
+                      }}
+                      className="absolute top-1 right-1 p-1 rounded-full bg-black/70 hover:bg-red-500 text-white/80 hover:text-white transition shadow z-10"
+                      title="Remove image"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )
+              }
+
+              const extBadgeBg = isPdf ? 'bg-red-500/15 text-red-400 border-red-500/30'
+                : 'bg-white/10 text-white/80 border-white/15'
+
+              return (
+                <div
+                  key={idx}
+                  onClick={() => setPreviewingFile({
+                    name: file.name,
+                    type: file.type,
+                    url: file.blobUrl,
+                    localObjectUrl: file.localObjectUrl,
+                    sizeBytes: file.sizeBytes
+                  })}
+                  className="relative group flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md w-full max-w-full sm:w-auto sm:max-w-[240px] shrink-0 animate-fadeIn select-none"
+                  title="Click to preview file"
+                >
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[9px] tracking-tight border ${extBadgeBg} shrink-0`}>
+                    {ext.slice(0, 4)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{file.name}</p>
+                    <p className="text-[10px] text-white/50 mt-0.5">{sizeLabel || (isPdf ? 'PDF document' : 'File')}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
+                      setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
+                    }}
+                    className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
+                    title="Remove file"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )
+            })}
+            {pastedSnippets.map((snippet) => (
+              <div
+                key={snippet.id}
+                onClick={() => setPreviewingFile({
+                  name: snippet.name,
+                  type: 'text/plain',
+                  content: snippet.content,
+                  sizeBytes: snippet.sizeBytes
+                })}
+                className="relative group flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md w-full max-w-full sm:w-auto sm:max-w-[240px] shrink-0 animate-fadeIn select-none"
+                title="Click to preview pasted text"
+              >
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-[9px] tracking-tight border bg-blue-500/15 text-blue-400 border-blue-500/30 shrink-0">
+                  TXT
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{snippet.name}</p>
+                  <p className="text-[10px] text-white/50 mt-0.5">Pasted snippet</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setPastedSnippets(prev => prev.filter(s => s.id !== snippet.id))
+                  }}
+                  className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
+                  title="Remove pasted text"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Middle Row: Textarea input */}
+        <div className="relative flex-1">
+          <textarea
+            ref={inputRef as any}
+            rows={isCentered ? 2 : 1}
+            value={input}
+            onPaste={handlePaste}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (!uploading) {
+                  formRef.current?.requestSubmit()
+                }
+              }
+            }}
+            onChange={(e) => {
+              setInput(e.target.value)
+              if (voice.isRecording) voice.clearTranscript()
+            }}
+            placeholder={
+              voice.isRecording ? 'Listening...' :
+              mode === 'agent' ? 'Describe your goal — Agent Ochuko will plan and execute it...' :
+              attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
+              pastedSnippets.length > 0 ? (pastedSnippets.length > 1 ? `Add prompt details for ${pastedSnippets.length} pasted snippets...` : 'Add prompt details for the pasted text...') :
+              "Let's talk"
+            }
+            className={`w-full bg-transparent text-[13.5px] sm:text-[14.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5 ${
+              isCentered ? 'min-h-[44px]' : 'h-[22px]'
+            }`}
+          />
+        </div>
+
+        {/* Bottom Row: Attachments status & action buttons */}
+        <div className="flex items-center justify-between gap-1 sm:gap-2 pt-1.5 w-full min-w-0">
+          {/* Left Side: Attach File, Voice, Mode selector */}
+          <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 shrink">
+
+            <button
+              type="button"
+              onClick={handleTriggerUpload}
+              disabled={uploading}
+              className="min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded-lg flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20 shrink-0"
+              title="Attach document or image"
+              aria-label="Attach file"
+            >
+              <Paperclip className="w-4 h-4" />
+            </button>
+
+            {/* Voice mic button */}
+            {voice.isSupported && (
+              <button
+                id="voice-mic-button"
+                type="button"
+                onClick={toggleVoice}
+                disabled={isStreaming}
+                className={`min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 transition-all duration-150 active:scale-95 rounded-lg flex items-center justify-center disabled:opacity-20 shrink-0 ${
+                  voice.isRecording
+                    ? 'text-[#ffffff] voice-pulse-ring'
+                    : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
+                }`}
+                title={voice.isRecording ? 'Stop recording' : 'Voice input'}
+                aria-label="Voice input"
+              >
+                <Mic className="w-4 h-4" />
+              </button>
+            )}
+
+            {/* Mobile & Tablet Compact Mode Selector Button: [Icon Mode ▾] */}
+            <button
+              type="button"
+              onClick={() => setIsModeSheetOpen(true)}
+              className={`md:hidden min-h-[36px] h-9 px-2 xs:px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition duration-150 active:scale-95 select-none shrink-0 ${
+                mode === 'agent'
+                  ? 'bg-brand-accent/20 border-brand-accent/40 text-brand-accent shadow-sm shadow-brand-accent/20'
+                  : 'bg-white/[0.06] border-white/15 text-white shadow-sm'
+              }`}
+              aria-label={`Current mode: ${mode}. Tap to change mode`}
+              title="Change interaction mode"
+            >
+              {mode === 'agent' ? (
+                <Bot className="w-3.5 h-3.5 text-brand-accent shrink-0" />
+              ) : mode === 'think' ? (
+                <Brain className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              ) : mode === 'solve' ? (
+                <Cpu className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+              ) : (
+                <MessageSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              )}
+              <span className="capitalize font-medium text-[11px] tracking-wide hidden xs:inline">
+                {mode}
+              </span>
+              <ChevronDown className="w-3 h-3 text-[#8e95a2] shrink-0" />
+            </button>
+
+            {/* Desktop Mode Selector Pill Group (Only on md / desktop where width >= 768px allows it) */}
+            <div className="hidden md:flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 shrink-0 select-none">
+              {([
+                { id: 'think', label: 'Think', icon: Brain },
+                { id: 'solve', label: 'Solve', icon: Cpu },
+                { id: 'discuss', label: 'Discuss', icon: MessageSquare },
+                { id: 'agent', label: 'Agent', icon: Bot },
+              ] as const).map(({ id, label, icon: Icon }) => {
+                const active = mode === id
+                const isAgent = id === 'agent'
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => handleModeChange(id)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-bold transition-all duration-150 tracking-wider uppercase ${
+                      active
+                        ? isAgent
+                          ? 'bg-brand-accent/25 text-brand-accent border border-brand-accent/40 shadow-sm shadow-brand-accent/20'
+                          : 'bg-[#ffffff]/8 text-[#ffffff] shadow-sm'
+                        : isAgent
+                        ? 'text-brand-accent/70 hover:text-brand-accent hover:bg-brand-accent/10'
+                        : 'text-brand-muted hover:text-brand-text/75'
+                    }`}
+                  >
+                    <Icon className="w-3 h-3" />
+                    <span>{label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Right Side: Stop/Send Actions */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isStreaming && (
+              <button
+                type="button"
+                onClick={handleStop}
+                className="min-h-[36px] min-w-[36px] h-9 w-9 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
+                aria-label="Stop generation"
+              >
+                <Square className="w-3.5 h-3.5 fill-red-400" />
+              </button>
+            )}
+
+            <button
+              type="submit"
+              disabled={uploading || (!input.trim() && attachedFiles.length === 0 && pastedSnippets.length === 0)}
+              className="min-h-[36px] h-9 px-2.5 xs:px-3.5 py-1.5 bg-brand-text text-brand-bg text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow shrink-0"
+              aria-label="Send message"
+            >
+              {uploading ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span className="text-[11px] hidden xs:inline">Uploading...</span>
+                </>
+              ) : (
+                <>
+                  <span className="hidden xs:inline">Send</span>
+                  <Send className="w-3.5 h-3.5 shrink-0" />
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={handleFileChange}
+          accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.docx,.txt,.html,.css,.js,.ts,.tsx,.jsx,.java,.py,.c,.cpp,.h,.cs,.sh,.json,.md,.yaml,.yml,.xml,.sql,.csv,.rs,.go,.rb,.php,.kt,.gradle,.properties,.ipynb,.ini,.cfg,.bat,.cmd,.ps1"
+          className="hidden"
+        />
+        {!voice.isRecording && voice.isTranscribing && (
+          <div className="input-loading-bar" />
+        )}
+      </form>
+
+      {/* Mysterious One-Line Micro-Footer */}
+      <div className="pt-2 pb-0.5 text-center select-none pointer-events-none">
+        <p className="text-[11px] font-mono text-brand-muted/40 tracking-[0.22em] uppercase transition-colors duration-300">
+          Beyond the prompt lies the pattern.
+        </p>
+      </div>
+    </div>
+  )
+
   return (
 
     <div
@@ -8028,71 +8268,78 @@ export const Dashboard: React.FC = () => {
 
           ) : messages.length === 0 ? (
 
-            <div className="h-full flex flex-col items-center justify-center max-w-lg mx-auto text-center space-y-7">
+            <div className="min-h-full flex flex-col items-center justify-center max-w-2xl mx-auto px-2 sm:px-4 w-full py-8 sm:py-12 my-auto">
 
-              <div className="w-16 h-16 bg-brand-surface border border-[#1e2025] rounded-lg overflow-hidden shadow-xl relative group">
+              <div className="flex flex-col items-center text-center space-y-4 mb-6 sm:mb-8">
 
-                <div className="absolute inset-0 bg-[#ffffff]/4 opacity-0 group-hover:opacity-100 transition duration-500" />
+                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
 
-                <img
+                  <div className="absolute inset-0 bg-[#ffffff]/4 opacity-0 group-hover:opacity-100 transition duration-500" />
 
-                  src="/favicon.png"
+                  <img
 
-                  alt="Agent Ochuko"
+                    src="/favicon.png"
 
-                  className="w-full h-full object-cover transition duration-500 group-hover:scale-105"
+                    alt="Agent Ochuko"
 
-                  fetchPriority="high"
+                    className="w-full h-full object-cover transition duration-500 group-hover:scale-105"
 
-                />
+                    fetchPriority="high"
+
+                  />
+
+                </div>
+
+                <div className="space-y-2">
+
+                  <div className="flex items-center gap-2 justify-center">
+                    <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
+                  </div>
+
+                  {isEditingNickname && (
+                    <div className="flex items-center gap-2 justify-center pt-1">
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        value={nicknameInput}
+                        onChange={(e) => setNicknameInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            setPreferredName(nicknameInput.trim())
+                            setIsEditingNickname(false)
+                          } else if (e.key === 'Escape') {
+                            setIsEditingNickname(false)
+                          }
+                        }}
+                        className="bg-[#1e2025] border border-[#ffffff]/20 rounded-lg px-2.5 py-1 text-sm text-brand-text focus:outline-none focus:border-brand-accent w-36"
+                        placeholder="Enter nickname"
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => {
+                          setPreferredName(nicknameInput.trim())
+                          setIsEditingNickname(false)
+                        }}
+                        className="p-1.5 rounded-lg bg-brand-accent/20 hover:bg-brand-accent/30 text-brand-accent transition"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setIsEditingNickname(false)}
+                        className="p-1.5 rounded-lg hover:bg-white/10 text-brand-muted transition"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                </div>
 
               </div>
 
-              <div className="space-y-3">
-
-                <div className="flex items-center gap-2 justify-center">
-                  <h2 className="text-[21px] font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
-                </div>
-
-                {isEditingNickname && (
-                  <div className="flex items-center gap-2 justify-center">
-                    <input
-                      ref={renameInputRef}
-                      type="text"
-                      value={nicknameInput}
-                      onChange={(e) => setNicknameInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          setPreferredName(nicknameInput.trim())
-                          setIsEditingNickname(false)
-                        } else if (e.key === 'Escape') {
-                          setIsEditingNickname(false)
-                        }
-                      }}
-                      className="bg-[#1e2025] border border-[#ffffff]/20 rounded px-2 py-1 text-sm text-brand-text focus:outline-none focus:border-brand-accent w-32"
-                      placeholder="Enter nickname"
-                      autoFocus
-                    />
-                    <button
-                      onClick={() => {
-                        setPreferredName(nicknameInput.trim())
-                        setIsEditingNickname(false)
-                      }}
-                      className="p-1 rounded bg-brand-accent/20 hover:bg-brand-accent/30 text-brand-accent transition"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => setIsEditingNickname(false)}
-                      className="p-1 rounded hover:bg-white/10 text-brand-muted transition"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-
-
-
+              {/* Claude-style Centered Input Console in New Chat */}
+              <div className="w-full">
+                {renderInputConsole(true)}
               </div>
 
             </div>
@@ -8891,352 +9138,15 @@ export const Dashboard: React.FC = () => {
 
         </div>
 
-        {/* Pinned Input Area (Unified Console Card) — sits as a natural flex child below messages, glued to keyboard on mobile */}
-        <div
-          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0.5rem))' }}
-          className="shrink-0 w-full px-2 sm:px-4 md:px-6 pt-1.5 sm:pt-2 z-20"
-        >
-          <div className="max-w-2xl w-full mx-auto">
-            <form
-              ref={formRef}
-              onSubmit={handleSend}
-              className="w-full max-w-full bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-2.5 sm:px-3.5 pb-2 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/20 pointer-events-auto overflow-hidden box-border"
-            >
-
-            {/* Uploading progress indicator */}
-            {uploading && (
-              <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
-                <div className="flex items-center gap-2">
-                  <Loader2 className="w-3.5 h-3.5 text-brand-text animate-spin shrink-0" />
-                  <span className="text-[11px] text-brand-text font-semibold tracking-wide">
-                    Uploading to secure storage... {uploadProgress !== null ? `${uploadProgress}%` : ''}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* Voice recording status strip */}
-            {voice.isRecording && (
-              <div className="flex items-center justify-between p-2 bg-[#0d0f11]/80 border border-[#1e2025]/50 rounded-lg animate-pulse mb-1">
-                <div className="flex items-center gap-2.5">
-                  <VoiceWaveform volume={voice.currentVolume} />
-                  <span className="text-[10px] font-bold text-brand-text tracking-widest uppercase">Listening...</span>
-                  {voice.isTranscribing && <Loader2 className="w-3 h-3 text-brand-muted animate-spin" />}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => voice.stopRecording()}
-                  className="text-[9px] text-brand-muted hover:text-red-400 font-bold tracking-widest uppercase transition"
-                >
-                  Stop
-                </button>
-              </div>
-            )}
-
-            {/* Claude-style Attached Files Deck — positioned prominently above textarea */}
-            {(attachedFiles.length > 0 || pastedSnippets.length > 0) && (
-              <div className="flex flex-wrap items-center gap-2 px-1 py-1.5 border-b border-white/[0.08] mb-1 max-w-full overflow-x-auto">
-                {attachedFiles.map((file, idx) => {
-                  const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)
-                  const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE'
-                  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-                  const sizeLabel = file.sizeBytes ? (
-                    file.sizeBytes > 1024 * 1024 ? `${(file.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
-                    : file.sizeBytes > 1024 ? `${(file.sizeBytes / 1024).toFixed(0)} KB`
-                    : `${file.sizeBytes} B`
-                  ) : ''
-
-                  if (isImg) {
-                    return (
-                      <div
-                        key={idx}
-                        onClick={() => setPreviewingFile({
-                          name: file.name,
-                          type: file.type,
-                          url: file.blobUrl,
-                          localObjectUrl: file.localObjectUrl,
-                          sizeBytes: file.sizeBytes
-                        })}
-                        className="relative group w-24 h-18 sm:w-32 sm:h-24 rounded-lg overflow-hidden border border-white/15 bg-[#121418] cursor-pointer hover:border-white/35 transition shrink-0 shadow-md animate-fadeIn select-none"
-                        title="Click to preview image"
-                      >
-                        <img
-                          src={file.localObjectUrl || file.blobUrl}
-                          alt={file.name}
-                          className="w-full h-full object-cover"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end p-1.5 pointer-events-none">
-                          <span className="text-[10px] text-white/90 font-medium truncate w-full">{file.name}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
-                            setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
-                          }}
-                          className="absolute top-1 right-1 p-1 rounded-full bg-black/70 hover:bg-red-500 text-white/80 hover:text-white transition shadow z-10"
-                          title="Remove image"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )
-                  }
-
-                  const extBadgeBg = isPdf ? 'bg-red-500/15 text-red-400 border-red-500/30'
-                    : 'bg-white/10 text-white/80 border-white/15'
-
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => setPreviewingFile({
-                        name: file.name,
-                        type: file.type,
-                        url: file.blobUrl,
-                        localObjectUrl: file.localObjectUrl,
-                        sizeBytes: file.sizeBytes
-                      })}
-                      className="relative group flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md w-full max-w-full sm:w-auto sm:max-w-[240px] shrink-0 animate-fadeIn select-none"
-                      title="Click to preview file"
-                    >
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[9px] tracking-tight border ${extBadgeBg} shrink-0`}>
-                        {ext.slice(0, 4)}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{file.name}</p>
-                        <p className="text-[10px] text-white/50 mt-0.5">{sizeLabel || (isPdf ? 'PDF document' : 'File')}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
-                          setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
-                        }}
-                        className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
-                        title="Remove file"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )
-                })}
-                {pastedSnippets.map((snippet) => (
-                  <div
-                    key={snippet.id}
-                    onClick={() => setPreviewingFile({
-                      name: snippet.name,
-                      type: 'text/plain',
-                      content: snippet.content,
-                      sizeBytes: snippet.sizeBytes
-                    })}
-                    className="relative group flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md w-full max-w-full sm:w-auto sm:max-w-[240px] shrink-0 animate-fadeIn select-none"
-                    title="Click to preview pasted text"
-                  >
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-[9px] tracking-tight border bg-blue-500/15 text-blue-400 border-blue-500/30 shrink-0">
-                      TXT
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{snippet.name}</p>
-                      <p className="text-[10px] text-white/50 mt-0.5">Pasted snippet</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setPastedSnippets(prev => prev.filter(s => s.id !== snippet.id))
-                      }}
-                      className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
-                      title="Remove pasted text"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Middle Row: Textarea input */}
-            <div className="relative flex-1">
-              <textarea
-                ref={inputRef as any}
-                rows={1}
-                value={input}
-                onPaste={handlePaste}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    if (!uploading) {
-                      formRef.current?.requestSubmit()
-                    }
-                  }
-                }}
-                onChange={(e) => {
-                  setInput(e.target.value)
-                  if (voice.isRecording) voice.clearTranscript()
-                }}
-                placeholder={
-                  voice.isRecording ? 'Listening...' :
-                  mode === 'agent' ? 'Describe your goal — Agent Ochuko will plan and execute it...' :
-                  attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
-                  pastedSnippets.length > 0 ? (pastedSnippets.length > 1 ? `Add prompt details for ${pastedSnippets.length} pasted snippets...` : 'Add prompt details for the pasted text...') :
-                  "Let's talk"
-                }
-                className="w-full h-[22px] bg-transparent text-[13.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5"
-              />
-            </div>
-
-            {/* Bottom Row: Attachments status & action buttons */}
-            <div className="flex items-center justify-between gap-1 sm:gap-2 pt-1.5 w-full min-w-0">
-              {/* Left Side: Attach File, Voice, Mode selector */}
-              <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 shrink">
-
-                <button
-                  type="button"
-                  onClick={handleTriggerUpload}
-                  disabled={uploading}
-                  className="min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded-lg flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20 shrink-0"
-                  title="Attach document or image"
-                  aria-label="Attach file"
-                >
-                  <Paperclip className="w-4 h-4" />
-                </button>
-
-                {/* Voice mic button */}
-                {voice.isSupported && (
-                  <button
-                    id="voice-mic-button"
-                    type="button"
-                    onClick={toggleVoice}
-                    disabled={isStreaming}
-                    className={`min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 transition-all duration-150 active:scale-95 rounded-lg flex items-center justify-center disabled:opacity-20 shrink-0 ${
-                      voice.isRecording
-                        ? 'text-[#ffffff] voice-pulse-ring'
-                        : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
-                    }`}
-                    title={voice.isRecording ? 'Stop recording' : 'Voice input'}
-                    aria-label="Voice input"
-                  >
-                    <Mic className="w-4 h-4" />
-                  </button>
-                )}
-
-                {/* Mobile & Tablet Compact Mode Selector Button: [Icon Mode ▾] */}
-                <button
-                  type="button"
-                  onClick={() => setIsModeSheetOpen(true)}
-                  className={`md:hidden min-h-[36px] h-9 px-2 xs:px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition duration-150 active:scale-95 select-none shrink-0 ${
-                    mode === 'agent'
-                      ? 'bg-brand-accent/20 border-brand-accent/40 text-brand-accent shadow-sm shadow-brand-accent/20'
-                      : 'bg-white/[0.06] border-white/15 text-white shadow-sm'
-                  }`}
-                  aria-label={`Current mode: ${mode}. Tap to change mode`}
-                  title="Change interaction mode"
-                >
-                  {mode === 'agent' ? (
-                    <Bot className="w-3.5 h-3.5 text-brand-accent shrink-0" />
-                  ) : mode === 'think' ? (
-                    <Brain className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                  ) : mode === 'solve' ? (
-                    <Cpu className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                  ) : (
-                    <MessageSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  )}
-                  <span className="capitalize font-medium text-[11px] tracking-wide hidden xs:inline">
-                    {mode}
-                  </span>
-                  <ChevronDown className="w-3 h-3 text-[#8e95a2] shrink-0" />
-                </button>
-
-                {/* Desktop Mode Selector Pill Group (Only on md / desktop where width >= 768px allows it) */}
-                <div className="hidden md:flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 shrink-0 select-none">
-                  {([
-                    { id: 'think', label: 'Think', icon: Brain },
-                    { id: 'solve', label: 'Solve', icon: Cpu },
-                    { id: 'discuss', label: 'Discuss', icon: MessageSquare },
-                    { id: 'agent', label: 'Agent', icon: Bot },
-                  ] as const).map(({ id, label, icon: Icon }) => {
-                    const active = mode === id
-                    const isAgent = id === 'agent'
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => handleModeChange(id)}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-bold transition-all duration-150 tracking-wider uppercase ${
-                          active
-                            ? isAgent
-                              ? 'bg-brand-accent/25 text-brand-accent border border-brand-accent/40 shadow-sm shadow-brand-accent/20'
-                              : 'bg-[#ffffff]/8 text-[#ffffff] shadow-sm'
-                            : isAgent
-                            ? 'text-brand-accent/70 hover:text-brand-accent hover:bg-brand-accent/10'
-                            : 'text-brand-muted hover:text-brand-text/75'
-                        }`}
-                      >
-                        <Icon className="w-3 h-3" />
-                        <span>{label}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* Right Side: Stop/Send Actions */}
-              <div className="flex items-center gap-1.5 shrink-0">
-                {isStreaming && (
-                  <button
-                    type="button"
-                    onClick={handleStop}
-                    className="min-h-[36px] min-w-[36px] h-9 w-9 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
-                    aria-label="Stop generation"
-                  >
-                    <Square className="w-3.5 h-3.5 fill-red-400" />
-                  </button>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={uploading || (!input.trim() && attachedFiles.length === 0 && pastedSnippets.length === 0)}
-                  className="min-h-[36px] h-9 px-2.5 xs:px-3.5 py-1.5 bg-brand-text text-brand-bg text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow shrink-0"
-                  aria-label="Send message"
-                >
-                  {uploading ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                      <span className="text-[11px] hidden xs:inline">Uploading...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="hidden xs:inline">Send</span>
-                      <Send className="w-3.5 h-3.5 shrink-0" />
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              onChange={handleFileChange}
-              accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.docx,.txt,.html,.css,.js,.ts,.tsx,.jsx,.java,.py,.c,.cpp,.h,.cs,.sh,.json,.md,.yaml,.yml,.xml,.sql,.csv,.rs,.go,.rb,.php,.kt,.gradle,.properties,.ipynb,.ini,.cfg,.bat,.cmd,.ps1"
-              className="hidden"
-            />
-            {!voice.isRecording && voice.isTranscribing && (
-              <div className="input-loading-bar" />
-            )}
-          </form>
-
-          {/* Mysterious One-Line Micro-Footer */}
-          <div className="pt-2 pb-0.5 text-center select-none pointer-events-none">
-            <p className="text-[11px] font-mono text-brand-muted/40 tracking-[0.22em] uppercase transition-colors duration-300">
-              Beyond the prompt lies the pattern.
-            </p>
+        {/* Pinned Input Area — only displayed when conversation has active messages or history is loading for existing chat (Claude style) */}
+        {(messages.length > 0 || (isFetchingHistory && activeConversationId !== '00000000-0000-0000-0000-000000000000')) && (
+          <div
+            style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0.5rem))' }}
+            className="shrink-0 w-full px-2 sm:px-4 md:px-6 pt-1.5 sm:pt-2 z-20"
+          >
+            {renderInputConsole(false)}
           </div>
-          </div>
-        </div>
+        )}
 
       </div>
 
