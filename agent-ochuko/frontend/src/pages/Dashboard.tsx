@@ -3888,10 +3888,19 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     const handleResize = () => {
-      setIsDesktop(window.innerWidth >= 1024)
+      const newIsDesktop = window.innerWidth >= 1024
+      setIsDesktop(newIsDesktop)
+      if (!newIsDesktop) {
+        setIsSidebarOpen(false)
+        setIsSidebarHovered(false)
+      }
     }
     window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
+    window.addEventListener('orientationchange', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      window.removeEventListener('orientationchange', handleResize)
+    }
   }, [])
 
   // Update dynamic greeting when user data changes
@@ -8885,13 +8894,13 @@ export const Dashboard: React.FC = () => {
         {/* Pinned Input Area (Unified Console Card) — sits as a natural flex child below messages, glued to keyboard on mobile */}
         <div
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0.5rem))' }}
-          className="shrink-0 w-full px-2 sm:px-4 md:px-8 pt-1.5 sm:pt-2 md:pt-3 z-20"
+          className="shrink-0 w-full px-2 sm:px-4 md:px-6 pt-1.5 sm:pt-2 z-20"
         >
-          <div className="max-w-2xl mx-auto">
+          <div className="max-w-2xl w-full mx-auto">
             <form
               ref={formRef}
               onSubmit={handleSend}
-              className="bg-[#0d0f11]/95 border border-[#1e2025] rounded-lg pt-2 px-3 pb-1 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/15 pointer-events-auto"
+              className="w-full max-w-full bg-[#0d0f11]/95 border border-[#1e2025] rounded-xl pt-2 px-2.5 sm:px-3.5 pb-2 shadow-2xl flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/20 pointer-events-auto overflow-hidden box-border"
             >
 
             {/* Uploading progress indicator */}
@@ -8926,7 +8935,7 @@ export const Dashboard: React.FC = () => {
 
             {/* Claude-style Attached Files Deck — positioned prominently above textarea */}
             {(attachedFiles.length > 0 || pastedSnippets.length > 0) && (
-              <div className="flex flex-wrap items-center gap-2.5 px-1 py-1.5 border-b border-white/[0.08] mb-1">
+              <div className="flex flex-wrap items-center gap-2 px-1 py-1.5 border-b border-white/[0.08] mb-1 max-w-full overflow-x-auto">
                 {attachedFiles.map((file, idx) => {
                   const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)
                   const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE'
@@ -8948,7 +8957,7 @@ export const Dashboard: React.FC = () => {
                           localObjectUrl: file.localObjectUrl,
                           sizeBytes: file.sizeBytes
                         })}
-                        className="relative group w-28 h-20 sm:w-32 sm:h-24 rounded-lg overflow-hidden border border-white/15 bg-[#121418] cursor-pointer hover:border-white/35 transition shrink-0 shadow-md animate-fadeIn select-none"
+                        className="relative group w-24 h-18 sm:w-32 sm:h-24 rounded-lg overflow-hidden border border-white/15 bg-[#121418] cursor-pointer hover:border-white/35 transition shrink-0 shadow-md animate-fadeIn select-none"
                         title="Click to preview image"
                       >
                         <img
@@ -8988,7 +8997,7 @@ export const Dashboard: React.FC = () => {
                         localObjectUrl: file.localObjectUrl,
                         sizeBytes: file.sizeBytes
                       })}
-                      className="relative group flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
+                      className="relative group flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md w-full max-w-full sm:w-auto sm:max-w-[240px] shrink-0 animate-fadeIn select-none"
                       title="Click to preview file"
                     >
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[9px] tracking-tight border ${extBadgeBg} shrink-0`}>
@@ -9022,7 +9031,7 @@ export const Dashboard: React.FC = () => {
                       content: snippet.content,
                       sizeBytes: snippet.sizeBytes
                     })}
-                    className="relative group flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
+                    className="relative group flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md w-full max-w-full sm:w-auto sm:max-w-[240px] shrink-0 animate-fadeIn select-none"
                     title="Click to preview pasted text"
                   >
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-[9px] tracking-tight border bg-blue-500/15 text-blue-400 border-blue-500/30 shrink-0">
@@ -9079,15 +9088,15 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Bottom Row: Attachments status & action buttons */}
-            <div className="flex items-center justify-between pt-2">
+            <div className="flex items-center justify-between gap-1 sm:gap-2 pt-1.5 w-full min-w-0">
               {/* Left Side: Attach File, Voice, Mode selector */}
-              <div className="flex items-center gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 shrink">
 
                 <button
                   type="button"
                   onClick={handleTriggerUpload}
                   disabled={uploading}
-                  className="min-h-[36px] min-w-[36px] p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded-lg flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20"
+                  className="min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded-lg flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20 shrink-0"
                   title="Attach document or image"
                   aria-label="Attach file"
                 >
@@ -9101,7 +9110,7 @@ export const Dashboard: React.FC = () => {
                     type="button"
                     onClick={toggleVoice}
                     disabled={isStreaming}
-                    className={`min-h-[36px] min-w-[36px] p-1.5 transition-all duration-150 active:scale-95 rounded-lg flex items-center justify-center disabled:opacity-20 ${
+                    className={`min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 transition-all duration-150 active:scale-95 rounded-lg flex items-center justify-center disabled:opacity-20 shrink-0 ${
                       voice.isRecording
                         ? 'text-[#ffffff] voice-pulse-ring'
                         : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
@@ -9113,11 +9122,11 @@ export const Dashboard: React.FC = () => {
                   </button>
                 )}
 
-                {/* Mobile Compact Mode Selector Button: [Icon Mode ▾] */}
+                {/* Mobile & Tablet Compact Mode Selector Button: [Icon Mode ▾] */}
                 <button
                   type="button"
                   onClick={() => setIsModeSheetOpen(true)}
-                  className={`sm:hidden min-h-[36px] px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition duration-150 active:scale-95 select-none ${
+                  className={`md:hidden min-h-[36px] h-9 px-2 xs:px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition duration-150 active:scale-95 select-none shrink-0 ${
                     mode === 'agent'
                       ? 'bg-brand-accent/20 border-brand-accent/40 text-brand-accent shadow-sm shadow-brand-accent/20'
                       : 'bg-white/[0.06] border-white/15 text-white shadow-sm'
@@ -9134,14 +9143,14 @@ export const Dashboard: React.FC = () => {
                   ) : (
                     <MessageSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                   )}
-                  <span className="capitalize font-medium text-[11px] tracking-wide">
+                  <span className="capitalize font-medium text-[11px] tracking-wide hidden xs:inline">
                     {mode}
                   </span>
                   <ChevronDown className="w-3 h-3 text-[#8e95a2] shrink-0" />
                 </button>
 
-                {/* Desktop Mode Selector Pill Group */}
-                <div className="hidden sm:flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 ml-1 select-none">
+                {/* Desktop Mode Selector Pill Group (Only on md / desktop where width >= 768px allows it) */}
+                <div className="hidden md:flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 shrink-0 select-none">
                   {([
                     { id: 'think', label: 'Think', icon: Brain },
                     { id: 'solve', label: 'Solve', icon: Cpu },
@@ -9174,12 +9183,12 @@ export const Dashboard: React.FC = () => {
               </div>
 
               {/* Right Side: Stop/Send Actions */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 shrink-0">
                 {isStreaming && (
                   <button
                     type="button"
                     onClick={handleStop}
-                    className="min-h-[36px] min-w-[36px] w-9 h-9 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
+                    className="min-h-[36px] min-w-[36px] h-9 w-9 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
                     aria-label="Stop generation"
                   >
                     <Square className="w-3.5 h-3.5 fill-red-400" />
@@ -9189,18 +9198,18 @@ export const Dashboard: React.FC = () => {
                 <button
                   type="submit"
                   disabled={uploading || (!input.trim() && attachedFiles.length === 0 && pastedSnippets.length === 0)}
-                  className="min-h-[36px] px-3.5 py-1.5 bg-brand-text text-brand-bg text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow shrink-0"
+                  className="min-h-[36px] h-9 px-2.5 xs:px-3.5 py-1.5 bg-brand-text text-brand-bg text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow shrink-0"
                   aria-label="Send message"
                 >
                   {uploading ? (
                     <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span className="text-[11px]">Uploading...</span>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                      <span className="text-[11px] hidden xs:inline">Uploading...</span>
                     </>
                   ) : (
                     <>
                       <span className="hidden xs:inline">Send</span>
-                      <Send className="w-3 h-3" />
+                      <Send className="w-3.5 h-3.5 shrink-0" />
                     </>
                   )}
                 </button>
