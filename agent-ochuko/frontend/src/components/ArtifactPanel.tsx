@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { FileText, X, Download, Code2, Eye, Globe, Monitor, Smartphone } from 'lucide-react'
+import { FileText, X, Download, Code2, Eye, Globe, Monitor, Smartphone, Copy, Check } from 'lucide-react'
 
 export interface ArtifactFile {
   name: string
@@ -28,31 +28,59 @@ function kindOf(file: ArtifactFile): 'html' | 'svg' | 'md' | 'csv' | 'code' {
   if (t === 'image/svg+xml' || n.endsWith('.svg')) return 'svg'
   if (t === 'text/html' || t === 'html' || n.endsWith('.html') || n.endsWith('.htm')) return 'html'
   if (n.endsWith('.md') || n.endsWith('.markdown') || t === 'text/markdown') return 'md'
-  if (n.endsWith('.csv') || n.endsWith('.tsv') || t === 'text/csv') return 'csv'
+  if (n.endsWith('.csv') || t === 'text/csv') return 'csv'
   return 'code'
 }
 
+function parseCsv(raw: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let cell = ''
+  let inQuotes = false
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]
+    if (c === '"') {
+      if (inQuotes && raw[i + 1] === '"') { cell += '"'; i++ }
+      else { inQuotes = !inQuotes }
+    } else if (c === ',' && !inQuotes) {
+      row.push(cell.trim())
+      cell = ''
+    } else if ((c === '\n' || c === '\r') && !inQuotes) {
+      if (c === '\r' && raw[i + 1] === '\n') i++
+      row.push(cell.trim())
+      if (row.some(Boolean)) rows.push(row)
+      row = []
+      cell = ''
+    } else {
+      cell += c
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell.trim())
+    if (row.some(Boolean)) rows.push(row)
+  }
+  return rows
+}
+
 function CsvTable({ text }: { text: string }) {
-  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim()).slice(0, 200)
-  if (lines.length === 0) return <p className="text-xs text-white/40 p-4">Empty file.</p>
-  const delim = lines[0].includes('\t') ? '\t' : ','
-  const rows = lines.map(l => l.split(delim).map(c => c.trim()))
-  const header = rows[0]
+  const lines = parseCsv(text)
+  if (!lines.length) return <p className="text-white/40 text-xs p-4">Empty CSV</p>
+  const [header, ...rows] = lines.slice(0, 200)
   return (
-    <div className="overflow-auto h-full">
-      <table className="w-full text-[12px] border-collapse">
-        <thead>
-          <tr className="bg-white/[0.04] sticky top-0">
-            {header.map((h, i) => (
-              <th key={i} className="text-left font-semibold text-white/70 px-3 py-2 border-b border-white/10 whitespace-nowrap">{h}</th>
+    <div className="overflow-auto max-h-full">
+      <table className="w-full text-left text-[11px] font-mono border-collapse">
+        <thead className="bg-white/5 sticky top-0 border-b border-white/10">
+          <tr>
+            {header.map((col, i) => (
+              <th key={i} className="px-3 py-2 text-white/80 font-bold whitespace-nowrap">{col || `Col ${i + 1}`}</th>
             ))}
           </tr>
         </thead>
-        <tbody>
-          {rows.slice(1).map((r, ri) => (
-            <tr key={ri} className="hover:bg-white/[0.02]">
-              {header.map((_, ci) => (
-                <td key={ci} className="px-3 py-1.5 text-white/60 border-b border-white/[0.05] whitespace-nowrap max-w-[240px] truncate">{r[ci] ?? ''}</td>
+        <tbody className="divide-y divide-white/5">
+          {rows.map((r, i) => (
+            <tr key={i} className="hover:bg-white/[0.02]">
+              {r.map((cell, j) => (
+                <td key={j} className="px-3 py-1.5 text-white/70 whitespace-nowrap max-w-[260px] truncate">{cell}</td>
               ))}
             </tr>
           ))}
@@ -71,6 +99,7 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose,
   const [tab, setTab] = useState<'render' | 'code'>('render')
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop')
+  const [copied, setCopied] = useState(false)
   const dragging = useRef(false)
 
   const startDrag = useCallback((e: React.MouseEvent) => {
@@ -102,6 +131,56 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose,
   const text = content ?? file.content ?? ''
   const fileUrl = file.localObjectUrl || file.url
 
+  const handleCopy = async () => {
+    let toCopy = text
+    if (!toCopy && fileUrl) {
+      try {
+        const res = await fetch(fileUrl)
+        toCopy = await res.text()
+      } catch (err) {
+        console.warn('Failed to fetch file text for copy:', err)
+      }
+    }
+    if (toCopy) {
+      await navigator.clipboard.writeText(toCopy)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  const handleDownload = async () => {
+    try {
+      let blob: Blob
+      if (text) {
+        blob = new Blob([text], { type: file.type || 'text/plain;charset=utf-8' })
+      } else if (fileUrl) {
+        const res = await fetch(fileUrl)
+        blob = await res.blob()
+      } else {
+        return
+      }
+      const safeName = file.name ? file.name.split('/').pop()?.split('\\').pop() || file.name : 'download'
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = safeName
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+    } catch (err) {
+      console.warn('Direct download failed, falling back to direct link:', err)
+      if (fileUrl) {
+        const a = document.createElement('a')
+        a.href = fileUrl
+        a.download = file.name ? file.name.split('/').pop()?.split('\\').pop() || file.name : 'download'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+      }
+    }
+  }
+
   return (
     <div
       className="fixed top-0 right-0 h-full bg-[#0d0f11] border-l border-white/10 z-[100] flex flex-col animate-[slideInRight_0.2s_ease-out] max-md:w-full"
@@ -128,6 +207,18 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose,
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={handleCopy}
+            title={copied ? "Copied to clipboard!" : "Copy content"}
+            className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
+          >
+            {copied ? (
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
+          </button>
           {onPublish && (
             <button
               type="button"
@@ -138,17 +229,15 @@ export function ArtifactPanel({ file, content, loading, renderMarkdown, onClose,
               <Globe className="w-3.5 h-3.5" />
             </button>
           )}
-          {fileUrl && (
-            <a
-              href={fileUrl}
-              download={file.name}
-              target="_blank"
-              rel="noreferrer"
-              title="Download"
+          {(text || fileUrl) && (
+            <button
+              type="button"
+              onClick={handleDownload}
+              title="Download file"
               className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
             >
               <Download className="w-3.5 h-3.5" />
-            </a>
+            </button>
           )}
           <button
             type="button"

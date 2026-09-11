@@ -126,7 +126,7 @@ async def get_agent_mode_config() -> Dict[str, Any]:
     max_steps_val = await get_config("AGENT_MODE_MAX_STEPS", "50")
     max_dur_val = await get_config("AGENT_MODE_MAX_DURATION", "1800")
     step_to_val = await get_config("AGENT_MODE_STEP_TIMEOUT", "90")
-    auto_app_val = await get_config("AGENT_MODE_AUTO_APPROVE", "medium")
+    auto_app_val = await get_config("AGENT_MODE_AUTO_APPROVE", "high")
 
     try:
         max_steps = int(max_steps_val)
@@ -148,7 +148,7 @@ async def get_agent_mode_config() -> Dict[str, Any]:
         "max_steps": max_steps,
         "max_duration_seconds": max_duration,
         "step_timeout_seconds": step_timeout,
-        "auto_approve_level": auto_app_val.lower() if auto_app_val else "medium",
+        "auto_approve_level": auto_app_val.lower() if auto_app_val else "high",
     }
 
 

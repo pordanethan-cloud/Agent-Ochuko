@@ -46,12 +46,16 @@ _THINKING_INSTRUCTION = (
     "\n\nREASONING MANDATE (THINK MODE):\n"
     "Before formulating your response, perform thorough step-by-step reasoning enclosed in <thinking>...</thinking> tags:\n"
     "<thinking>\n"
-    "Break down the user's intent, evaluate potential edge cases, fact check assumptions, and outline your approach.\n"
+    "Break down the user's intent, evaluate potential edge cases, fact check assumptions, identify which tools to invoke, and outline your execution strategy.\n"
     "</thinking>\n"
-    "CRITICAL RULES:\n"
-    "1. After the closing </thinking> tag, you MUST ALWAYS provide the complete, detailed, polished final answer directly to the user.\n"
-    "2. If you realize during thinking that you need live web information or code execution, immediately trigger the appropriate function call tool.\n"
-    "3. NEVER terminate your stream after </thinking> without writing out the full synthesized response."
+    "CRITICAL AUTONOMOUS TOOL EXECUTION MANDATE:\n"
+    "1. DO NOT output passive instructions telling the user what steps to take in the app UI, how to click buttons, or ask them to manually run commands or approve actions when you have tools available. YOU ARE AN AUTONOMOUS AGENT: intelligently decide which tools are needed and execute them directly.\n"
+    "2. If computation, data parsing, algorithmic simulation, financial modeling, or graphing is required: immediately call `execute_code` in the sandbox and deliver real computed figures and outputs — NEVER return dead code snippets for the user to run themselves.\n"
+    "3. If real-time facts, comparative benchmarks, or market info are needed: immediately call `search_web` or `deep_research`.\n"
+    "4. If interactive UI widgets, calculators, or dynamic tables are needed: call `visualize__show_widget`.\n"
+    "5. If creating or modifying files or projects: call `sandbox_write` or `deploy_site`.\n"
+    "6. If the user asks to zip, package, or download the project, repository, or website files: NEVER output Python script code into chat for the user to run. Instead, execute code in the sandbox using `execute_code` to produce `project.zip` so a downloadable archive is generated directly for the user.\n"
+    "7. After the closing </thinking> tag, you MUST ALWAYS provide the complete, detailed, polished final response with the actual findings and deliverables."
 )
 
 _THINK_OPEN_RE = re.compile(r"<(?:thinking|think|reasoning)>", re.IGNORECASE)
@@ -1468,7 +1472,7 @@ async def chat_stream_generator(
                         )
                         break
             _gate_category, _gated_tools = _route_tools(
-                _last_user_content_for_gate, AGENT_TOOLS, iteration=iteration
+                _last_user_content_for_gate, AGENT_TOOLS, iteration=iteration, mode=mode
             )
             if is_final_step:
                 # Final step: force tool_choice=none regardless of category
@@ -2174,13 +2178,52 @@ async def chat_stream_generator(
 
                     elif t_name == "sandbox_edit":
                         try:
-                            from app.services.code_sandbox import sandbox_edit_file
+                            from app.services.code_sandbox import sandbox_edit_file, _resolve_sandbox_path
                             args = json.loads(t_args_str or "{}")
                             target = (args.get("path", "") or "").strip()
                             old_str = args.get("old_str", "")
                             new_str = args.get("new_str", "")
                             if target and old_str:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Updating file: {target[:80]}",
+                                    })
+                                    + "\n\n"
+                                )
                                 receipt = await sandbox_edit_file(conversation_id, target, old_str, new_str)
+                                # Upload to R2 so the user gets a downloadable artifact card and working preview link.
+                                try:
+                                    import mimetypes
+                                    full_path = _resolve_sandbox_path(conversation_id, target)
+                                    rel_upload = os.path.relpath(full_path, _resolve_sandbox_path(conversation_id)).replace("\\", "/")
+                                    mime = mimetypes.guess_type(full_path)[0] or "text/plain"
+                                    with open(full_path, "rb") as fh:
+                                        data = fh.read()
+                                    r2_url = await _upload_generated_file(
+                                        file_bytes=data,
+                                        filename=rel_upload,
+                                        mime_type=mime,
+                                        conversation_id=conversation_id,
+                                        user_id=user_id,
+                                    )
+                                    accumulated_files.append({
+                                        "filename": rel_upload,
+                                        "download_url": r2_url,
+                                        "size_bytes": len(data),
+                                    })
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "generated_files",
+                                            "files": [accumulated_files[-1]],
+                                        })
+                                        + "\n\n"
+                                    )
+                                except Exception as up_err:
+                                    logger.warning(f"sandbox_edit R2 upload skipped: {up_err}")
                                 tool_outputs.append(receipt)
                             else:
                                 tool_outputs.append("sandbox_edit error: both 'path' and 'old_str' are required.")
@@ -3037,6 +3080,15 @@ async def stream_chat(
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(src_dir, exist_ok=True)
 
+    # Ensure active conversation sandbox workspace is fully hydrated from Cloudflare R2
+    # so files uploaded or generated in earlier turns remain instantly accessible across container lifecycles
+    try:
+        from app.services.code_sandbox import sync_conversation_sandbox_workspace
+        if conversation_id and conversation_id != "00000000-0000-0000-0000-000000000000":
+            await sync_conversation_sandbox_workspace(conversation_id, user_id)
+    except Exception as ws_err:
+        logger.debug(f"Non-fatal workspace hydration warning: {ws_err}")
+
     if attachments:
         for att in attachments:
             att_name = att.get("filename", "")
@@ -3091,9 +3143,34 @@ async def stream_chat(
     current_sandbox_files = []
     if os.path.exists(data_dir):
         try:
-            current_sandbox_files = [f for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f))]
+            current_sandbox_files = [
+                f for f in os.listdir(data_dir)
+                if os.path.isfile(os.path.join(data_dir, f)) and not f.startswith(".")
+            ]
         except Exception:
             current_sandbox_files = []
+
+    # Inject contents of existing text/code/markdown workspace files not already injected this turn
+    for fname in current_sandbox_files:
+        if any(fname in p for p in injected_code_prompts):
+            continue
+        full_p = os.path.join(data_dir, fname)
+        ext = os.path.splitext(fname.lower())[1]
+        is_code = is_code_or_text_file(fname) or ext in {".md", ".txt", ".json", ".csv", ".py", ".js", ".ts", ".html", ".css", ".yaml", ".yml", ".sql", ".sh"}
+        if is_code:
+            try:
+                sz = os.path.getsize(full_p)
+                # Auto-inject readable text files under 35KB
+                if sz <= 35000:
+                    with open(full_p, "r", encoding="utf-8", errors="replace") as f_in:
+                        content_str = f_in.read()
+                    if len(content_str) > 30000:
+                        content_str = content_str[:30000] + "\n... [TRUNCATED] ..."
+                    injected_code_prompts.append(
+                        f"--- PERSISTENT WORKSPACE FILE: {fname} ---\n{content_str}\n--- END FILE: {fname} ---"
+                    )
+            except Exception as read_err:
+                logger.debug(f"Could not auto-read workspace file {fname}: {read_err}")
 
     if injected_code_prompts or injected_binary_files or injected_image_files or current_sandbox_files:
         context_parts = []
@@ -3112,8 +3189,9 @@ async def stream_chat(
             context_parts.append(
                 f"The following user files/images are currently available in your active sandbox workspace:\n"
                 f"[{all_files_list}]\n"
-                "You have full execution access to inspect and analyze these files using Python in `execute_code` "
-                "(e.g. `PIL.Image.open('filename')`, `fitz.open('filename')`, `openpyxl`, `docx`, `easyocr`, `cv2`, etc.) "
+                "You have full execution and modification access to inspect, analyze, edit, or package these files using "
+                "`sandbox_read`, `sandbox_edit`, `sandbox_write`, and `execute_code` "
+                "(e.g. `PIL.Image.open('filename')`, `fitz.open('filename')`, `openpyxl`, `docx`, `easyocr`, `cv2`, `zipfile`, etc.) "
                 "or describe them directly to answer the user's questions."
             )
             

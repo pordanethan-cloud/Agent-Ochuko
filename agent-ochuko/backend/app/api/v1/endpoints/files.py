@@ -359,6 +359,50 @@ async def serve_sandbox_file(
     file_path = os.path.join(data_dir, filename)
 
     if not os.path.exists(file_path):
+        # 1. Check if the file exists in Cloudflare R2 and hydrate to local cache
+        try:
+            from app.services.cloudflare_r2 import get_r2_client
+            s3_client, bucket_name, _ = get_r2_client("GENERATED")
+            found_key = None
+
+            # Direct check under generated prefix
+            direct_keys = [
+                f"generated/{conversation_id}/{filename}",
+            ]
+            for dk in direct_keys:
+                try:
+                    s3_client.head_object(Bucket=bucket_name, Key=dk)
+                    found_key = dk
+                    break
+                except Exception:
+                    pass
+
+            # Search generated/{conversation_id}/ prefix
+            if not found_key:
+                res_gen = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"generated/{conversation_id}/")
+                for obj in res_gen.get("Contents", []):
+                    k = obj["Key"]
+                    if k.endswith(f"/{filename}") or k.split("/")[-1].lower() == filename.lower():
+                        found_key = k
+                        break
+
+            # Search uploads prefix containing conversation_id
+            if not found_key:
+                res_up = s3_client.list_objects_v2(Bucket=bucket_name, Prefix="uploads/")
+                for obj in res_up.get("Contents", []):
+                    k = obj["Key"]
+                    if conversation_id in k and (k.endswith(f"/{filename}") or k.split("/")[-1].lower() == filename.lower()):
+                        found_key = k
+                        break
+
+            if found_key:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                s3_client.download_file(bucket_name, found_key, file_path)
+                logger.info(f"Hydrated sandbox file from R2 for download: {found_key} -> {file_path}")
+        except Exception as r2_err:
+            logger.debug(f"Could not hydrate sandbox file from R2: {r2_err}")
+
+    if not os.path.exists(file_path):
         # Check src_dir
         if os.path.exists(os.path.join(src_dir, filename)):
             file_path = os.path.join(src_dir, filename)

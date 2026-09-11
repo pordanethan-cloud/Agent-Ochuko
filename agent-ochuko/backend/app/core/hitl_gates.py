@@ -79,13 +79,13 @@ class HITLGate:
         return RiskLevel.LOW
 
     @staticmethod
-    def requires_approval(step: PlanStep, auto_approve_level: str = "medium") -> bool:
+    def requires_approval(step: PlanStep, auto_approve_level: str = "high") -> bool:
         """
         Returns True if the step should pause execution for user confirmation.
         auto_approve_level options:
           - 'high': auto-approve low, medium, and high (fully autonomous)
           - 'medium': auto-approve low & medium, pause for high
-          - 'low': auto-approve low only, pause for medium & high (default recommended)
+          - 'low': auto-approve low only, pause for medium & high
           - 'none': pause for every step
         """
         risk = HITLGate.classify_risk(step)

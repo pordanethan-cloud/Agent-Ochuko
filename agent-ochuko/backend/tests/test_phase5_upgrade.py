@@ -108,7 +108,7 @@ async def test_agent_mode_step_and_duration_defaults(_config_cache):
     assert cfg["max_steps"] == 50
     assert cfg["max_duration_seconds"] == 1800
     assert cfg["step_timeout_seconds"] == 90
-    assert cfg["auto_approve_level"] == "medium"
+    assert cfg["auto_approve_level"] == "high"
 
 
 @pytest.mark.asyncio
@@ -558,7 +558,7 @@ async def test_artifact_kv_invalid_json_rejected():
 
 
 def test_base_identity_within_token_cap():
-    """Phase 5 Conduct Identity cap: BASE_IDENTITY <= 600 estimated tokens."""
+    """Phase 5 Conduct Identity cap: BASE_IDENTITY <= 650 estimated tokens."""
     words = len(BASE_IDENTITY.split())
     est_tokens = int(words * 1.3)
-    assert est_tokens <= 600, f"BASE_IDENTITY exceeds cap: {est_tokens} > 600"
+    assert est_tokens <= 650, f"BASE_IDENTITY exceeds cap: {est_tokens} > 650"

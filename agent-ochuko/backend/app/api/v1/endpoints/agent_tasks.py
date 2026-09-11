@@ -168,7 +168,7 @@ async def approve_agent_task(
             "plan": [s.model_dump() for s in task.plan],
         }
 
-    if task.state not in (TaskState.AWAITING_APPROVAL, TaskState.PAUSED_FOR_HITL):
+    if task.state not in (TaskState.AWAITING_APPROVAL, TaskState.PAUSED_FOR_HITL, TaskState.EXECUTING):
         raise HTTPException(
             status_code=400,
             detail=f"Task is not awaiting approval (state={task.state.value}).",

@@ -12,7 +12,7 @@ import logging
 import asyncio
 import subprocess
 import shutil
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Any, Optional
 
 def _find_bash_executable() -> str:
     # 1. Check Git directory first if on Windows (to prefer Git Bash over WSL)
@@ -100,14 +100,49 @@ def _normalize_sandbox_code_paths(code: str) -> str:
     return normalized
 
 
-async def mount_conversation_files(user_id: str, conversation_id: str, work_dir: str) -> List[str]:
+def _scan_local_workspace(data_dir: str) -> List[Dict[str, Any]]:
+    """Scans local data_dir and returns metadata for non-ignored files."""
+    files = []
+    if not os.path.exists(data_dir):
+        return files
+    for root, dirs, files_in_dir in os.walk(data_dir):
+        dirs[:] = [d for d in dirs if d not in _SANDBOX_IGNORED_DIRS]
+        for f in files_in_dir:
+            if f in ("script.py", "script.js", "command.sh"):
+                continue
+            full_path = os.path.join(root, f)
+            rel_path = os.path.relpath(full_path, data_dir).replace("\\", "/")
+            try:
+                size = os.path.getsize(full_path)
+            except OSError:
+                size = 0
+            files.append({
+                "filename": rel_path,
+                "size_bytes": size,
+                "full_path": full_path,
+            })
+    return files
+
+
+async def sync_conversation_sandbox_workspace(conversation_id: str, user_id: str) -> List[Dict[str, Any]]:
     """
-    Lists files uploaded by the user under uploads/{user_id}/{conversation_id}/
-    in R2, downloads them, and saves them to the sandbox work_dir using
-    their original filenames (stripping the unique UUID prefix).
+    Ensures the conversation sandbox workspace is fully populated and synchronized.
+    Pulls user uploads from uploads/{user_id}/{conversation_id}/ and previously generated files
+    from generated/{conversation_id}/ in Cloudflare R2 into /tmp/sandbox_{conversation_id}/data/.
+    Returns the comprehensive list of all active files available in the workspace.
     """
+    import tempfile
     import boto3
     from botocore.config import Config
+
+    if not conversation_id or conversation_id == "00000000-0000-0000-0000-000000000000":
+        return []
+
+    work_dir = os.path.join(tempfile.gettempdir(), f"sandbox_{conversation_id}")
+    data_dir = os.path.join(work_dir, "data")
+    src_dir = os.path.join(work_dir, "src")
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(src_dir, exist_ok=True)
 
     access_key = os.environ.get("R2_ACCESS_KEY_ID")
     secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
@@ -115,46 +150,84 @@ async def mount_conversation_files(user_id: str, conversation_id: str, work_dir:
     bucket = os.getenv("R2_BUCKET_NAME", "agent-ochuko-storage")
 
     if not all([access_key, secret_key, endpoint]):
-        logger.warning("R2 credentials not configured; skipping conversation file mounting.")
-        return []
+        return _scan_local_workspace(data_dir)
 
-    prefix = f"uploads/{user_id}/{conversation_id}/"
-    mounted_files = []
-
-    def _do_list_and_download():
-        s3_client = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=Config(signature_version="s3v4")
-        )
+    def _sync_r2():
         try:
-            res = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
-            if "Contents" not in res:
-                return []
+            s3_client = boto3.client(
+                "s3",
+                endpoint_url=endpoint,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                config=Config(signature_version="s3v4")
+            )
 
-            for obj in res["Contents"]:
+            # 1. Sync uploads/{user_id}/{conversation_id}/
+            upload_prefix = f"uploads/{user_id}/{conversation_id}/" if user_id else "uploads/"
+            res_up = s3_client.list_objects_v2(Bucket=bucket, Prefix=upload_prefix)
+            for obj in res_up.get("Contents", []):
                 key = obj["Key"]
                 filename_part = key.split("/")[-1]
                 if not filename_part:
                     continue
-                # Extract original filename (skipping UUID prefix if structured as unique_id_name)
-                # Structure is uploads/user_id/convo_id/{32_hex_chars}_{original_name}
-                if len(filename_part) <= 33:
-                    original_name = filename_part
-                else:
-                    original_name = filename_part[33:]
+                original_name = filename_part[33:] if len(filename_part) > 33 and "_" in filename_part[:34] else filename_part
+                target_path = os.path.join(data_dir, original_name)
+                src_target = os.path.join(src_dir, original_name)
+                if not os.path.exists(target_path) or os.path.getsize(target_path) != obj.get("Size", 0):
+                    try:
+                        s3_client.download_file(bucket, key, target_path)
+                        shutil.copy2(target_path, src_target)
+                        logger.info(f"Workspace synced upload file: {original_name}")
+                    except Exception as dl_err:
+                        logger.warning(f"Failed to download upload {key}: {dl_err}")
 
-                target_path = os.path.join(work_dir, original_name)
-                logger.info(f"Mounting conversation file from R2: {key} -> {target_path}")
-                s3_client.download_file(bucket, key, target_path)
-                mounted_files.append(original_name)
+            # 2. Sync generated/{conversation_id}/
+            gen_prefix = f"generated/{conversation_id}/"
+            res_gen = s3_client.list_objects_v2(Bucket=bucket, Prefix=gen_prefix)
+            for obj in res_gen.get("Contents", []):
+                key = obj["Key"]
+                rel_name = key[len(gen_prefix):]
+                if not rel_name:
+                    continue
+                target_path = os.path.join(data_dir, rel_name)
+                src_target = os.path.join(src_dir, rel_name)
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                os.makedirs(os.path.dirname(src_target), exist_ok=True)
+                if not os.path.exists(target_path) or os.path.getsize(target_path) != obj.get("Size", 0):
+                    try:
+                        s3_client.download_file(bucket, key, target_path)
+                        shutil.copy2(target_path, src_target)
+                        logger.info(f"Workspace synced generated file: {rel_name}")
+                    except Exception as dl_err:
+                        logger.warning(f"Failed to download generated file {key}: {dl_err}")
         except Exception as e:
-            logger.error(f"Error mounting conversation files from R2: {e}", exc_info=True)
-        return mounted_files
+            logger.warning(f"R2 workspace sync warning: {e}")
 
-    return await asyncio.to_thread(_do_list_and_download)
+    await asyncio.to_thread(_sync_r2)
+    return _scan_local_workspace(data_dir)
+
+
+async def mount_conversation_files(user_id: str, conversation_id: str, work_dir: str) -> List[str]:
+    """
+    Lists files uploaded by the user under uploads/{user_id}/{conversation_id}/
+    and generated/{conversation_id}/ in R2, downloads them, and saves them to the sandbox work_dir.
+    """
+    files = await sync_conversation_sandbox_workspace(conversation_id, user_id)
+    # Also ensure any files copied to work_dir directly
+    mounted_files = []
+    data_dir = os.path.join(work_dir, "data") if not work_dir.endswith("data") else work_dir
+    for item in files:
+        fname = item["filename"]
+        target = os.path.join(work_dir, fname)
+        src = item["full_path"]
+        if src != target and os.path.exists(src) and not os.path.exists(target):
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copy2(src, target)
+            except Exception:
+                pass
+        mounted_files.append(fname)
+    return list(set(mounted_files))
 
 
 # ── Sandbox navigation helpers (sandbox_ls / sandbox_read / sandbox_write) ────

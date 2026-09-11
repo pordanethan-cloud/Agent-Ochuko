@@ -10,7 +10,6 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
 import { useVoice } from '../hooks/useVoice'
 import {
-  AgentPlanReviewCard,
   AgentExecutionStepper,
   AgentHITLApprovalCard,
   AgentSiteDeploymentCard,
@@ -1955,15 +1954,24 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
         continue
       }
 
-      // Resolve sandbox paths
+      // Resolve sandbox paths from current turn's generated files if available
       if ((url.includes('/mnt/data/') || url.startsWith('sandbox:')) && generatedFiles) {
-        const filename = url.split('/').pop() || '';
+        const filename = url.split('/').pop()?.replace(/^sandbox:/, '') || '';
         const matchingFile = generatedFiles.find(gf =>
           gf.filename?.toLowerCase() === filename.toLowerCase() ||
           gf.filename?.toLowerCase().endsWith(filename.toLowerCase())
         );
         if (matchingFile && matchingFile.download_url) {
           url = matchingFile.download_url;
+        }
+      }
+
+      // If still a sandbox path, resolve dynamically to persistent backend sandbox file server
+      if ((url.startsWith('sandbox:') || url.includes('/mnt/data/')) && !(url.startsWith('https://') || url.startsWith('http://'))) {
+        const rawFilename = url.split('/').pop()?.replace(/^sandbox:/, '') || '';
+        const curConvoId = (window as any).__activeConversationId || sessionStorage.getItem('pending_active_convo_id') || localStorage.getItem('pending_active_convo_id') || '';
+        if (rawFilename && curConvoId && curConvoId !== '00000000-0000-0000-0000-000000000000') {
+          url = `${API_BASE}/v1/files/sandbox/${curConvoId}/${encodeURIComponent(rawFilename)}`;
         }
       }
 
@@ -1983,68 +1991,24 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
         }
       }
 
-      const isSandboxLink = (url.startsWith('sandbox:') || url.includes('/mnt/data/')) &&
-        !(url.startsWith('https://') || url.startsWith('http://'));
-
       segments.push(
-
-        isSandboxLink ? (
-
-          <a
-
-            key={`${keyBase}-l${match.index}`}
-
-            href="#"
-
-            onClick={(e) => {
-
-              e.preventDefault();
-
-              alert("This file remains in the secure code execution sandbox and could not be synced to public storage. Please try regenerating the file.");
-
-            }}
-
-            className="text-[#ffffff]/50 hover:text-[#ffffff]/40 line-through cursor-not-allowed transition duration-150"
-
-            title="File sync failed"
-
-          >
-
-            {label}
-
-          </a>
-
-        ) : (
-
-          <a
-
-            key={`${keyBase}-l${match.index}`}
-
-            href={url}
-
-            target="_blank"
-
-            rel="noopener noreferrer"
-
-            onClick={(e) => {
-              const lowerUrl = url.toLowerCase()
-              const isDownloadable = lowerUrl.endsWith('.docx') || lowerUrl.endsWith('.dotx') || lowerUrl.endsWith('.xlsx') || lowerUrl.endsWith('.zip') || lowerUrl.includes('/generated/') || lowerUrl.includes('r2.dev') || lowerUrl.includes('blob.core.windows.net')
-              if (isDownloadable) {
-                e.preventDefault()
-                triggerDirectDownload(url, label || 'download')
-              }
-            }}
-
-            className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
-
-          >
-
-            {label}
-
-          </a>
-
-        )
-
+        <a
+          key={`${keyBase}-l${match.index}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => {
+            const lowerUrl = url.toLowerCase()
+            const isDownloadable = lowerUrl.endsWith('.docx') || lowerUrl.endsWith('.dotx') || lowerUrl.endsWith('.xlsx') || lowerUrl.endsWith('.zip') || lowerUrl.endsWith('.md') || lowerUrl.endsWith('.pdf') || lowerUrl.includes('/files/sandbox/') || lowerUrl.includes('/generated/') || lowerUrl.includes('r2.dev') || lowerUrl.includes('blob.core.windows.net')
+            if (isDownloadable) {
+              e.preventDefault()
+              triggerDirectDownload(url, label || 'download')
+            }
+          }}
+          className="text-[#ffffff] hover:text-[#f3f4f6] underline underline-offset-4 decoration-[#ffffff]/40 transition duration-150"
+        >
+          {label}
+        </a>
       )
 
     }
@@ -2063,50 +2027,53 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
 
 }
 
+interface PastedSnippetItem {
+  name: string
+  content: string
+}
+
 interface ParsedMessage {
-
   textPrefix: string
-
   hasPastedText: boolean
-
+  pastedItems: PastedSnippetItem[]
   pastedName?: string
-
   pastedContent?: string
-
 }
 
 function parsePastedText(content: string): ParsedMessage {
+  if (!content) {
+    return {
+      textPrefix: '',
+      hasPastedText: false,
+      pastedItems: []
+    }
+  }
 
-  const pattern = /(?:\r?\n\r?\n)?\[Pasted Content: (.*?)\]\r?\n```\r?\n([\s\S]*?)```$/
+  const pattern = /\[Pasted Content: (.*?)\]\r?\n```\r?\n([\s\S]*?)```/g
+  const matches = Array.from(content.matchAll(pattern))
 
-  const match = content.match(pattern)
-
-  if (match) {
-
-    const textPrefix = content.slice(0, match.index).trim()
+  if (matches.length > 0) {
+    const firstMatchIndex = matches[0].index ?? content.length
+    const textPrefix = content.slice(0, firstMatchIndex).trim()
+    const pastedItems: PastedSnippetItem[] = matches.map(m => ({
+      name: m[1],
+      content: m[2].trim()
+    }))
 
     return {
-
       textPrefix,
-
       hasPastedText: true,
-
-      pastedName: match[1],
-
-      pastedContent: match[2].trim(),
-
+      pastedItems,
+      pastedName: pastedItems[0]?.name,
+      pastedContent: pastedItems[0]?.content
     }
-
   }
 
   return {
-
     textPrefix: content,
-
     hasPastedText: false,
-
+    pastedItems: []
   }
-
 }
 
 // ── ImagePending — shimmer placeholder while FLUX is running ─────────────────
@@ -3987,10 +3954,14 @@ export const Dashboard: React.FC = () => {
 
   const [input, setInput] = useState('')
 
-  // Read prompt from URL parameter (e.g., from capabilities page play buttons)
+  // Read prompt and mode from URL parameter (e.g., from capabilities page play buttons)
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search)
     const promptParam = searchParams.get('prompt')
+    const modeParam = searchParams.get('mode')
+    if (modeParam && ['think', 'solve', 'discuss', 'agent'].includes(modeParam)) {
+      setMode(modeParam as any)
+    }
     if (promptParam) {
       setInput(decodeURIComponent(promptParam))
       // Clear the URL parameter to prevent re-triggering
@@ -4221,19 +4192,17 @@ export const Dashboard: React.FC = () => {
     preWarmMermaid()
   }, [])
 
-  const [pastedText, setPastedText] = useState<{
-
+  const [pastedSnippets, setPastedSnippets] = useState<Array<{
+    id: string
     content: string
-
     name: string
-
     sizeBytes: number
+  }>>([])
 
-  } | null>(null)
+  const [expandedPastedMessages, setExpandedPastedMessages] = useState<Record<string | number, boolean>>({})
 
-  const [expandedPastedMessages, setExpandedPastedMessages] = useState<Record<number, boolean>>({})
-
-  const [copiedPastedIndex, setCopiedPastedIndex] = useState<number | null>(null)
+  const [copiedPastedKey, setCopiedPastedKey] = useState<string | number | null>(null)
+  const [copiedModalPreview, setCopiedModalPreview] = useState(false)
 
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
 
@@ -4288,6 +4257,12 @@ export const Dashboard: React.FC = () => {
 
   // activeConversationId starts as null sentinel until auth resolves.
   const [activeConversationId, setActiveConversationId] = useState<string>('00000000-0000-0000-0000-000000000000')
+
+  useEffect(() => {
+    if (activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000') {
+      (window as any).__activeConversationId = activeConversationId
+    }
+  }, [activeConversationId])
 
   const uploadFile = async (file: File) => {
     const allowedExts = [
@@ -4407,11 +4382,28 @@ export const Dashboard: React.FC = () => {
   }
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    // 1. Check for files (images, PDFs, documents)
     const files = e.clipboardData.files
+    const items = e.clipboardData.items
+    const fileList: File[] = []
+
     if (files && files.length > 0) {
-      e.preventDefault()
       for (let i = 0; i < files.length; i++) {
-        await uploadFile(files[i])
+        fileList.push(files[i])
+      }
+    } else if (items && items.length > 0) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file') {
+          const f = items[i].getAsFile()
+          if (f) fileList.push(f)
+        }
+      }
+    }
+
+    if (fileList.length > 0) {
+      e.preventDefault()
+      for (const f of fileList) {
+        await uploadFile(f)
       }
       return
     }
@@ -4426,11 +4418,15 @@ export const Dashboard: React.FC = () => {
         const firstLine = lines[0]
         title = firstLine.length > 25 ? `${firstLine.substring(0, 25)}...` : firstLine
       }
-      setPastedText({
-        content: text,
-        name: title,
-        sizeBytes: new Blob([text]).size,
-      })
+      setPastedSnippets(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          content: text,
+          name: title,
+          sizeBytes: new Blob([text]).size,
+        }
+      ])
     }
   }
 
@@ -5272,42 +5268,93 @@ export const Dashboard: React.FC = () => {
   // Consumed by BOTH the main chat stream and the approve-resume stream, so
   // plan/step/artifact/approval state updates live in exactly one place.
   const applyAgentTaskEvent = (data: any) => {
+    const findTargetIndex = (arr: Message[]): number => {
+      if (data.task_id) {
+        const idx = arr.findIndex(
+          (m) => m.agentTaskData?.id === data.task_id || m.agentTaskData?.task_id === data.task_id
+        )
+        if (idx !== -1) return idx
+      }
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i].agentTaskData) return i
+      }
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i].role === 'assistant') return i
+      }
+      return arr.length - 1
+    }
+
     if (data.type === 'agent_plan') {
       const planData: PlanStepItem[] = data.plan || []
       setMessages((prev) => {
         const updated = [...prev]
-        if (updated.length > 0) {
-          const last = { ...updated[updated.length - 1] }
-          last.agentTaskData = {
-            id: data.task_id,
-            task_id: data.task_id,
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          const existingData = targetMsg.agentTaskData
+          const mergedPlan = planData.map((step) => {
+            const existingStep = existingData?.plan?.find((s) => s.index === step.index)
+            return existingStep ? { ...step, ...existingStep } : step
+          })
+          targetMsg.agentTaskData = {
+            ...existingData,
+            id: data.task_id || existingData?.id,
+            task_id: data.task_id || existingData?.task_id,
             state: data.state || 'executing',
-            plan: planData,
-            current_step: 1,
+            plan: mergedPlan.length > 0 ? mergedPlan : (existingData?.plan || planData),
+            current_step: existingData?.current_step || 1,
           }
-          updated[updated.length - 1] = last
+          updated[targetIdx] = targetMsg
         }
         return updated
       })
     } else if (data.type === 'agent_step_start') {
       setMessages((prev) => {
         const updated = [...prev]
-        if (updated.length > 0) {
-          const last = { ...updated[updated.length - 1] }
-          if (last.agentTaskData) {
-            const plan = [...(last.agentTaskData.plan || [])]
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          if (targetMsg.agentTaskData) {
+            const plan = [...(targetMsg.agentTaskData.plan || [])]
             const stepIdx = data.step_index
             const step = plan.find((s) => s.index === stepIdx)
             if (step) {
               step.status = 'running'
             }
-            last.agentTaskData = {
-              ...last.agentTaskData,
+            targetMsg.agentTaskData = {
+              ...targetMsg.agentTaskData,
               current_step: stepIdx,
               plan,
             }
+            updated[targetIdx] = targetMsg
           }
-          updated[updated.length - 1] = last
+        }
+        return updated
+      })
+    } else if (data.type === 'agent_step_adapted') {
+      setMessages((prev) => {
+        const updated = [...prev]
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          if (targetMsg.agentTaskData) {
+            const plan = [...(targetMsg.agentTaskData.plan || [])]
+            const stepIdx = data.step_index
+            const step = plan.find((s) => s.index === stepIdx)
+            if (step) {
+              step.tool_name = data.tool_name
+              step.description = data.description || step.description
+              step.status = 'running'
+              step.adapted_reasoning = data.reasoning
+              step.previous_tool = data.previous_tool
+            }
+            targetMsg.agentTaskData = {
+              ...targetMsg.agentTaskData,
+              current_step: stepIdx,
+              plan,
+            }
+            updated[targetIdx] = targetMsg
+          }
         }
         return updated
       })
@@ -5331,45 +5378,47 @@ export const Dashboard: React.FC = () => {
       }
       setMessages((prev) => {
         const updated = [...prev]
-        if (updated.length > 0) {
-          const last = { ...updated[updated.length - 1] }
-          if (last.agentTaskData) {
-            const plan = [...(last.agentTaskData.plan || [])]
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          if (targetMsg.agentTaskData) {
+            const plan = [...(targetMsg.agentTaskData.plan || [])]
             const stepIdx = data.step_index
             const step = plan.find((s) => s.index === stepIdx)
             if (step) {
               step.status = data.status === 'failed' ? 'failed' : 'completed'
-              step.result_summary = data.result_summary || null
-              step.duration_ms = data.duration_ms
-              step.token_spend = data.token_spend
+              step.result_summary = data.result_summary || step.result_summary || null
+              step.duration_ms = data.duration_ms || step.duration_ms
+              step.token_spend = data.token_spend || step.token_spend
               if (data.artifacts) {
                 step.artifacts = data.artifacts
               }
             }
             const newArtifacts = data.artifacts || []
-            const currentArtifacts = last.agentTaskData.artifacts || []
-            last.agentTaskData = {
-              ...last.agentTaskData,
+            const currentArtifacts = targetMsg.agentTaskData.artifacts || []
+            targetMsg.agentTaskData = {
+              ...targetMsg.agentTaskData,
               plan,
               artifacts: [...currentArtifacts, ...newArtifacts],
-              total_token_spend: (last.agentTaskData.total_token_spend || 0) + (data.token_spend || 0),
+              total_token_spend: (targetMsg.agentTaskData.total_token_spend || 0) + (data.token_spend || 0),
             }
+            updated[targetIdx] = targetMsg
           }
-          updated[updated.length - 1] = last
         }
         return updated
       })
     } else if (data.type === 'agent_approval_required') {
       setMessages((prev) => {
         const updated = [...prev]
-        if (updated.length > 0) {
-          const last = { ...updated[updated.length - 1] }
-          last.agentApprovalRequired = {
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          targetMsg.agentApprovalRequired = {
             step: data.step,
             taskId: data.task_id,
             reason: data.reason,
           }
-          updated[updated.length - 1] = last
+          updated[targetIdx] = targetMsg
         }
         return updated
       })
@@ -5393,25 +5442,26 @@ export const Dashboard: React.FC = () => {
       }
       setMessages((prev) => {
         const updated = [...prev]
-        if (updated.length > 0) {
-          const last = { ...updated[updated.length - 1] }
-          if (last.agentTaskData) {
-            const plan: PlanStepItem[] = (last.agentTaskData.plan || []).map((s) => ({
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          if (targetMsg.agentTaskData) {
+            const plan: PlanStepItem[] = (targetMsg.agentTaskData.plan || []).map((s) => ({
               ...s,
               status: s.status === 'failed' ? ('failed' as const) : ('completed' as const),
             }))
-            last.agentTaskData = {
-              ...last.agentTaskData,
+            targetMsg.agentTaskData = {
+              ...targetMsg.agentTaskData,
               plan,
               state: 'completed',
               current_step: plan.length,
-              total_token_spend: data.total_token_spend || last.agentTaskData.total_token_spend,
-              artifacts: data.artifacts || last.agentTaskData.artifacts,
-              elapsed_seconds: data.duration_seconds || last.agentTaskData.elapsed_seconds,
+              total_token_spend: data.total_token_spend || targetMsg.agentTaskData.total_token_spend,
+              artifacts: data.artifacts || targetMsg.agentTaskData.artifacts,
+              elapsed_seconds: data.duration_seconds || targetMsg.agentTaskData.elapsed_seconds,
             }
+            targetMsg.agentApprovalRequired = undefined
+            updated[targetIdx] = targetMsg
           }
-          last.agentApprovalRequired = undefined
-          updated[updated.length - 1] = last
         }
         return updated
       })
@@ -5495,12 +5545,6 @@ export const Dashboard: React.FC = () => {
     } finally {
       setIsStreaming(false)
     }
-  }
-
-  const handleApproveTask = async (taskId?: string) => {
-    if (!taskId) return
-    showToast('Plan approved! Agent executing...', 'info')
-    await streamApproval(taskId, undefined, 'approve')
   }
 
   const handleApproveHITL = async (taskId: string, stepIndex: number, action: 'approve' | 'skip' | 'cancel') => {
@@ -6962,11 +7006,17 @@ export const Dashboard: React.FC = () => {
 
     }
 
+    const pastedBlocks = pastedSnippets.length > 0
+      ? pastedSnippets.map(s => `[Pasted Content: ${s.name}]\n\`\`\`\n${s.content}\n\`\`\``).join('\n\n')
+      : ''
+
     if (attachedFiles.length > 0) {
-
       const filesToProcess = [...attachedFiles]
-
-      const promptText = input.trim()
+      let promptText = input.trim()
+      if (pastedBlocks) {
+        promptText = promptText ? `${promptText}\n\n${pastedBlocks}` : pastedBlocks
+        setPastedSnippets([])
+      }
 
       setInput('')
 
@@ -6982,25 +7032,19 @@ export const Dashboard: React.FC = () => {
       await triggerAgentJobs(filesToProcess, promptText)
 
       return
-
     }
 
-    if (!input.trim() && !pastedText) return
+    if (!input.trim() && !pastedBlocks) return
 
     let userMessage = input.trim()
 
     setInput('')
 
-    if (pastedText) {
-
+    if (pastedBlocks) {
       userMessage = userMessage
-
-        ? `${userMessage}\n\n[Pasted Content: ${pastedText.name}]\n\`\`\`\n${pastedText.content}\n\`\`\``
-
-        : `[Pasted Content: ${pastedText.name}]\n\`\`\`\n${pastedText.content}\n\`\`\``
-
-      setPastedText(null)
-
+        ? `${userMessage}\n\n${pastedBlocks}`
+        : pastedBlocks
+      setPastedSnippets([])
     }
 
     setTimeout(() => inputRef.current?.focus(), 0)
@@ -8147,113 +8191,70 @@ export const Dashboard: React.FC = () => {
                             const parsed = parsePastedText(msg.content)
 
                             if (parsed.hasPastedText) {
-
-                              const isExpanded = !!expandedPastedMessages[i]
-
                               return (
-
                                 <div className="space-y-2">
-
                                   {parsed.textPrefix && (
-
                                     <p className="text-[14px] sm:text-[14.5px] text-[#f4f4f5] leading-[1.65] font-normal whitespace-pre-wrap">
-
                                       {parsed.textPrefix}
-
                                     </p>
-
                                   )}
 
-                                  <div
+                                  {parsed.pastedItems.map((item, idx) => {
+                                    const itemKey = `${i}-${idx}`
+                                    const isExpanded = !!expandedPastedMessages[itemKey] || (idx === 0 && !!expandedPastedMessages[i])
+                                    const isCopied = copiedPastedKey === itemKey || (idx === 0 && copiedPastedKey === i)
 
-                                    onClick={() => setExpandedPastedMessages(prev => ({ ...prev, [i]: !prev[i] }))}
+                                    return (
+                                      <div key={idx} className="space-y-2">
+                                        <div
+                                          onClick={() => setExpandedPastedMessages(prev => ({ ...prev, [itemKey]: !isExpanded }))}
+                                          className="flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20 cursor-pointer hover:bg-[#ffffff]/15 transition-all duration-150 select-none max-w-sm"
+                                        >
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
+                                            <div className="min-w-0">
+                                              <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest leading-none mb-1">
+                                                Pasted Content{parsed.pastedItems.length > 1 ? ` #${idx + 1}` : ''}
+                                              </p>
+                                              <p className="text-[12px] text-brand-text/90 font-medium truncate">
+                                                {item.name}
+                                              </p>
+                                            </div>
+                                          </div>
+                                          <div className="text-[#8e95a2] hover:text-[#ffffff] shrink-0">
+                                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                          </div>
+                                        </div>
 
-                                    className="flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg bg-[#ffffff]/8 border border-[#ffffff]/20 cursor-pointer hover:bg-[#ffffff]/15 transition-all duration-150 select-none max-w-sm"
-
-                                  >
-
-                                    <div className="flex items-center gap-2 min-w-0">
-
-                                      <FileText className="w-4 h-4 text-[#ffffff] shrink-0" />
-
-                                      <div className="min-w-0">
-
-                                        <p className="text-[11px] font-bold text-[#ffffff] uppercase tracking-widest leading-none mb-1">
-
-                                          Pasted Content
-
-                                        </p>
-
-                                        <p className="text-[12px] text-brand-text/90 font-medium truncate">
-
-                                          {parsed.pastedName}
-
-                                        </p>
-
-                                      </div>
-
-                                    </div>
-
-                                    <div className="text-[#8e95a2] hover:text-[#ffffff] shrink-0">
-
-                                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-
-                                    </div>
-
-                                  </div>
-
-                                  {isExpanded && (
-
-                                    <div className="bg-[#0d0f11] border border-[#1e2025] rounded-lg p-3 relative group/panel">
-
-                                      <button
-
-                                        type="button"
-
-                                        onClick={(e) => {
-
-                                          e.stopPropagation()
-
-                                          navigator.clipboard.writeText(parsed.pastedContent || '')
-
-                                          setCopiedPastedIndex(i)
-
-                                          setTimeout(() => setCopiedPastedIndex(null), 2000)
-
-                                        }}
-
-                                        className="absolute right-2 top-2 p-1.5 rounded bg-white/5 hover:bg-white/10 text-[#8e95a2] hover:text-brand-text transition opacity-0 group-hover/panel:opacity-100"
-
-                                        title="Copy content"
-
-                                      >
-
-                                        {copiedPastedIndex === i ? (
-
-                                          <Check className="w-3 h-3 text-green-400" />
-
-                                        ) : (
-
-                                          <Copy className="w-3 h-3" />
-
+                                        {isExpanded && (
+                                          <div className="bg-[#0d0f11] border border-[#1e2025] rounded-lg p-3 relative group/panel">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation()
+                                                navigator.clipboard.writeText(item.content || '')
+                                                setCopiedPastedKey(itemKey)
+                                                setTimeout(() => setCopiedPastedKey(null), 2000)
+                                              }}
+                                              className="absolute right-2 top-2 p-1.5 rounded bg-white/5 hover:bg-white/10 text-[#8e95a2] hover:text-brand-text transition opacity-0 group-hover/panel:opacity-100"
+                                              title="Copy content"
+                                            >
+                                              {isCopied ? (
+                                                <Check className="w-3 h-3 text-green-400" />
+                                              ) : (
+                                                <Copy className="w-3 h-3" />
+                                              )}
+                                            </button>
+                                            <pre className="text-[11.5px] font-mono text-brand-text/80 overflow-x-auto max-h-96 whitespace-pre-wrap break-all pr-8 select-text">
+                                              {item.content}
+                                            </pre>
+                                          </div>
                                         )}
-
-                                      </button>
-
-                                      <pre className="text-[11.5px] font-mono text-brand-text/80 overflow-x-auto max-h-96 whitespace-pre-wrap break-all pr-8 select-text">
-
-                                        {parsed.pastedContent}
-
-                                      </pre>
-
-                                    </div>
-
-                                  )}
-
+                                      </div>
+                                    )
+                                  })}
                                 </div>
-
                               )
-
                             }
 
                             if (msg.content && msg.content.trim().length > 0) {
@@ -8383,18 +8384,9 @@ export const Dashboard: React.FC = () => {
 
                           {/* Autonomous Agent Mode Widgets — rendered ABOVE the streaming text response */}
                           {msg.agentTaskData?.plan && msg.agentTaskData.plan.length > 0 && (
-                            msg.agentTaskData.state === 'awaiting_approval' ? (
-                              <AgentPlanReviewCard
-                                plan={msg.agentTaskData.plan}
-                                taskId={msg.agentTaskData.id}
-                                isExecuting={isStreaming && i === messages.length - 1}
-                                onApprove={() => handleApproveTask(msg.agentTaskData?.id)}
-                              />
-                            ) : (
-                              <AgentExecutionStepper
-                                task={msg.agentTaskData}
-                              />
-                            )
+                            <AgentExecutionStepper
+                              task={msg.agentTaskData}
+                            />
                           )}
 
                           {/* In-chat HITL Approval Card */}
@@ -8764,7 +8756,7 @@ export const Dashboard: React.FC = () => {
             )}
 
             {/* Claude-style Attached Files Deck — positioned prominently above textarea */}
-            {(attachedFiles.length > 0 || pastedText) && (
+            {(attachedFiles.length > 0 || pastedSnippets.length > 0) && (
               <div className="flex flex-wrap items-center gap-2.5 px-1 py-1.5 border-b border-white/[0.08] mb-1">
                 {attachedFiles.map((file, idx) => {
                   const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)
@@ -8852,13 +8844,14 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )
                 })}
-                {pastedText && (
+                {pastedSnippets.map((snippet) => (
                   <div
+                    key={snippet.id}
                     onClick={() => setPreviewingFile({
-                      name: pastedText.name,
+                      name: snippet.name,
                       type: 'text/plain',
-                      content: pastedText.content,
-                      sizeBytes: pastedText.sizeBytes
+                      content: snippet.content,
+                      sizeBytes: snippet.sizeBytes
                     })}
                     className="relative group flex items-center gap-2.5 px-3 py-2 rounded-lg bg-[#14161b] hover:bg-[#1a1d24] border border-white/15 hover:border-white/30 transition cursor-pointer shadow-md min-w-[170px] max-w-[240px] shrink-0 animate-fadeIn select-none"
                     title="Click to preview pasted text"
@@ -8867,14 +8860,14 @@ export const Dashboard: React.FC = () => {
                       TXT
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{pastedText.name}</p>
+                      <p className="text-[12px] font-medium text-white/90 truncate leading-tight">{snippet.name}</p>
                       <p className="text-[10px] text-white/50 mt-0.5">Pasted snippet</p>
                     </div>
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation()
-                        setPastedText(null)
+                        setPastedSnippets(prev => prev.filter(s => s.id !== snippet.id))
                       }}
                       className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
                       title="Remove pasted text"
@@ -8882,7 +8875,7 @@ export const Dashboard: React.FC = () => {
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                )}
+                ))}
               </div>
             )}
 
@@ -8909,7 +8902,8 @@ export const Dashboard: React.FC = () => {
                   voice.isRecording ? 'Listening...' :
                   mode === 'agent' ? 'Describe your goal — Agent Ochuko will plan and execute it...' :
                   attachedFiles.length > 0 ? 'Add prompt details for the agent...' :
-                  pastedText ? 'Add prompt details for the pasted text...' : "Let's talk"
+                  pastedSnippets.length > 0 ? (pastedSnippets.length > 1 ? `Add prompt details for ${pastedSnippets.length} pasted snippets...` : 'Add prompt details for the pasted text...') :
+                  "Let's talk"
                 }
                 className="w-full h-[22px] bg-transparent text-[13.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5"
               />
@@ -8995,7 +8989,7 @@ export const Dashboard: React.FC = () => {
 
                  <button
                   type="submit"
-                  disabled={uploading || (!input.trim() && attachedFiles.length === 0 && !pastedText)}
+                  disabled={uploading || (!input.trim() && attachedFiles.length === 0 && pastedSnippets.length === 0)}
                   className="px-3.5 py-1.5 bg-brand-text text-brand-bg text-[12px] font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow"
                 >
                   {uploading ? (
@@ -9380,6 +9374,58 @@ export const Dashboard: React.FC = () => {
                   <span>Download PNG</span>
                 </button>
               )}
+              {(loadedPreviewContent || previewingFile.content) && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const toCopy = loadedPreviewContent || previewingFile.content || ''
+                    if (toCopy) {
+                      await navigator.clipboard.writeText(toCopy)
+                      setCopiedModalPreview(true)
+                      setTimeout(() => setCopiedModalPreview(false), 2000)
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[11px] font-bold text-brand-text border border-[#ffffff]/10 transition flex items-center gap-1.5"
+                  title="Copy content"
+                >
+                  {copiedModalPreview ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedModalPreview ? 'Copied' : 'Copy'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    let blob: Blob
+                    const contentText = loadedPreviewContent || previewingFile.content
+                    const targetUrl = previewingFile.localObjectUrl || previewingFile.url
+                    if (contentText) {
+                      blob = new Blob([contentText], { type: previewingFile.type || 'text/plain;charset=utf-8' })
+                    } else if (targetUrl) {
+                      const res = await fetch(targetUrl)
+                      blob = await res.blob()
+                    } else {
+                      return
+                    }
+                    const blobUrl = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = blobUrl
+                    a.download = previewingFile.name ? previewingFile.name.split('/').pop()?.split('\\').pop() || previewingFile.name : 'download'
+                    document.body.appendChild(a)
+                    a.click()
+                    document.body.removeChild(a)
+                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+                  } catch (err) {
+                    const fallbackUrl = previewingFile.localObjectUrl || previewingFile.url
+                    if (fallbackUrl) window.open(fallbackUrl, '_blank')
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[11px] font-bold text-brand-text border border-[#ffffff]/10 transition flex items-center gap-1.5"
+                title="Download file"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download</span>
+              </button>
               {previewingFile.url && (
                 <a 
                   href={previewingFile.url} 
@@ -9465,16 +9511,30 @@ export const Dashboard: React.FC = () => {
                     </div>
                     <p className="text-xs text-white/70">This binary file format cannot be rendered directly in the web previewer. You can download or open it in your browser.</p>
                     {fileUrl && (
-                      <a
-                        href={fileUrl}
-                        download={previewingFile.name}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-4 py-2 rounded-lg bg-white text-black font-bold text-xs hover:bg-white/90 transition flex items-center gap-2"
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            const res = await fetch(fileUrl)
+                            const blob = await res.blob()
+                            const blobUrl = URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = blobUrl
+                            const safeName = previewingFile.name ? previewingFile.name.split('/').pop()?.split('\\').pop() || previewingFile.name : 'download'
+                            a.download = safeName
+                            document.body.appendChild(a)
+                            a.click()
+                            document.body.removeChild(a)
+                            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+                          } catch {
+                            window.open(fileUrl, '_blank')
+                          }
+                        }}
+                        className="px-4 py-2 rounded-lg bg-white text-black font-bold text-xs hover:bg-white/90 transition flex items-center gap-2 cursor-pointer"
                       >
                         <Download className="w-4 h-4" />
-                        <span>Download / Open File</span>
-                      </a>
+                        <span>Download File</span>
+                      </button>
                     )}
                   </div>
                 )

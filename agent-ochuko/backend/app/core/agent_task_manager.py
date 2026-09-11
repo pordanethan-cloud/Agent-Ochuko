@@ -6,13 +6,14 @@ step execution with sub-agent delegation, HITL safety approval gates,
 context compression, and artifact persistence.
 """
 
+import os
 import asyncio
 import json
 import re
 import time
 import logging
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any, List, Optional
+from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
 from openai import AsyncAzureOpenAI
 
 from app.core.agent_task_models import (
@@ -88,17 +89,30 @@ class AgentTaskManager:
         return self._effort_cache
 
     async def init_plan(self, history: Optional[List[Dict]] = None) -> List[PlanStep]:
-        """Generates initial structured plan and sets state to AWAITING_APPROVAL."""
-        auto_level = self.config.get("auto_approve_level", "medium")
+        """Generates initial structured plan and sets state to EXECUTING (zero-wait autonomous execution)."""
+        auto_level = self.config.get("auto_approve_level", "high")
+
+        # Hydrate sandbox workspace from Cloudflare R2 so the agent has full knowledge
+        # of all previously uploaded and generated files in this conversation
+        workspace_file_names = []
+        try:
+            from app.services.code_sandbox import sync_conversation_sandbox_workspace
+            if self.task.conversation_id:
+                ws_items = await sync_conversation_sandbox_workspace(self.task.conversation_id, self.task.user_id)
+                workspace_file_names = [item["filename"] for item in ws_items if item.get("filename")]
+        except Exception as ws_err:
+            logger.debug(f"Workspace hydration warning in init_plan: {ws_err}")
+
         plan = await generate_structured_plan(
             goal=self.task.goal,
             conversation_history=history,
             openai_client=self.client,
             nano_deployment=self.nano_deployment,
             auto_approve_level=auto_level,
+            workspace_files=workspace_file_names,
         )
         self.task.plan = plan
-        self.task.state = TaskState.AWAITING_APPROVAL
+        self.task.state = TaskState.EXECUTING
         await self.save_state()
         return plan
 
@@ -174,7 +188,7 @@ class AgentTaskManager:
                 break
 
             # 2. HITL Approval Gate Check
-            auto_level = self.config.get("auto_approve_level", "medium")
+            auto_level = self.config.get("auto_approve_level", "high")
             if HITLGate.requires_approval(step, auto_approve_level=auto_level) and step.status != StepStatus.RUNNING:
                 self.task.state = TaskState.PAUSED_FOR_HITL
                 await self.save_state()
@@ -202,6 +216,49 @@ class AgentTaskManager:
             self.task.total_token_spend += step_result.token_spend
             self.circuit_breaker.record_token_spend(step_result.token_spend)
 
+            # 5. AI-Level Cognitive Tool Loop:
+            # If the tool failed or was blocked, feed the feedback directly to the AI model.
+            # The AI inspects the obstacle, formulates an aim, and selects the best alternative tool.
+            attempt = 0
+            max_ai_retries = 2
+            while not step_result.success and attempt < max_ai_retries:
+                attempt += 1
+                ai_adaptation = await self._ai_resolve_feedback_and_adapt(
+                    step=step,
+                    error_feedback=step_result.error or "Step produced no successful output",
+                    attempt_num=attempt,
+                )
+                if not ai_adaptation or ai_adaptation.get("action") != "retry_tool":
+                    # AI concluded it should proceed or alternatives are exhausted
+                    break
+
+                new_tool = ai_adaptation.get("tool_name")
+                new_desc = ai_adaptation.get("description") or step.description
+                reasoning = ai_adaptation.get("reasoning", "AI adapting tool based on feedback")
+
+                logger.info(
+                    "AI dynamically adapted step %s from %s to %s. Reasoning: %s",
+                    step.index, step.tool_name, new_tool, reasoning
+                )
+
+                # Emit real-time cognitive adaptation event
+                yield f"data: {json.dumps({'type': 'agent_step_adapted', 'task_id': self.task.id, 'step_index': step.index, 'previous_tool': step.tool_name, 'tool_name': new_tool, 'description': new_desc, 'reasoning': reasoning, 'status': 'running'})}\n\n"
+
+                step.tool_name = new_tool
+                step.description = new_desc
+
+                # Re-execute step with the AI-chosen tool
+                step_result = await self._execute_single_step(
+                    step=step,
+                    search_fn=search_fn,
+                    deep_research_fn=deep_research_fn,
+                )
+                step_duration_ms = int((time.time() - step_start) * 1000)
+                step.duration_ms = step_duration_ms
+                step.token_spend += step_result.token_spend
+                self.task.total_token_spend += step_result.token_spend
+                self.circuit_breaker.record_token_spend(step_result.token_spend)
+
             if step_result.success:
                 step.status = StepStatus.COMPLETED
                 step.result_summary = step_result.summary
@@ -222,14 +279,15 @@ class AgentTaskManager:
             else:
                 step.status = StepStatus.FAILED
                 step.error = step_result.error or "Step failed"
-                logger.warning(f"Step {step.index} failed: {step.error}")
+                logger.warning(f"Step {step.index} concluded as failed after AI tool evaluations: {step.error}")
 
-                # Reflexion retry attempt
-                if len(self.reflexion.trials) < 2:
-                    self.reflexion.record_trial(step.description, step.error)
-                    # Attempt retry
-                    step.description += " (Self-Correction Retry)"
-                    continue
+                self.task.step_results.append({
+                    "step_index": step.index,
+                    "description": step.description,
+                    "summary": f"Failed: {step.error}",
+                    "artifacts": [],
+                    "duration_ms": step_duration_ms,
+                })
 
                 yield f"data: {json.dumps({'type': 'agent_step_complete', 'task_id': self.task.id, 'step_index': step.index, 'status': 'failed', 'error': step.error, 'duration_ms': step_duration_ms})}\n\n"
 
@@ -374,7 +432,11 @@ class AgentTaskManager:
 
             elif step.tool_name in ("execute_code", "python"):
                 code_to_run = await self._generate_step_code(step)
-                sub_res = await self.sub_agents.delegate_code_execution(code_to_run)
+                sub_res = await self.sub_agents.delegate_code_execution(
+                    code=code_to_run,
+                    conversation_id=self.task.conversation_id,
+                    user_id=self.task.user_id,
+                )
                 return StepResult(
                     success=sub_res.success,
                     summary=sub_res.summary,
@@ -415,11 +477,18 @@ class AgentTaskManager:
                     error=sub_res.error,
                 )
 
-            elif step.tool_name in ("deploy_site", "publish_website", "create_landing_page"):
-                site_code = await self._generate_website_code(step)
+            elif step.tool_name in ("deploy_site", "publish_website", "create_landing_page", "build_website"):
+                sandbox_files = await self._collect_sandbox_web_files()
+                res_gen = await self._generate_website_code(step)
+                if isinstance(res_gen, tuple) and len(res_gen) == 2:
+                    site_code, project_files = res_gen
+                else:
+                    site_code, project_files = res_gen, {}
+                all_files = {**sandbox_files, **project_files}
                 sub_res = await self.sub_agents.delegate_site_deployment(
                     title=self.task.goal[:40],
                     html_content=site_code,
+                    files=all_files if all_files else None,
                     user_id=self.task.user_id,
                     conversation_id=self.task.conversation_id,
                     supabase_client=self.supabase,
@@ -548,6 +617,118 @@ class AgentTaskManager:
                     error=str(output) if is_err else None,
                 )
 
+            elif step.tool_name == "sandbox_ls":
+                from app.services.code_sandbox import sandbox_list_files
+                res_str = await sandbox_list_files(self.task.conversation_id or "default")
+                return StepResult(
+                    success=True,
+                    summary=res_str[:400],
+                    artifacts=[],
+                    token_spend=50,
+                    raw_length=len(res_str),
+                )
+
+            elif step.tool_name == "sandbox_read":
+                from app.services.code_sandbox import sandbox_read_file
+                target_path = ""
+                if isinstance(step.tool_args_hint, dict):
+                    target_path = step.tool_args_hint.get("path", "")
+                if not target_path:
+                    m = re.search(r"[\w\-\.\/]+\.[a-zA-Z0-9]+", clean_step_desc)
+                    if m:
+                        target_path = m.group(0)
+                res_str = await sandbox_read_file(self.task.conversation_id or "default", target_path or clean_step_desc)
+                is_err = "sandbox_read error" in res_str
+                return StepResult(
+                    success=not is_err,
+                    summary=res_str[:400],
+                    artifacts=[],
+                    token_spend=80,
+                    raw_length=len(res_str),
+                    error=res_str if is_err else None,
+                )
+
+            elif step.tool_name == "sandbox_write":
+                from app.services.code_sandbox import sandbox_write_file, _resolve_sandbox_path
+                target_path = ""
+                file_content = ""
+                if isinstance(step.tool_args_hint, dict):
+                    target_path = step.tool_args_hint.get("path", "")
+                    file_content = step.tool_args_hint.get("content", "")
+                if not target_path:
+                    m = re.search(r"[\w\-\.\/]+\.[a-zA-Z0-9]+", clean_step_desc)
+                    if m:
+                        target_path = m.group(0)
+                if not file_content:
+                    file_content = clean_step_desc
+                conv_id = self.task.conversation_id or "default"
+                res_str = await sandbox_write_file(conv_id, target_path or "output.txt", file_content)
+                is_err = "sandbox_write error" in res_str
+                artifacts_list = []
+                if not is_err and target_path:
+                    try:
+                        from app.services.cloudflare_r2 import upload_file_bytes
+                        import mimetypes
+                        full_p = _resolve_sandbox_path(conv_id, target_path)
+                        mime = mimetypes.guess_type(full_p)[0] or "text/plain"
+                        r2_url = await upload_file_bytes(
+                            file_bytes=file_content.encode("utf-8"),
+                            filename=f"generated/{conv_id}/{target_path}",
+                            mime_type=mime,
+                            bucket_type="GENERATED",
+                        )
+                        artifacts_list.append({"filename": target_path, "download_url": r2_url})
+                    except Exception:
+                        artifacts_list.append({"filename": target_path, "download_url": f"/v1/files/sandbox/{conv_id}/{target_path}"})
+                return StepResult(
+                    success=not is_err,
+                    summary=res_str[:400],
+                    artifacts=artifacts_list,
+                    token_spend=100,
+                    raw_length=len(res_str),
+                    error=res_str if is_err else None,
+                )
+
+            elif step.tool_name == "sandbox_edit":
+                from app.services.code_sandbox import sandbox_edit_file, _resolve_sandbox_path
+                target_path = ""
+                old_str = ""
+                new_str = ""
+                if isinstance(step.tool_args_hint, dict):
+                    target_path = step.tool_args_hint.get("path", "")
+                    old_str = step.tool_args_hint.get("old_str", "")
+                    new_str = step.tool_args_hint.get("new_str", "")
+                conv_id = self.task.conversation_id or "default"
+                res_str = await sandbox_edit_file(conv_id, target_path, old_str, new_str)
+                is_err = "sandbox_edit error" in res_str
+                artifacts_list = []
+                if not is_err and target_path:
+                    try:
+                        from app.services.cloudflare_r2 import upload_file_bytes
+                        import mimetypes
+                        full_p = _resolve_sandbox_path(conv_id, target_path)
+                        if os.path.exists(full_p):
+                            with open(full_p, "rb") as fh:
+                                f_bytes = fh.read()
+                            mime = mimetypes.guess_type(full_p)[0] or "text/plain"
+                            r2_url = await upload_file_bytes(
+                                file_bytes=f_bytes,
+                                filename=f"generated/{conv_id}/{target_path}",
+                                mime_type=mime,
+                                bucket_type="GENERATED",
+                            )
+                            artifacts_list.append({"filename": target_path, "download_url": r2_url})
+                    except Exception:
+                        artifacts_list.append({"filename": target_path, "download_url": f"/v1/files/sandbox/{conv_id}/{target_path}"})
+                return StepResult(
+                    success=not is_err,
+                    summary=res_str[:400],
+                    artifacts=artifacts_list,
+                    token_spend=80,
+                    raw_length=len(res_str),
+                    error=res_str if is_err else None,
+                )
+
             else:
                 # Direct analytical reasoning / greeting step
                 greeting_match = bool(re.match(r"^\s*(hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|who\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you|help|thanks|thank\s+you|sup|yo)\b[!?.]*\s*$", self.task.goal.strip(), re.IGNORECASE))
@@ -576,24 +757,108 @@ class AgentTaskManager:
                 error=str(err),
             )
 
-    async def _generate_website_code(self, step: PlanStep) -> str:
-        """Generates a complete, beautiful HTML5 + Tailwind website markup using the flagship model."""
+    async def _ai_resolve_feedback_and_adapt(
+        self,
+        step: PlanStep,
+        error_feedback: str,
+        attempt_num: int,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        AI-level cognitive feedback evaluation.
+        When a tool fails or encounters errors/blocks, the AI inspects the error feedback,
+        formulates an aim, and dynamically selects an alternative tool to accomplish the step,
+        avoiding rigid app-level fallbacks or fixed OODA patterns.
+        """
         if not self.client:
-            return "<div class='p-8 text-center text-xl font-bold'>Instant Site Preview</div>"
+            return None
 
         prompt = [
             {
                 "role": "system",
                 "content": (
-                    "You are a master frontend architect. Generate a complete, stunning, modern, responsive HTML page with Tailwind CSS. "
-                    "Make it interactive with embedded JavaScript (e.g. working sliders, pricing toggle, calculator logic, charts). "
-                    "Make it high-contrast, beautiful dark-mode UI with sleek glassmorphism and modern fonts. "
-                    "Output ONLY valid HTML markup inside ```html fences."
+                    "You are the Cognitive Step Supervisor for Agent Ochuko. "
+                    "An autonomous agent step encountered an error or failed to achieve its result. "
+                    "Your job is to inspect the error/feedback, establish a clear aim, and intelligently select "
+                    "an alternative tool or refined strategy to circumvent the obstacle.\n\n"
+                    "Available tools:\n"
+                    "- search_web: Query Google for live web information, articles, documentation, or alternative sources\n"
+                    "- deep_research: Comprehensive multi-query research across multiple topics\n"
+                    "- scrape_web: Direct extraction of a specific URL (fails if blocked by anti-bot, 403, or JS challenges)\n"
+                    "- execute_code: Run Python in a secure sandbox with full internet to compute, parse, extract with BeautifulSoup/httpx, or process data\n"
+                    "- deploy_site: Publish generated multi-file web app to Cloudflare R2 CDN\n"
+                    "- lookup_handle: Lookup GitHub or social profiles\n"
+                    "- synthesize_answer: Reason directly and formulate answer from available knowledge\n\n"
+                    "Rules:\n"
+                    "1. Do NOT repeat the exact same failing tool with the same input.\n"
+                    "2. If direct scraping failed (e.g. 403 Forbidden, bot block, network failure), pivot to search_web to find the information or execute_code to query public APIs/alternatives.\n"
+                    "3. If code execution failed with an import or runtime error, fix the code or use search_web to look up the solution.\n"
+                    "4. If all viable tools for this step have been exhausted, conclude the step with action 'proceed' so the agent can move on and synthesize its findings for the user.\n\n"
+                    "Respond ONLY with a JSON object:\n"
+                    '{"action": "retry_tool" | "proceed", "tool_name": "<tool_name>", "description": "<new concrete step instruction or search query>", "reasoning": "<brief explanation of why this tool was chosen>"}'
                 ),
             },
             {
                 "role": "user",
-                "content": f"Create a complete interactive web app / landing page for: {self.task.goal}\nStep: {step.description}",
+                "content": (
+                    f"Overall Goal: {self.task.goal}\n"
+                    f"Current Step #{step.index}: {step.description}\n"
+                    f"Tool Used: {step.tool_name}\n"
+                    f"Failure Feedback / Error: {error_feedback}\n"
+                    f"Attempt #{attempt_num} of 2.\n"
+                    "Evaluate the feedback and decide the next move."
+                ),
+            },
+        ]
+
+        try:
+            model = self.nano_deployment or self.deployment
+            if hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
+                resp = await self.client.chat.completions.create(
+                    model=model,
+                    messages=prompt,
+                    response_format={"type": "json_object"} if hasattr(self.client, "chat") else None,
+                )
+                raw = resp.choices[0].message.content or "{}"
+            else:
+                resp = await self.client.responses.create(model=model, input=prompt)
+                raw = getattr(resp, "output_text", "") or "{}"
+
+            raw_clean = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+            raw_clean = re.sub(r"\s*```$", "", raw_clean).strip()
+            decision = json.loads(raw_clean)
+
+            valid_tools = {
+                "search_web", "google_search", "deep_research", "scrape_web",
+                "execute_code", "python", "deploy_site", "lookup_handle", "synthesize_answer"
+            }
+            if decision.get("action") == "retry_tool" and decision.get("tool_name") in valid_tools:
+                return decision
+            elif decision.get("action") == "proceed":
+                return decision
+            return None
+        except Exception as e:
+            logger.warning(f"AI feedback adaptation error: {e}")
+            return None
+
+    async def _generate_website_code(self, step: PlanStep) -> Tuple[str, Dict[str, str]]:
+        """Generates a complete modern web application / site markup and supports multi-file projects."""
+        if not self.client:
+            return "<div class='p-8 text-center text-xl font-bold'>Instant Site Preview</div>", {}
+
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a master full-stack frontend engineer. Generate a complete, stunning, modern, responsive web application with Tailwind CSS or Vanilla CSS. "
+                    "Make it interactive with embedded JavaScript (e.g. working sliders, pricing toggle, calculator logic, charts, interactive state). "
+                    "Make it high-contrast, beautiful dark-mode UI with sleek glassmorphism and modern typography. "
+                    "You can output multiple files using fenced blocks with filenames: ```html:index.html, ```css:styles.css, ```javascript:app.js. "
+                    "Always ensure index.html is provided as the entry point."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Create a complete interactive web app / project for: {self.task.goal}\nStep: {step.description}",
             },
         ]
         try:
@@ -604,14 +869,61 @@ class AgentTaskManager:
                 resp = await self.client.responses.create(model=self.deployment, input=prompt)
                 raw = getattr(resp, "output_text", "") or ""
 
-            if "```html" in raw:
-                raw = raw.split("```html", 1)[1].split("```", 1)[0]
-            elif "```" in raw:
-                raw = raw.split("```", 1)[1].split("```", 1)[0]
-            return raw.strip()
+            # Parse files from code fences
+            files_dict: Dict[str, str] = {}
+            pattern = re.compile(r"```([a-zA-Z0-9_\-]+)(?::([a-zA-Z0-9_.\-/]+))?\n([\s\S]*?)```")
+            for match in pattern.finditer(raw):
+                lang, filename, code = match.groups()
+                code_body = code.strip()
+                if filename:
+                    files_dict[filename.strip()] = code_body
+                elif lang in ("html", "htm"):
+                    if "index.html" not in files_dict:
+                        files_dict["index.html"] = code_body
+                elif lang == "css":
+                    if "styles.css" not in files_dict:
+                        files_dict["styles.css"] = code_body
+                elif lang in ("javascript", "js"):
+                    if "app.js" not in files_dict:
+                        files_dict["app.js"] = code_body
+
+            html_main = files_dict.get("index.html") or ""
+            if not html_main:
+                if "```html" in raw:
+                    html_main = raw.split("```html", 1)[1].split("```", 1)[0].strip()
+                elif "```" in raw:
+                    html_main = raw.split("```", 1)[1].split("```", 1)[0].strip()
+                else:
+                    html_main = raw.strip()
+                files_dict["index.html"] = html_main
+
+            return html_main, files_dict
         except Exception as e:
             logger.warning(f"Website generation fallback: {e}")
-            return f"<div class='p-8 text-center text-white'><h1>{self.task.goal}</h1><p>Website deployed successfully.</p></div>"
+            fallback_html = f"<div class='p-8 text-center text-white'><h1>{self.task.goal}</h1><p>Website deployed successfully.</p></div>"
+            return fallback_html, {"index.html": fallback_html}
+
+    async def _collect_sandbox_web_files(self) -> Dict[str, str]:
+        """Collects any web files generated in the conversation sandbox workspace."""
+        collected: Dict[str, str] = {}
+        try:
+            import tempfile
+            conv_id = self.task.conversation_id or "default"
+            data_dir = os.path.join(tempfile.gettempdir(), f"sandbox_{conv_id}", "data")
+            if os.path.exists(data_dir):
+                for root, _, files in os.walk(data_dir):
+                    for f in files:
+                        if f.endswith((".html", ".htm", ".css", ".js", ".json", ".svg")):
+                            full_p = os.path.join(root, f)
+                            rel_p = os.path.relpath(full_p, data_dir).replace("\\", "/")
+                            try:
+                                with open(full_p, "r", encoding="utf-8", errors="ignore") as fp:
+                                    collected[rel_p] = fp.read()
+                            except Exception:
+                                pass
+        except Exception as err:
+            logger.debug(f"Could not scan sandbox web files: {err}")
+        return collected
 
     async def _generate_step_code(self, step: PlanStep) -> str:
         """Generates a targeted, self-contained Python script to fulfill a code execution step using the flagship model."""

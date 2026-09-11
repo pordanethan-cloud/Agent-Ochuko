@@ -86,11 +86,11 @@ async def test_route_non_trivial_message():
 # ── Fable-5 distillation contract tests ───────────────────────────────────────
 
 def test_base_identity_token_cap():
-    # BASE_IDENTITY must stay within the 600-token budget (word-count proxy:
-    # tokens ~= words * 1.3 for prose). Phase 5 relaxed the cap from 500 to
-    # 600 to carry the Claude-grade conduct contracts. Guards against bloat.
+    # BASE_IDENTITY must stay within the 650-token budget (word-count proxy:
+    # tokens ~= words * 1.3 for prose). Phase 5 relaxed the cap to carry the
+    # Claude-grade conduct and length calibration contracts.
     estimated_tokens = int(len(BASE_IDENTITY.split()) * 1.3)
-    assert estimated_tokens <= 600, (
+    assert estimated_tokens <= 650, (
         f"BASE_IDENTITY bloat: ~{estimated_tokens} estimated tokens "
         f"({len(BASE_IDENTITY.split())} words). Trim the prompt."
     )

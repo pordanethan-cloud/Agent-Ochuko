@@ -209,6 +209,8 @@ class HostedSitesService:
         now_iso = datetime.utcnow().isoformat()
 
         normalized_files = normalize_file_map(files) if files else {}
+        if "index.html" not in normalized_files and full_html:
+            normalized_files["index.html"] = full_html
 
         site_record = {
             "id": site_id,
@@ -228,6 +230,7 @@ class HostedSitesService:
 
         # Best-effort R2 mirror so files survive backend restarts on the CDN.
         # Memory + Supabase rows always carry the content as fallback.
+        urls: Dict[str, str] = {}
         if normalized_files:
             try:
                 urls = await _mirror_files_to_r2(
@@ -235,6 +238,17 @@ class HostedSitesService:
                 )
                 if urls:
                     site_record["files_urls"] = urls
+
+                # Persist site.json metadata to R2 for durable container-restart recovery
+                import json
+                from app.services.cloudflare_r2 import upload_file_bytes
+                meta_bytes = json.dumps(site_record).encode("utf-8")
+                await upload_file_bytes(
+                    file_bytes=meta_bytes,
+                    filename=f"sites/{slug}/site.json",
+                    mime_type="application/json",
+                    bucket_type="GENERATED",
+                )
             except Exception as r2_err:
                 logger.warning(f"Hosted-site R2 mirror skipped: {r2_err}")
 
@@ -265,6 +279,7 @@ class HostedSitesService:
 
         effective_base = (base_url or _DEFAULT_BASE_URL).rstrip('/')
         preview_url = f"{effective_base}/v1/sites/{slug}"
+        cdn_url = urls.get("index.html") if urls else None
 
         return {
             "site_id": site_id,
@@ -274,7 +289,8 @@ class HostedSitesService:
             "is_public": is_public,
             "created_at": now_iso,
             "files": sorted(normalized_files.keys()),
-            "multi_file": bool(normalized_files),
+            "files_urls": urls,
+            "multi_file": len(normalized_files) > 1,
         }
 
     @staticmethod
@@ -289,16 +305,48 @@ class HostedSitesService:
         if not site:
             return None
         rel = (file_path or "").replace("\\", "/").lstrip("/")
-        files = site.get("files") or {}
-        if rel not in files:
-            return None
-        urls = site.get("files_urls") or {}
-        content = files[rel]
-        return {
-            "content": content,
-            "content_type": guess_content_type(rel),
-            "url": urls.get(rel),
-        }
+        if site:
+            files = site.get("files") or {}
+            if rel in files:
+                urls = site.get("files_urls") or {}
+                content = files[rel]
+                return {
+                    "content": content,
+                    "content_type": guess_content_type(rel),
+                    "url": urls.get(rel),
+                }
+
+        # Check R2 fallback directly for sites/{slug_or_id}/{rel}
+        try:
+            from app.services.cloudflare_r2 import get_r2_client, build_r2_public_url
+            s3_client, bucket_name, pub_domain = get_r2_client("GENERATED")
+            r2_key = f"sites/{slug_or_id}/{rel}"
+
+            def _fetch_site_file():
+                try:
+                    resp = s3_client.get_object(Bucket=bucket_name, Key=r2_key)
+                    raw_bytes = resp["Body"].read()
+                    try:
+                        return raw_bytes.decode("utf-8")
+                    except Exception:
+                        import base64
+                        return "data:" + guess_content_type(rel) + ";base64," + base64.b64encode(raw_bytes).decode("ascii")
+                except Exception:
+                    return None
+
+            body = await asyncio.to_thread(_fetch_site_file)
+            if body is not None:
+                if site and "files" in site:
+                    site["files"][rel] = body
+                return {
+                    "content": body,
+                    "content_type": guess_content_type(rel),
+                    "url": build_r2_public_url(pub_domain, r2_key),
+                }
+        except Exception as r2_err:
+            logger.debug(f"R2 get_site_file fallback error: {r2_err}")
+
+        return None
 
     @staticmethod
     async def get_site(slug_or_id: str, supabase_client=None) -> Optional[Dict[str, Any]]:
@@ -312,17 +360,75 @@ class HostedSitesService:
         # 2. Supabase DB check
         if supabase_client:
             try:
-                res = await asyncio.to_thread(
-                    lambda: supabase_client.table("hosted_sites")
-                    .select("*")
-                    .or_(f"slug.eq.{slug_or_id},id.eq.{slug_or_id}")
-                    .maybe_single()
-                    .execute()
-                )
+                # Validate if slug_or_id is a valid UUID before querying id column
+                is_valid_uuid = False
+                try:
+                    uuid.UUID(str(slug_or_id))
+                    is_valid_uuid = True
+                except (ValueError, TypeError, AttributeError):
+                    is_valid_uuid = False
+
+                def _run_query():
+                    tbl = supabase_client.table("hosted_sites").select("*")
+                    if is_valid_uuid:
+                        return tbl.or_(f"slug.eq.{slug_or_id},id.eq.{slug_or_id}").maybe_single().execute()
+                    else:
+                        return tbl.eq("slug", str(slug_or_id)).maybe_single().execute()
+
+                res = await asyncio.to_thread(_run_query)
                 if res and res.data:
                     _MEMORY_HOSTED_SITES[slug_or_id] = res.data
                     return res.data
             except Exception as db_err:
                 logger.warning(f"Supabase get_site query error: {db_err}")
+
+        # 3. Cloudflare R2 persistent storage fallback (container restart resilience)
+        try:
+            from app.services.cloudflare_r2 import get_r2_client
+            import json
+
+            s3_client, bucket_name, _ = get_r2_client("GENERATED")
+
+            def _fetch_from_r2():
+                # 3a. Check for sites/{slug_or_id}/site.json
+                meta_key = f"sites/{slug_or_id}/site.json"
+                try:
+                    resp = s3_client.get_object(Bucket=bucket_name, Key=meta_key)
+                    raw_bytes = resp["Body"].read()
+                    data = json.loads(raw_bytes.decode("utf-8"))
+                    if data and isinstance(data, dict):
+                        return data
+                except Exception:
+                    pass
+
+                # 3b. Fallback: Check for sites/{slug_or_id}/index.html
+                index_key = f"sites/{slug_or_id}/index.html"
+                try:
+                    resp = s3_client.get_object(Bucket=bucket_name, Key=index_key)
+                    raw_bytes = resp["Body"].read()
+                    html = raw_bytes.decode("utf-8", errors="replace")
+                    return {
+                        "id": str(uuid.uuid4()),
+                        "slug": slug_or_id,
+                        "title": slug_or_id,
+                        "html_content": html,
+                        "css_content": "",
+                        "js_content": "",
+                        "files": {"index.html": html},
+                        "is_public": True,
+                        "view_count": 1,
+                        "created_at": datetime.utcnow().isoformat(),
+                    }
+                except Exception:
+                    pass
+                return None
+
+            site_data = await asyncio.to_thread(_fetch_from_r2)
+            if site_data:
+                _MEMORY_HOSTED_SITES[slug_or_id] = site_data
+                _MEMORY_HOSTED_SITES[site_data.get("slug", slug_or_id)] = site_data
+                return site_data
+        except Exception as r2_err:
+            logger.debug(f"R2 get_site fallback error for {slug_or_id}: {r2_err}")
 
         return None

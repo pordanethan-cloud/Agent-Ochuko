@@ -3,6 +3,7 @@ import pytest
 import os
 import shutil
 import tempfile
+from unittest.mock import patch, MagicMock
 from app.services.code_sandbox import execute_code_in_sandbox
 
 def get_sandbox_dir(conversation_id: str) -> str:
@@ -121,4 +122,101 @@ async def test_bash_sandbox_persistence_and_delta(monkeypatch):
                     break
                 except Exception:
                     await asyncio.sleep(0.2)
+
+
+@pytest.mark.asyncio
+async def test_sync_conversation_sandbox_workspace_local_scan():
+    """Verifies that sync_conversation_sandbox_workspace accurately discovers local files in sandbox."""
+    import uuid
+    from app.services.code_sandbox import sync_conversation_sandbox_workspace, sandbox_write_file, sandbox_read_file
+    conv_id = f"test-sync-{uuid.uuid4()}"
+    sandbox_dir = get_sandbox_dir(conv_id)
+
+    try:
+        # Write a strategy document
+        write_res = await sandbox_write_file(conv_id, "strategy.md", "# Scalping Strategy\nImportant setup rules.")
+        assert "strategy.md" in write_res
+
+        # Call workspace sync
+        files = await sync_conversation_sandbox_workspace(conv_id, "test-user")
+        assert any(f["filename"] == "strategy.md" for f in files)
+
+        # Read back
+        read_res = await sandbox_read_file(conv_id, "strategy.md")
+        assert "Scalping Strategy" in read_res
+    finally:
+        if os.path.exists(sandbox_dir):
+            try:
+                shutil.rmtree(sandbox_dir)
+            except Exception:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_sandbox_edit_and_read_lifecycle():
+    """Verifies that sandbox_edit surgically updates existing files in the sandbox workspace."""
+    import uuid
+    from app.services.code_sandbox import sandbox_write_file, sandbox_edit_file, sandbox_read_file
+    conv_id = f"test-edit-{uuid.uuid4()}"
+    sandbox_dir = get_sandbox_dir(conv_id)
+
+    try:
+        await sandbox_write_file(conv_id, "manual range-scalping strategy.md", "# Manual Range Scalping\n\nRule 1: Enter on bounce.")
+        edit_res = await sandbox_edit_file(
+            conv_id,
+            "manual range-scalping strategy.md",
+            "# Manual Range Scalping",
+            "**5-Line Summary: Scalp on key levels.**\n\n# Manual Range Scalping"
+        )
+        assert "EDITED manual range-scalping strategy.md" in edit_res
+
+        content = await sandbox_read_file(conv_id, "manual range-scalping strategy.md")
+        assert "5-Line Summary: Scalp on key levels." in content
+        assert "Rule 1: Enter on bounce." in content
+    finally:
+        if os.path.exists(sandbox_dir):
+            try:
+                shutil.rmtree(sandbox_dir)
+            except Exception:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_hosted_sites_r2_recovery_fallback():
+    """Verifies that get_site and get_site_file recover from memory loss using R2 mock fallback."""
+    from unittest.mock import MagicMock
+    from app.services.hosted_sites_service import HostedSitesService, _MEMORY_HOSTED_SITES
+    import json
+
+    slug = "test-recovery-site-999"
+    # Ensure memory is clear for this slug
+    _MEMORY_HOSTED_SITES.pop(slug, None)
+
+    site_record = {
+        "id": "site-uuid-999",
+        "slug": slug,
+        "title": "Recovered Site",
+        "html_content": "<h1>Persistent Content</h1>",
+        "files": {"index.html": "<h1>Persistent Content</h1>", "style.css": "body { color: gold; }"},
+        "is_public": True,
+        "view_count": 0,
+    }
+
+    # Mock R2 client
+    mock_s3 = MagicMock()
+    mock_s3.get_object.return_value = {
+        "Body": MagicMock(read=lambda: json.dumps(site_record).encode("utf-8"))
+    }
+
+    with patch("app.services.cloudflare_r2.get_r2_client", return_value=(mock_s3, "test-bucket", "https://pub.mock.r2.dev")):
+        recovered = await HostedSitesService.get_site(slug, supabase_client=None)
+        assert recovered is not None
+        assert recovered["title"] == "Recovered Site"
+        assert slug in _MEMORY_HOSTED_SITES
+
+        # Test file retrieval from recovered site
+        file_res = await HostedSitesService.get_site_file(slug, "style.css", supabase_client=None)
+        assert file_res is not None
+        assert "color: gold" in file_res["content"]
+
 

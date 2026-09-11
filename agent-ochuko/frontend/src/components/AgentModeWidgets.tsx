@@ -25,6 +25,8 @@ export interface PlanStepItem {
   duration_ms?: number
   token_spend?: number
   error?: string
+  adapted_reasoning?: string
+  previous_tool?: string
 }
 
 export interface AgentTaskData {
@@ -346,9 +348,9 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
               }`}
             >
               <div
-                onClick={() => (step.result_summary ? toggleExpand(step.index) : undefined)}
+                onClick={() => ((step.result_summary || step.adapted_reasoning) ? toggleExpand(step.index) : undefined)}
                 className={`px-2 py-[7px] flex items-center gap-2.5 rounded-lg ${
-                  step.result_summary ? 'cursor-pointer hover:bg-white/[0.03]' : ''
+                  (step.result_summary || step.adapted_reasoning) ? 'cursor-pointer hover:bg-white/[0.03]' : ''
                 } ${isSkipped ? 'opacity-45' : ''}`}
               >
                 {/* Status icon */}
@@ -371,6 +373,11 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
                 }`}>
                   <span className={`mr-1.5 ${OODA_LABEL_CLASS}`}>{phase}</span>
                   {isDone && step.result_summary ? step.result_summary.split('\n')[0] : step.description}
+                  {step.adapted_reasoning && (
+                    <span className="ml-2 inline-flex items-center text-[10px] text-amber-300/80 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 font-mono">
+                      Adapted: {step.previous_tool || 'tool'} → {step.tool_name}
+                    </span>
+                  )}
                 </p>
 
                 {/* Right: duration + chevron */}
@@ -378,7 +385,7 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
                   {step.duration_ms ? (
                     <span className="text-[9.5px] font-mono text-white/30">{formatElapsed(step.duration_ms)}</span>
                   ) : null}
-                  {step.result_summary && (
+                  {(step.result_summary || step.adapted_reasoning) && (
                     <span className="text-white/35 hover:text-white/70">
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </span>
@@ -387,11 +394,18 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
               </div>
 
               {/* Collapsible step detail */}
-              {isExpanded && step.result_summary && (
-                <div className="px-2 pb-2.5 pt-0.5">
-                  <p className="text-[11.5px] text-white/60 leading-relaxed whitespace-pre-wrap border-l-2 border-white/10 pl-2.5 ml-[7px]">
-                    {step.result_summary}
-                  </p>
+              {isExpanded && (step.result_summary || step.adapted_reasoning) && (
+                <div className="px-2 pb-2.5 pt-0.5 space-y-1.5">
+                  {step.adapted_reasoning && (
+                    <div className="text-[11px] text-amber-300/85 leading-relaxed border-l-2 border-amber-500/40 pl-2.5 ml-[7px] bg-amber-500/[0.04] py-1 pr-2 rounded-r">
+                      <span className="font-semibold text-amber-200">AI Adaptation:</span> {step.adapted_reasoning}
+                    </div>
+                  )}
+                  {step.result_summary && (
+                    <p className="text-[11.5px] text-white/60 leading-relaxed whitespace-pre-wrap border-l-2 border-white/10 pl-2.5 ml-[7px]">
+                      {step.result_summary}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

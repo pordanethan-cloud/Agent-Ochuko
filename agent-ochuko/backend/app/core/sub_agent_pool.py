@@ -234,31 +234,43 @@ class SubAgentPool:
         search_fn=None,
     ) -> SubAgentResult:
         """
-        Executes web scraping. If direct scraping fails (e.g. anti-bot, DNS, or blocked URL),
-        automatically falls back to Google Search Grounding for 100% resilient live intelligence.
+        Executes web scraping. Returns failure if blocked or unable to load,
+        allowing the AI-level cognitive feedback loop to inspect the obstacle,
+        formulate an aim, and dynamically select an alternative tool.
         """
         clean_url = (url or "").strip().rstrip(".:,;`)]'\"")
-        if clean_url and ("." in clean_url):
-            try:
-                from app.services.browser_agent import BrowserAgent
-                res = await BrowserAgent.scrape_url(url=clean_url, extract_type=extract_type)
-                if res.get("success") and res.get("content_markdown"):
-                    return SubAgentResult(
-                        success=True,
-                        summary=res.get("summary", "Page scraped."),
-                        artifacts=[],
-                        token_spend=len(res.get("content_markdown", "")) // 4 + 100,
-                        raw_length=len(res.get("content_markdown", "")),
-                    )
-            except Exception as e:
-                logger.debug(f"Direct scrape error for {clean_url}, using search grounding: {e}")
+        if not clean_url or "." not in clean_url:
+            return SubAgentResult(
+                success=False,
+                summary="No valid URL provided to scrape.",
+                error="Invalid or missing URL for scrape_web",
+            )
 
-        # Fallback to Google Grounding Search
-        if search_fn:
-            search_query = query_context or f"latest updates and content from {clean_url}"
-            return await self.delegate_search(query=search_query, search_fn=search_fn)
-
-        return SubAgentResult(success=False, summary=f"Could not load {clean_url}.", error="Scrape failed")
+        try:
+            from app.services.browser_agent import BrowserAgent
+            res = await BrowserAgent.scrape_url(url=clean_url, extract_type=extract_type)
+            if res.get("success") and res.get("content_markdown"):
+                return SubAgentResult(
+                    success=True,
+                    summary=res.get("summary", "Page scraped."),
+                    artifacts=[],
+                    token_spend=len(res.get("content_markdown", "")) // 4 + 100,
+                    raw_length=len(res.get("content_markdown", "")),
+                )
+            else:
+                err_msg = res.get("error") or f"Could not load or extract content from {clean_url}"
+                return SubAgentResult(
+                    success=False,
+                    summary=f"Scrape failed for {clean_url}: {err_msg[:120]}",
+                    error=err_msg,
+                )
+        except Exception as e:
+            logger.debug(f"Direct scrape error for {clean_url}: {e}")
+            return SubAgentResult(
+                success=False,
+                summary=f"Scrape error for {clean_url}: {str(e)[:120]}",
+                error=str(e),
+            )
 
     async def delegate_handle_lookup(self, handle: str, platform: str = "auto") -> SubAgentResult:
         """Looks up a developer or social profile handle."""
@@ -283,11 +295,12 @@ class SubAgentPool:
         html_content: str,
         css_content: str = "",
         js_content: str = "",
+        files: Optional[Dict[str, str]] = None,
         user_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         supabase_client=None,
     ) -> SubAgentResult:
-        """Deploys an instant static website and produces a live preview URL."""
+        """Deploys an instant static website or multi-file web app and produces a live preview URL."""
         try:
             from app.services.hosted_sites_service import HostedSitesService
             res = await HostedSitesService.deploy_site(
@@ -295,16 +308,19 @@ class SubAgentPool:
                 html_content=html_content,
                 css_content=css_content,
                 js_content=js_content,
+                files=files,
                 user_id=user_id,
                 conversation_id=conversation_id,
                 supabase_client=supabase_client,
             )
             preview_url = res.get("preview_url", "")
+            file_list = res.get("files") or []
+            files_count_str = f" ({len(file_list)} files)" if file_list else ""
             summary = (
                 f"**Website Deployed Successfully!**\n"
                 f"- **Title**: {res.get('title')}\n"
                 f"- **Live Preview URL**: [{preview_url}]({preview_url})\n"
-                f"- **Slug**: `{res.get('slug')}`"
+                f"- **Slug**: `{res.get('slug')}`{files_count_str}"
             )
             artifacts = [
                 {
@@ -315,12 +331,21 @@ class SubAgentPool:
                     "slug": res.get("slug"),
                 }
             ]
+            if file_list and len(file_list) > 1:
+                for fn in file_list:
+                    if fn not in ("index.html", "index.htm"):
+                        artifacts.append({
+                            "filename": fn,
+                            "download_url": f"{preview_url}/{fn}",
+                            "title": f"{res.get('title')} - {fn}",
+                            "type": "site_file",
+                        })
             return SubAgentResult(
                 success=True,
                 summary=summary,
                 artifacts=artifacts,
                 token_spend=250,
-                raw_length=len(html_content),
+                raw_length=len(html_content) + sum(len(v) for v in (files or {}).values()),
             )
         except Exception as e:
             logger.error(f"SubAgent site deployment failed: {e}")

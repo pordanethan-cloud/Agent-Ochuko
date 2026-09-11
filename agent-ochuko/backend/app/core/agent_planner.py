@@ -56,7 +56,7 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "  {\n"
     "    \"index\": 1,\n"
     "    \"description\": \"Specific step action description (e.g. Scrape pricing data from URL, Look up @handle on GitHub, Deploy landing page)\",\n"
-    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"terminal\" | \"fetch_stock_image\" | \"sandbox_ls\" | \"sandbox_read\" | \"sandbox_write\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
+    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"terminal\" | \"fetch_stock_image\" | \"sandbox_ls\" | \"sandbox_read\" | \"sandbox_write\" | \"sandbox_edit\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | null,\n"
     "    \"risk_level\": \"low\" | \"medium\" | \"high\"\n"
     "  }\n"
     "]\n\n"
@@ -64,7 +64,8 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "- When user provides a URL or asks to scrape/crawl/browse a webpage: use tool_name=\"scrape_web\".\n"
     "- When user pastes a link or asks to read a specific page's content: use tool_name=\"fetch_url\".\n"
     "- When user asks to remember a preference or fact for later: use tool_name=\"memory_save\".\n"
-    "- When a step creates or modifies files: use tool_name=\"sandbox_write\" (complete files only).\n"
+    "- When a step creates files: use tool_name=\"sandbox_write\".\n"
+    "- When a step modifies, patches, or edits an existing file: use tool_name=\"sandbox_edit\" or \"execute_code\".\n"
     "- When a step inspects or verifies existing files: use tool_name=\"sandbox_ls\" or \"sandbox_read\".\n"
     "- When user asks to look up a GitHub username or social profile: use tool_name=\"lookup_handle\".\n"
     "- When user asks to build, deploy, or create a web app, website, landing page, or calculator: use tool_name=\"deploy_site\".\n"
@@ -219,7 +220,7 @@ async def generate_plan(
         return None
 
 
-def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "low") -> List[PlanStep]:
+def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> List[PlanStep]:
     """Context-aware programmatic fallback plan generator."""
     pasted_full = re.search(r"\[Pasted Content:[^\]]*\]\s*```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```", goal, flags=re.IGNORECASE)
     if pasted_full:
@@ -306,7 +307,8 @@ async def generate_structured_plan(
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     openai_client: Optional[AsyncAzureOpenAI] = None,
     nano_deployment: str = "gpt-5.6-luna",
-    auto_approve_level: str = "low",
+    auto_approve_level: str = "high",
+    workspace_files: Optional[List[str]] = None,
 ) -> List[PlanStep]:
     """
     Generates a structured List[PlanStep] for Agent Mode with risk levels and approval requirements.
@@ -353,6 +355,9 @@ async def generate_structured_plan(
                 history_snippet += f"{role}: {content}\n"
 
         user_content = f"GOAL: {goal}"
+        if workspace_files:
+            ws_str = ", ".join(f"'{f}'" for f in workspace_files)
+            user_content = f"EXISTING ACTIVE WORKSPACE FILES: [{ws_str}]\n\n{user_content}"
         if history_snippet:
             user_content = f"CONTEXT:\n{history_snippet.strip()}\n\n{user_content}"
 

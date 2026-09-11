@@ -66,7 +66,7 @@ _CATEGORY_TOOLS: Dict[str, set] = {
 _NONE_RE = re.compile(
     r"^(hello|hi+|hey|good\s+(morning|afternoon|evening|day)|greetings|"
     r"who\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you|"
-    r"thanks|thank\s+you|sup|yo|testing|test|okay|ok|got\s+it|sure|"
+    r"thanks|thank\s+you|thx|ty|sup|yo|testing|test|okay|ok|got\s+it|sure|"
     r"sounds\s+good|perfect|great|nice|cool|awesome|interesting|"
     r"what\s+is\s+(your\s+name|this)|tell\s+me\s+about\s+yourself|"
     r"explain|define|describe|summarize\s+this|help\s+me\s+understand)"
@@ -148,12 +148,7 @@ def classify_intent(query: str) -> str:
 
     q = query.strip()
 
-    # Pure conversational → skip all schemas
-    if _NONE_RE.match(q):
-        logger.debug("CategoryGate: intent=none (conversational)")
-        return "none"
-
-    # Score each non-none category
+    # Score each non-none category first (tool keywords take precedence)
     hits: List[str] = []
     if _RESEARCH_KW.search(q):
         hits.append("research")
@@ -170,15 +165,21 @@ def classify_intent(query: str) -> str:
     if _AGENCY_KW.search(q):
         hits.append("agency")
 
-    if len(hits) == 0:
-        # No clear signal → safe fallback: full roster
-        logger.debug("CategoryGate: intent=all (no signal)")
-        return "all"
+    # If any specific tool keywords matched, route immediately
     if len(hits) == 1:
         logger.debug("CategoryGate: intent=%s", hits[0])
         return hits[0]
-    # Multiple signals → full roster to avoid mis-routing
-    logger.debug("CategoryGate: intent=all (multi-signal: %s)", hits)
+    if len(hits) > 1:
+        logger.debug("CategoryGate: intent=all (multi-signal: %s)", hits)
+        return "all"
+
+    # Only when NO tool signals are present, check for conversational / conceptual explanations
+    if _NONE_RE.match(q):
+        logger.debug("CategoryGate: intent=none (conversational)")
+        return "none"
+
+    # Open-ended prompt with no clear keyword: give full roster so model decides intelligently
+    logger.debug("CategoryGate: intent=all (open-ended / no keyword)")
     return "all"
 
 
@@ -186,6 +187,7 @@ def route_tools(
     query: str,
     all_tools: List[Dict[str, Any]],
     iteration: int = 0,
+    mode: str = "discuss",
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Returns (category_name, filtered_tool_list).
@@ -193,13 +195,17 @@ def route_tools(
     Rules:
     - Iteration > 0 (model is already mid-loop, executing a plan):
       always return full roster so it can use any tool freely.
-    - Iteration == 0:
+    - Mode in ("agent", "think"):
+      autonomous and deep-reasoning modes always receive the full roster
+      so the AI intelligently decides the best tool for the goal without
+      being constrained by brittle keyword matching.
+    - Iteration == 0 in standard conversation:
       classify the user message and return only the matching slice.
     - 'none' category: returns (category, []) — caller must omit
       the 'tools' key from stream_kwargs entirely.
     """
-    # Mid-loop: never prune the roster
-    if iteration > 0:
+    # Mid-loop or autonomous/reasoning modes: never prune the roster
+    if iteration > 0 or mode in ("agent", "think"):
         return "all", all_tools
 
     category = classify_intent(query)

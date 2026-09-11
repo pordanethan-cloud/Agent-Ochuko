@@ -9,8 +9,82 @@ the performance budget (1000 classifications well under 1ms average).
 """
 
 import time
+import pytest
 
 from app.core.complexity_router import classify, TIER_ORDER
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_tier", "expected_signal"),
+    [
+        ("", "low", "empty"),
+        ("Hello!", "low", "trivial"),
+        ("What is the capital of France?", "low", "simple_lookup_cap"),
+        ("Weather in Lagos today", "medium", "live_query_floor"),
+        ("Write a poem about rain", "low", "length:<80"),
+        ("Build a React app", "medium", "codegen:1"),
+        (
+            "Refactor this Python API for performance, caching, and rate limits.",
+            "high",
+            "tech_depth:3",
+        ),
+        (
+            "Build a production-ready React and FastAPI application from scratch "
+            "with authentication, PostgreSQL migrations, Redis caching, CI/CD, "
+            "observability, deployment, and a detailed architecture.",
+            "xhigh",
+            "scale:2",
+        ),
+    ],
+)
+def test_classify_routes_expected_prompts(prompt, expected_tier, expected_signal):
+    decision = classify(prompt)
+
+    assert decision.tier == expected_tier
+    assert decision.score >= 0
+    assert expected_signal in decision.signals
+
+
+def test_code_fence_increases_technical_complexity():
+    decision = classify("""Please debug this:\n```python\ndef add(a, b):\n    return a + b\n```""")
+
+    assert decision.tier == "high"
+    assert "code_syntax" in decision.signals
+
+
+@pytest.mark.parametrize(
+    ("floor", "cap", "expected_tier"),
+    [
+        ("high", None, "high"),
+        (None, "low", "low"),
+        ("xhigh", "medium", "medium"),
+        ("invalid", None, "low"),
+        (None, "invalid", "low"),
+    ],
+)
+def test_constraints_are_deterministic_and_cap_wins(floor, cap, expected_tier):
+    assert classify("hello", floor=floor, cap=cap).tier == expected_tier
+
+
+def test_live_query_respects_explicit_cap():
+    decision = classify("current price of gold", cap="low")
+
+    assert decision.tier == "low"
+    assert "live_query_floor" in decision.signals
+
+
+def test_non_string_input_is_rejected():
+    with pytest.raises(TypeError, match="text must be a string"):
+        classify(None)  # type: ignore[arg-type]
+
+
+def test_max_scan_chars_truncates_huge_input():
+    huge_prompt = "Build an app " + ("x" * 20_000)
+    decision = classify(huge_prompt)
+    assert "truncated" in decision.signals
+    assert "codegen:1" in decision.signals
+    assert "length:>600" in decision.signals
+
 
 
 def test_trivial_greeting_is_low():
