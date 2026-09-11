@@ -79,7 +79,7 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
   }
 
   return (
-    <div className="w-full my-3 rounded-2xl bg-brand-card border border-brand-border p-4 sm:p-5 shadow-xl relative overflow-hidden animate-fadeIn select-none">
+    <div className="w-full my-3 rounded-2xl bg-brand-card border border-brand-border p-3.5 sm:p-5 shadow-xl relative overflow-hidden animate-fadeIn select-none">
       {/* Background ambient glow */}
       <div className="absolute top-0 right-0 w-48 h-48 bg-white/[0.02] rounded-full blur-3xl pointer-events-none" />
 
@@ -146,7 +146,7 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
                     {!isExecuting && onEditStep && (
                       <button
                         onClick={() => handleStartEdit(step)}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-white/40 hover:text-white transition"
+                        className="opacity-70 sm:opacity-0 group-hover:opacity-100 p-1 text-white/40 hover:text-white transition"
                         title="Edit step description"
                       >
                         <Pencil className="w-3 h-3" />
@@ -466,7 +466,7 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
       </div>
 
       {/* Buttons */}
-      <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/[0.08]">
+      <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2 pt-3 border-t border-white/[0.08]">
         <button
           type="button"
           onClick={onCancel}
@@ -523,7 +523,7 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
 
   return (
     <div className="w-full my-3.5 rounded-lg bg-brand-card border border-white/10 shadow-lg relative overflow-hidden animate-fadeIn select-none">
-      <div className="p-3.5 flex items-center justify-between gap-3">
+      <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-7 h-7 rounded-md bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
             <Zap className="w-3.5 h-3.5" />
@@ -540,7 +540,7 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
         </div>
 
         {/* Actions: panel preview + external visit */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 w-full sm:w-auto justify-end">
           <button
             type="button"
             onClick={openInPanel}
@@ -626,7 +626,7 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef
       onPointerMove={(e) => { if (dragging) seekFromPointer(e.clientY) }}
       onPointerUp={() => setDragging(false)}
       onPointerCancel={() => setDragging(false)}
-      className="absolute right-1 top-0 bottom-0 z-40 flex flex-col items-end justify-between py-8 w-4 touch-none cursor-ns-resize select-none group"
+      className="hidden sm:flex absolute right-1 top-0 bottom-0 z-40 flex-col items-end justify-between py-8 w-4 touch-none cursor-ns-resize select-none group"
       aria-label="Prompt navigator"
       role="slider"
       aria-valuemin={1}

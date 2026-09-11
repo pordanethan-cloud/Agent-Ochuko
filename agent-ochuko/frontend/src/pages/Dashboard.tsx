@@ -3884,6 +3884,7 @@ export const Dashboard: React.FC = () => {
     return saved ? parseFloat(saved) : 1.0
   })
   const isResizingRef = useRef(false)
+  const [isDraggingSidebar, setIsDraggingSidebar] = useState(false)
 
   useEffect(() => {
     const handleResize = () => {
@@ -3908,6 +3909,7 @@ export const Dashboard: React.FC = () => {
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     isResizingRef.current = true
+    setIsDraggingSidebar(true)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
   }, [])
@@ -3921,6 +3923,7 @@ export const Dashboard: React.FC = () => {
     const handleMouseUp = () => {
       if (!isResizingRef.current) return
       isResizingRef.current = false
+      setIsDraggingSidebar(false)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       localStorage.setItem('sidebar_width', sidebarWidth.toString())
@@ -4597,9 +4600,11 @@ export const Dashboard: React.FC = () => {
     // Reset mode to discuss
     setMode('discuss')
     
-    // Close sidebar
-    setIsSidebarOpen(false)
-    setIsSidebarHovered(false)
+    // Close sidebar on mobile/tablet, preserve pinned state on desktop
+    if (window.innerWidth < 1024) {
+      setIsSidebarOpen(false)
+      setIsSidebarHovered(false)
+    }
     
     // Clear any preview state
     setPreviewingFile(null)
@@ -7227,12 +7232,11 @@ export const Dashboard: React.FC = () => {
           maxWidth: isDesktop ? undefined : '320px',
         }}
 
-        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] sm:top-3 sm:left-3 sm:h-[calc(100dvh-24px)] bg-[#0d0f11]/98 border-r sm:border border-[#1e2025] rounded-none sm:rounded-lg z-40 flex flex-col justify-between px-4 sm:px-5 py-4 sm:py-6 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out overflow-hidden ${
-
+        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] sm:top-3 sm:left-3 sm:h-[calc(100dvh-24px)] bg-[#0d0f11]/98 border-r sm:border border-[#1e2025] rounded-none sm:rounded-lg z-40 flex flex-col justify-between px-4 sm:px-5 py-4 sm:py-6 backdrop-blur-xl shadow-2xl shadow-black/80 ${
+          isDraggingSidebar ? 'transition-none' : 'transition-all duration-300 ease-out'
+        } overflow-hidden ${
           isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100 pointer-events-auto' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
-
         }`}
-
       >
 
         {/* ── 1. Top Section (Pinned Header, New Session, Search) ─────── */}
@@ -7264,14 +7268,14 @@ export const Dashboard: React.FC = () => {
 
             </div>
 
-            {/* Mobile Close Button (X) */}
+            {/* Close Button (X) */}
             <button
               type="button"
               onClick={() => {
                 setIsSidebarOpen(false)
                 setIsSidebarHovered(false)
               }}
-              className="sm:hidden min-h-[44px] min-w-[44px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 active:bg-white/15 transition-colors"
+              className="min-h-[44px] min-w-[44px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 active:bg-white/15 transition-colors"
               aria-label="Close navigation sidebar"
               title="Close Sidebar"
             >
@@ -7833,9 +7837,11 @@ export const Dashboard: React.FC = () => {
       {/* Chat Workspace */}
 
       <main
-        className="flex-1 flex flex-col relative bg-brand-bg overflow-hidden z-10 min-w-0 transition-all duration-300 ease-out"
+        className={`flex-1 flex flex-col relative bg-brand-bg overflow-hidden z-10 min-w-0 ${
+          isDraggingSidebar ? 'transition-none' : 'transition-all duration-300 ease-out'
+        }`}
         style={{
-          marginLeft: '0px'
+          marginLeft: isDesktop && isSidebarOpen ? `${sidebarWidth + 24}px` : '0px'
         }}
       >
 
@@ -8003,7 +8009,7 @@ export const Dashboard: React.FC = () => {
 
               onScroll={handleScroll}
 
-              className="flex-1 overflow-y-auto overflow-x-hidden pt-8 pb-4 px-5 md:px-10 relative z-10"
+              className="flex-1 overflow-y-auto overflow-x-hidden pt-6 sm:pt-8 pb-4 px-3 sm:px-5 md:px-8 relative z-10"
 
             >
 
@@ -8777,7 +8783,7 @@ export const Dashboard: React.FC = () => {
 
                     {((msg.role === 'assistant' && msg.content.length > 0 && !(isStreaming && i === messages.length - 1)) || (msg.role === 'user' && editingMessageIndex !== i)) && (
 
-                      <div className="flex items-center gap-3.5 px-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      <div className="flex items-center gap-3.5 px-1.5 opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-200">
 
                         {msg.content.length > 0 && (
 

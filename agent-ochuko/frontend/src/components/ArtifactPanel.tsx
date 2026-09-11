@@ -663,7 +663,7 @@ export function ArtifactPanel({
 
   return (
     <div
-      className="fixed top-0 right-0 h-full bg-[#0d0f11] border-l border-white/10 z-[100] flex flex-col animate-[slideInRight_0.2s_ease-out] max-md:w-full shadow-2xl"
+      className="fixed top-0 right-0 h-[100dvh] max-h-[100dvh] bg-[#0d0f11] border-l border-white/10 z-[100] flex flex-col animate-[slideInRight_0.2s_ease-out] max-md:w-full shadow-2xl"
       style={{ width: `min(${width}px, 100vw)` }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -720,7 +720,7 @@ export function ArtifactPanel({
             type="button"
             onClick={handleCopy}
             title={copied ? "Copied to clipboard!" : "Copy active file content"}
-            className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
+            className="p-1.5 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
@@ -731,7 +731,7 @@ export function ArtifactPanel({
               type="button"
               onClick={handleDownloadActive}
               title={`Download ${activeFile.name.split('/').pop()}`}
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
+              className="p-1.5 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
             >
               <Download className="w-3.5 h-3.5" />
             </button>
@@ -743,7 +743,7 @@ export function ArtifactPanel({
               href={projectZipFile.url}
               download={projectZipFile.name}
               title="Download Full Project ZIP"
-              className="px-2 py-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-semibold flex items-center gap-1 transition"
+              className="px-2 py-1 min-h-[34px] rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-semibold flex items-center gap-1 transition"
             >
               <FileArchive className="w-3 h-3" />
               <span className="hidden sm:inline">ZIP</span>
@@ -757,7 +757,7 @@ export function ArtifactPanel({
               target="_blank"
               rel="noopener noreferrer"
               title="Open in new tab"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
+              className="p-1.5 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
             >
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
@@ -769,7 +769,7 @@ export function ArtifactPanel({
               type="button"
               onClick={onPublish}
               title="Publish artifact"
-              className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
+              className="p-1.5 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition"
             >
               <Globe className="w-3.5 h-3.5" />
             </button>
@@ -780,7 +780,7 @@ export function ArtifactPanel({
             type="button"
             onClick={onClose}
             title="Close Preview (Esc)"
-            className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition ml-1"
+            className="p-1.5 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition ml-1"
           >
             <X className="w-4 h-4" />
           </button>
@@ -793,7 +793,7 @@ export function ArtifactPanel({
           <button
             type="button"
             onClick={() => setMobileTab('files')}
-            className={`flex-1 py-2 text-xs font-semibold text-center transition flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2.5 min-h-[44px] text-xs font-semibold text-center transition flex items-center justify-center gap-1.5 ${
               mobileTab === 'files' ? 'text-white border-b-2 border-brand-primary bg-white/5' : 'text-white/40'
             }`}
           >
@@ -803,7 +803,7 @@ export function ArtifactPanel({
           <button
             type="button"
             onClick={() => setMobileTab('preview')}
-            className={`flex-1 py-2 text-xs font-semibold text-center transition flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2.5 min-h-[44px] text-xs font-semibold text-center transition flex items-center justify-center gap-1.5 ${
               mobileTab === 'preview' ? 'text-white border-b-2 border-brand-primary bg-white/5' : 'text-white/40'
             }`}
           >
