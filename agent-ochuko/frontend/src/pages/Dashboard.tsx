@@ -3992,6 +3992,7 @@ export const Dashboard: React.FC = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine)
 
   const [isShareModalOpen, setIsShareModalOpen] = useState(false)
+  const [isModeSheetOpen, setIsModeSheetOpen] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [showCapabilitiesNote, setShowCapabilitiesNote] = useState(() => !localStorage.getItem('dismissed_capabilities_note'))
 
@@ -4598,6 +4599,7 @@ export const Dashboard: React.FC = () => {
     
     // Close sidebar
     setIsSidebarOpen(false)
+    setIsSidebarHovered(false)
     
     // Clear any preview state
     setPreviewingFile(null)
@@ -4680,6 +4682,12 @@ export const Dashboard: React.FC = () => {
     setIsFetchingHistory(true)
 
     setExpandedCompactionIndices(new Set())
+
+    // Auto-close sidebar on mobile when a conversation is chosen
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false)
+      setIsSidebarHovered(false)
+    }
 
     // --- SWR Cache Read ---
     // Load cached messages first to make switching instant and avoid skeleton/blank screen flash
@@ -5169,6 +5177,8 @@ export const Dashboard: React.FC = () => {
         setIsSidebarOpen(false)
 
         setIsSidebarHovered(false)
+
+        setIsModeSheetOpen(false)
 
       }
 
@@ -7198,7 +7208,7 @@ export const Dashboard: React.FC = () => {
 
           onClick={() => { setIsSidebarOpen(false); setIsSidebarHovered(false) }}
 
-          className="absolute inset-0 bg-black/55 backdrop-blur-[2px] z-20 transition-opacity duration-300"
+          className="fixed inset-0 bg-black/60 backdrop-blur-[2px] z-30 transition-opacity duration-300"
 
         />
 
@@ -7210,41 +7220,73 @@ export const Dashboard: React.FC = () => {
 
         onMouseLeave={() => setIsSidebarHovered(false)}
 
-        style={{ width: (isSidebarOpen || isSidebarHovered) ? `${sidebarWidth}px` : '256px' }}
+        style={{
+          width: (isSidebarOpen || isSidebarHovered)
+            ? (isDesktop ? `${sidebarWidth}px` : 'min(320px, 100vw)')
+            : '256px',
+          maxWidth: isDesktop ? undefined : '320px',
+        }}
 
-        className={`absolute top-3 left-3 h-[calc(100vh-24px)] bg-[#0d0f11]/95 border border-[#1e2025] rounded-lg z-30 flex flex-col justify-between px-6 py-7 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out ${
+        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] sm:top-3 sm:left-3 sm:h-[calc(100dvh-24px)] bg-[#0d0f11]/98 border-r sm:border border-[#1e2025] rounded-none sm:rounded-lg z-40 flex flex-col justify-between px-4 sm:px-5 py-4 sm:py-6 backdrop-blur-xl shadow-2xl shadow-black/80 transition-all duration-300 ease-out overflow-hidden ${
 
-          isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
+          isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100 pointer-events-auto' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
 
         }`}
 
       >
 
-        <div>
+        {/* ── 1. Top Section (Pinned Header, New Session, Search) ─────── */}
+        <div className="shrink-0">
 
-          <div className="flex items-center gap-3 mb-8 pb-6 border-b border-[#1e2025]">
+          <div className="flex items-center justify-between gap-3 mb-4 pb-4 border-b border-[#1e2025]">
 
-            <div className="w-9 h-9 rounded-lg overflow-hidden border border-[#ffffff]/15 bg-brand-bg shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
 
-              <img src="/favicon.png" alt="Ochuko" className="w-full h-full object-cover" />
+              <div className="w-9 h-9 rounded-lg overflow-hidden border border-[#ffffff]/15 bg-brand-bg shrink-0">
+
+                <img src="/favicon.png" alt="Ochuko" className="w-full h-full object-cover" />
+
+              </div>
+
+              <div className="min-w-0">
+
+                <p className="font-semibold text-[13px] text-brand-text tracking-tight truncate">Agent Ochuko</p>
+
+                <div className="flex items-center gap-1.5 mt-0.5">
+
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+
+                  <p className="text-[9px] text-[#ffffff]/80 font-bold tracking-widest uppercase truncate">System Active</p>
+
+                </div>
+
+              </div>
 
             </div>
 
-            <div>
-
-              <p className="font-semibold text-[13px] text-brand-text tracking-tight">Agent Ochuko</p>
-
-              <p className="text-[9px] text-[#ffffff] font-bold tracking-widest uppercase mt-0.5">System Active</p>
-
-            </div>
+            {/* Mobile Close Button (X) */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsSidebarOpen(false)
+                setIsSidebarHovered(false)
+              }}
+              className="sm:hidden min-h-[44px] min-w-[44px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 active:bg-white/15 transition-colors"
+              aria-label="Close navigation sidebar"
+              title="Close Sidebar"
+            >
+              <X className="w-5 h-5" />
+            </button>
 
           </div>
 
           <button
 
+            type="button"
+
             onClick={() => handleNewSession()}
 
-            className="w-full h-10 border border-brand-border bg-brand-card hover:bg-[#2e2e2c] text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center tracking-wide mb-4"
+            className="w-full h-11 min-h-[44px] border border-brand-border bg-brand-card hover:bg-[#2e2e2c] active:bg-[#383835] text-brand-text hover:border-[#ffffff]/30 transition duration-150 rounded-lg text-xs font-semibold flex items-center justify-center tracking-wide mb-3 shadow-sm"
 
           >
 
@@ -7254,11 +7296,11 @@ export const Dashboard: React.FC = () => {
 
           {/* Search Input */}
 
-          <div className="relative mb-5">
+          <div className="relative mb-1">
 
-            <span className="absolute left-3 top-2.5 text-[#8e95a2]/50">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8e95a2]/50 pointer-events-none">
 
-              <Search className="w-3.5 h-3.5" />
+              <Search className="w-4 h-4" />
 
             </span>
 
@@ -7274,7 +7316,7 @@ export const Dashboard: React.FC = () => {
 
               placeholder="Search chats (Ctrl+K)..."
 
-              className="w-full h-9 bg-white/[0.03] focus:bg-white/[0.05] border border-white/[0.05] focus:border-white/10 rounded-lg pl-9 pr-8 text-[11px] text-[#f3f4f6] placeholder-[#8e95a2]/40 focus:outline-none transition"
+              className="w-full h-11 min-h-[44px] bg-white/[0.03] focus:bg-white/[0.05] border border-white/[0.08] focus:border-white/20 rounded-lg pl-9 pr-9 text-xs text-[#f3f4f6] placeholder-[#8e95a2]/50 focus:outline-none transition"
 
             />
 
@@ -7282,13 +7324,17 @@ export const Dashboard: React.FC = () => {
 
               <button
 
+                type="button"
+
                 onClick={() => setSearchQuery('')}
 
-                className="absolute right-3 top-2.5 text-[#8e95a2]/50 hover:text-brand-text"
+                className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[36px] min-w-[36px] flex items-center justify-center text-[#8e95a2]/70 hover:text-white"
+
+                aria-label="Clear search"
 
               >
 
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
 
               </button>
 
@@ -7296,35 +7342,231 @@ export const Dashboard: React.FC = () => {
 
           </div>
 
-          {/* Conversation List — grouped by date */}
+        </div>
 
-          <div className="flex-1 overflow-y-auto max-h-[calc(100vh-320px)] pr-1 custom-scrollbar">
+        {/* ── 2. Independent Scrollable Conversation History Container ─── */}
 
-            {searchResults !== null ? (
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 my-2 custom-scrollbar">
 
-              searchResults.length === 0 ? (
+          {searchResults !== null ? (
 
-                <p className="text-[10px] text-[#8e95a2]/40 italic pl-1">No results found</p>
+            searchResults.length === 0 ? (
 
-              ) : (
+              <p className="text-[10px] text-[#8e95a2]/40 italic pl-1 py-2">No results found</p>
+
+            ) : (
+
+              <div className="space-y-1">
+
+                <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/40 uppercase mb-1.5 px-1">
+
+                  Search Results
+
+                </p>
+
+                {searchResults.map((convo) => {
+
+                  const active = convo.id === activeConversationId
+
+                  return (
+
+                    <div key={convo.id} className="group relative flex items-center w-full min-h-[44px]">
+
+                      {renamingConvoId === convo.id ? (
+
+                        <input
+
+                          ref={renameInputRef}
+
+                          value={renameValue}
+
+                          onChange={e => setRenameValue(e.target.value)}
+
+                          onBlur={handleRenameCommit}
+
+                          onKeyDown={handleRenameKeyDown}
+
+                          className="flex-1 min-h-[40px] px-3 py-2 rounded-lg text-xs font-medium bg-[#ffffff]/10 border border-[#ffffff]/40 text-brand-text outline-none pr-8"
+
+                          maxLength={80}
+
+                          placeholder="Conversation title…"
+
+                        />
+
+                      ) : (
+
+                        <button
+
+                          type="button"
+
+                          onClick={() => {
+
+                            handleSelectConversation(convo.id, convo.mode)
+
+                            setSearchQuery('')
+
+                          }}
+
+                          onDoubleClick={e => {
+
+                            e.stopPropagation()
+
+                            setRenamingConvoId(convo.id)
+
+                            setRenameValue(convo.title || '')
+
+                          }}
+
+                          title="Double-click to rename"
+
+                          className={`flex-1 text-left min-h-[44px] py-2.5 px-3 rounded-lg text-xs font-medium transition duration-150 flex items-center pr-14 ${
+
+                            active
+
+                              ? 'bg-[#ffffff]/10 text-brand-text border border-[#ffffff]/20'
+
+                              : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
+
+                          }`}
+
+                        >
+
+                          <span className="truncate block w-full">
+
+                            {convo.title || 'Untitled Session'}
+
+                          </span>
+
+                        </button>
+
+                      )}
+
+                      {renamingConvoId !== convo.id && (
+
+                        <>
+
+                          <button
+
+                            type="button"
+
+                            onClick={e => {
+
+                              e.stopPropagation()
+
+                              setRenamingConvoId(convo.id)
+
+                              setRenameValue(convo.title || '')
+
+                            }}
+
+                            className="absolute right-8 opacity-70 sm:opacity-0 group-hover:opacity-100 min-h-[36px] min-w-[36px] flex items-center justify-center text-[#8e95a2]/50 hover:text-brand-accent transition duration-150 rounded hover:bg-white/5"
+
+                            title="Rename"
+
+                          >
+
+                            <Pencil className="w-3.5 h-3.5" />
+
+                          </button>
+
+                          <button
+
+                            type="button"
+
+                            onClick={e => {
+
+                              e.stopPropagation()
+
+                              setConvoToDelete(convo.id)
+
+                            }}
+
+                            className="absolute right-1 opacity-70 sm:opacity-0 group-hover:opacity-100 min-h-[36px] min-w-[36px] flex items-center justify-center text-[#8e95a2] hover:text-red-400 transition duration-150 rounded hover:bg-white/5"
+
+                            title="Delete Session"
+
+                          >
+
+                            <Trash className="w-3.5 h-3.5" />
+
+                          </button>
+
+                        </>
+
+                      )}
+
+                    </div>
+
+                  )
+
+                })}
+
+              </div>
+
+            )
+
+          ) : conversations.length === 0 ? (
+
+            <p className="text-[10px] text-[#8e95a2]/40 italic pl-1 py-2">No past sessions</p>
+
+          ) : (() => {
+
+            const startOfToday = new Date(); startOfToday.setHours(0,0,0,0)
+
+            const startOfYesterday = new Date(startOfToday); startOfYesterday.setDate(startOfYesterday.getDate() - 1)
+
+            const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfWeek.getDate() - 7)
+
+            const groups: { label: string; items: any[] }[] = [
+
+              { label: 'Today', items: [] },
+
+              { label: 'Yesterday', items: [] },
+
+              { label: 'This Week', items: [] },
+
+              { label: 'Older', items: [] },
+
+            ]
+
+            for (const convo of conversations) {
+
+              const ts = convo.created_at ? new Date(convo.created_at).getTime() : 0
+
+              if (ts >= startOfToday.getTime()) groups[0].items.push(convo)
+
+              else if (ts >= startOfYesterday.getTime()) groups[1].items.push(convo)
+
+              else if (ts >= startOfWeek.getTime()) groups[2].items.push(convo)
+
+              else groups[3].items.push(convo)
+
+            }
+
+            return groups.filter(g => g.items.length > 0).map(group => (
+
+              <div key={group.label} className="mb-3.5">
+
+                <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/70 uppercase mb-1.5 px-2">
+
+                  {group.label}
+
+                </p>
 
                 <div className="space-y-1">
 
-                  <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/40 uppercase mb-1.5 px-1">
-
-                    Search Results
-
-                  </p>
-
-                  {searchResults.map((convo) => {
+                  {group.items.map((convo) => {
 
                     const active = convo.id === activeConversationId
 
                     return (
 
-                      <div key={convo.id} className="group relative flex items-center w-full">
+                      <div key={convo.id} className="group relative flex items-center w-full min-h-[44px]">
 
                         {renamingConvoId === convo.id ? (
+
+                          // Rename mode — inline input
 
                           <input
 
@@ -7338,7 +7580,7 @@ export const Dashboard: React.FC = () => {
 
                             onKeyDown={handleRenameKeyDown}
 
-                            className="flex-1 px-3 py-2 rounded-lg text-[11px] font-medium bg-[#ffffff]/10 border border-[#ffffff]/40 text-brand-text outline-none pr-8"
+                            className="flex-1 min-h-[40px] px-3 py-2 rounded-lg text-xs font-medium bg-[#ffffff]/10 border border-[#ffffff]/40 text-brand-text outline-none pr-8"
 
                             maxLength={80}
 
@@ -7350,12 +7592,10 @@ export const Dashboard: React.FC = () => {
 
                           <button
 
+                            type="button"
+
                             onClick={() => {
-
                               handleSelectConversation(convo.id, convo.mode)
-
-                              setSearchQuery('')
-
                             }}
 
                             onDoubleClick={e => {
@@ -7370,19 +7610,23 @@ export const Dashboard: React.FC = () => {
 
                             title="Double-click to rename"
 
-                            className={`flex-1 text-left px-3 py-2 rounded-lg text-[11px] font-medium truncate transition duration-150 block pr-14 ${
+                            className={`flex-1 text-left min-h-[44px] py-2.5 px-3 rounded-lg text-[11.5px] font-medium transition duration-150 flex items-center pr-14 ${
 
                               active
 
-                                ? 'bg-[#ffffff]/10 text-brand-text border border-[#ffffff]/20'
+                                ? 'bg-white/[0.08] text-white border-l-2 border-white/50 rounded-l-none pl-2.5'
 
-                                : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/5 border border-transparent'
+                                : 'text-[#b0b7c3] hover:text-white hover:bg-white/[0.04] border-0'
 
                             }`}
 
                           >
 
-                            {convo.title || 'Untitled Session'}
+                            <span className="truncate block w-full">
+
+                              {convo.title || 'Untitled Session'}
+
+                            </span>
 
                           </button>
 
@@ -7394,6 +7638,8 @@ export const Dashboard: React.FC = () => {
 
                             <button
 
+                              type="button"
+
                               onClick={e => {
 
                                 e.stopPropagation()
@@ -7404,7 +7650,7 @@ export const Dashboard: React.FC = () => {
 
                               }}
 
-                              className="absolute right-7 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2]/50 hover:text-brand-accent transition duration-150 rounded hover:bg-white/5"
+                              className="absolute right-8 opacity-70 sm:opacity-0 group-hover:opacity-100 min-h-[36px] min-w-[36px] flex items-center justify-center text-[#8e95a2]/50 hover:text-brand-accent transition duration-150 rounded hover:bg-white/5"
 
                               title="Rename"
 
@@ -7416,6 +7662,8 @@ export const Dashboard: React.FC = () => {
 
                             <button
 
+                              type="button"
+
                               onClick={e => {
 
                                 e.stopPropagation()
@@ -7424,7 +7672,7 @@ export const Dashboard: React.FC = () => {
 
                               }}
 
-                              className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2] hover:text-red-400 transition duration-150 rounded hover:bg-white/5"
+                              className="absolute right-1 opacity-70 sm:opacity-0 group-hover:opacity-100 min-h-[36px] min-w-[36px] flex items-center justify-center text-[#8e95a2] hover:text-red-400 transition duration-150 rounded hover:bg-white/5"
 
                               title="Delete Session"
 
@@ -7446,204 +7694,17 @@ export const Dashboard: React.FC = () => {
 
                 </div>
 
-              )
+              </div>
 
-            ) : conversations.length === 0 ? (
+            ))
 
-              <p className="text-[10px] text-[#8e95a2]/40 italic pl-1">No past sessions</p>
-
-            ) : (() => {
-
-
-
-              const startOfToday = new Date(); startOfToday.setHours(0,0,0,0)
-
-              const startOfYesterday = new Date(startOfToday); startOfYesterday.setDate(startOfYesterday.getDate() - 1)
-
-              const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfWeek.getDate() - 7)
-
-              const groups: { label: string; items: any[] }[] = [
-
-                { label: 'Today', items: [] },
-
-                { label: 'Yesterday', items: [] },
-
-                { label: 'This Week', items: [] },
-
-                { label: 'Older', items: [] },
-
-              ]
-
-              for (const convo of conversations) {
-
-                const ts = convo.created_at ? new Date(convo.created_at).getTime() : 0
-
-                if (ts >= startOfToday.getTime()) groups[0].items.push(convo)
-
-                else if (ts >= startOfYesterday.getTime()) groups[1].items.push(convo)
-
-                else if (ts >= startOfWeek.getTime()) groups[2].items.push(convo)
-
-                else groups[3].items.push(convo)
-
-              }
-
-              return groups.filter(g => g.items.length > 0).map(group => (
-
-                <div key={group.label} className="mb-4">
-
-                  <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/70 uppercase mb-1.5 px-2">
-
-                    {group.label}
-
-                  </p>
-
-                  <div className="space-y-1">
-
-                    {group.items.map((convo) => {
-
-                      const active = convo.id === activeConversationId
-
-                      return (
-
-                        <div key={convo.id} className="group relative flex items-center w-full">
-
-                          {renamingConvoId === convo.id ? (
-
-                            // Rename mode — inline input
-
-                            <input
-
-                              ref={renameInputRef}
-
-                              value={renameValue}
-
-                              onChange={e => setRenameValue(e.target.value)}
-
-                              onBlur={handleRenameCommit}
-
-                              onKeyDown={handleRenameKeyDown}
-
-                              className="flex-1 px-3 py-2 rounded-lg text-[11px] font-medium bg-[#ffffff]/10 border border-[#ffffff]/40 text-brand-text outline-none pr-8"
-
-                              maxLength={80}
-
-                              placeholder="Conversation title…"
-
-                            />
-
-                          ) : (
-
-                            <button
-
-                              onClick={() => {
-                                if (active) {
-                                  setRenamingConvoId(convo.id)
-                                  setRenameValue(convo.title || '')
-                                } else {
-                                  handleSelectConversation(convo.id, convo.mode)
-                                }
-                              }}
-
-                              onDoubleClick={e => {
-
-                                e.stopPropagation()
-
-                                setRenamingConvoId(convo.id)
-
-                                setRenameValue(convo.title || '')
-
-                              }}
-
-                              title="Double-click to rename"
-
-                              className={`flex-1 text-left px-3 py-2 rounded-lg text-[11.5px] font-medium truncate transition duration-150 block pr-14 ${
-
-                                active
-
-                                  ? 'bg-white/[0.07] text-white border-l-2 border-white/50 rounded-l-none pl-2.5'
-
-                                  : 'text-[#b0b7c3] hover:text-white hover:bg-white/[0.04] border-0'
-
-                              }`}
-
-                            >
-
-                              {convo.title || 'Untitled Session'}
-
-                            </button>
-
-                          )}
-
-                          {renamingConvoId !== convo.id && (
-
-                            <>
-
-                              <button
-
-                                onClick={e => {
-
-                                  e.stopPropagation()
-
-                                  setRenamingConvoId(convo.id)
-
-                                  setRenameValue(convo.title || '')
-
-                                }}
-
-                                className="absolute right-7 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2]/50 hover:text-brand-accent transition duration-150 rounded hover:bg-white/5"
-
-                                title="Rename"
-
-                              >
-
-                                <Pencil className="w-3 h-3" />
-
-                              </button>
-
-                              <button
-
-                                onClick={e => {
-
-                                  e.stopPropagation()
-
-                                  setConvoToDelete(convo.id)
-
-                                }}
-
-                                className="absolute right-2 opacity-0 group-hover:opacity-100 p-1 text-[#8e95a2] hover:text-red-400 transition duration-150 rounded hover:bg-white/5"
-
-                                title="Delete Session"
-
-                              >
-
-                                <Trash className="w-3.5 h-3.5" />
-
-                              </button>
-
-                            </>
-
-                          )}
-
-                        </div>
-
-                      )
-
-                    })}
-
-                  </div>
-
-                </div>
-
-              ))
-
-            })()}
-
-          </div>
+          })()}
 
         </div>
 
-        <div className="border-t border-[#1e2025] pt-5 space-y-4">
+        {/* ── 3. Fixed Bottom Section (Profile & Account Actions) ─────── */}
+
+        <div className="shrink-0 border-t border-[#1e2025] pt-3.5 space-y-2.5">
 
           <div className="flex items-center gap-3">
 
@@ -7666,23 +7727,26 @@ export const Dashboard: React.FC = () => {
           {localStorage.getItem('app_lock_pin') ? (
             <div className="flex gap-2 w-full">
               <button
+                type="button"
                 onClick={() => setIsLocked(true)}
-                className="flex-1 h-9 text-[#ffffff] hover:text-[#ffffff] hover:bg-[#ffffff]/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/20 hover:border-[#ffffff]/40"
+                className="flex-1 min-h-[38px] text-[#ffffff] hover:text-[#ffffff] hover:bg-[#ffffff]/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/20 hover:border-[#ffffff]/40"
                 title="Lock App"
               >
                 <Lock className="w-3 h-3" />
                 <span>Lock App</span>
               </button>
               <button
+                type="button"
                 onClick={() => setLockMode('change')}
-                className="h-9 px-2.5 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[10px] font-semibold border border-[#1e2025]"
+                className="min-h-[38px] px-2.5 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[10px] font-semibold border border-[#1e2025]"
                 title="Change PIN"
               >
                 Change
               </button>
               <button
+                type="button"
                 onClick={() => setLockMode('disable')}
-                className="h-9 px-2.5 text-red-400/50 hover:text-red-400 hover:bg-red-950/10 transition duration-150 rounded-lg text-[10px] font-semibold border border-transparent hover:border-red-950/20"
+                className="min-h-[38px] px-2.5 text-red-400/50 hover:text-red-400 hover:bg-red-950/10 transition duration-150 rounded-lg text-[10px] font-semibold border border-transparent hover:border-red-950/20"
                 title="Disable PIN"
               >
                 Disable
@@ -7690,8 +7754,9 @@ export const Dashboard: React.FC = () => {
             </div>
           ) : (
             <button
+              type="button"
               onClick={() => setLockMode('setup')}
-              className="w-full h-9 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#1e2025] hover:border-white/10"
+              className="w-full min-h-[38px] text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#1e2025] hover:border-white/10"
             >
               <Lock className="w-3 h-3" />
               <span>Setup PIN Lock</span>
@@ -7699,8 +7764,15 @@ export const Dashboard: React.FC = () => {
           )}
 
           <button
-            onClick={() => navigate('/capabilities')}
-            className="w-full h-9 text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#ffffff]/30 hover:border-[#ffffff]/50 mb-1"
+            type="button"
+            onClick={() => {
+              if (window.innerWidth < 768) {
+                setIsSidebarOpen(false)
+                setIsSidebarHovered(false)
+              }
+              navigate('/capabilities')
+            }}
+            className="w-full min-h-[38px] text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#ffffff]/30 hover:border-[#ffffff]/50 mb-1"
           >
             <Cpu className="w-3.5 h-3.5" />
             <span>Agent Capabilities</span>
@@ -7709,16 +7781,18 @@ export const Dashboard: React.FC = () => {
           {/* Zoom Controls */}
           <div className="flex items-center gap-2 w-full mb-1">
             <button
+              type="button"
               onClick={() => setPageZoom(prev => Math.max(0.5, prev - 0.1))}
-              className="flex-1 h-9 text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
+              className="flex-1 min-h-[38px] text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
               title="Zoom out"
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
             <span className="text-[10px] text-brand-muted font-mono w-12 text-center">{Math.round(pageZoom * 100)}%</span>
             <button
+              type="button"
               onClick={() => setPageZoom(prev => Math.min(1.5, prev + 0.1))}
-              className="flex-1 h-9 text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
+              className="flex-1 min-h-[38px] text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
               title="Zoom in"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -7726,13 +7800,15 @@ export const Dashboard: React.FC = () => {
           </div>
 
           {/* ── Danger zone divider ─────────────────────────────────────── */}
-          <div className="border-t border-[#ffffff]/10 mt-1 mb-2" />
+          <div className="border-t border-[#ffffff]/10 mt-1 mb-1" />
 
           <button
 
+            type="button"
+
             onClick={handleSignOut}
 
-            className="w-full h-10 text-[#c4636a] hover:text-red-300 hover:bg-red-950/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 px-3 border border-red-900/20 hover:border-red-900/50"
+            className="w-full min-h-[40px] text-[#c4636a] hover:text-red-300 hover:bg-red-950/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 px-3 border border-red-900/20 hover:border-red-900/50"
 
           >
 
@@ -8801,7 +8877,10 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Pinned Input Area (Unified Console Card) — sits as a natural flex child below messages, glued to keyboard on mobile */}
-        <div className="shrink-0 w-full px-2.5 sm:px-5 md:px-10 pb-[env(safe-area-inset-bottom,0px)] pt-1.5 sm:pt-2 md:pt-3 z-20">
+        <div
+          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0.5rem))' }}
+          className="shrink-0 w-full px-2 sm:px-4 md:px-8 pt-1.5 sm:pt-2 md:pt-3 z-20"
+        >
           <div className="max-w-2xl mx-auto">
             <form
               ref={formRef}
@@ -8996,14 +9075,15 @@ export const Dashboard: React.FC = () => {
             {/* Bottom Row: Attachments status & action buttons */}
             <div className="flex items-center justify-between pt-2">
               {/* Left Side: Attach File, Voice, Mode selector */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2">
 
                 <button
                   type="button"
                   onClick={handleTriggerUpload}
                   disabled={uploading}
-                  className="p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded transition duration-150 active:scale-95 disabled:opacity-20"
+                  className="min-h-[36px] min-w-[36px] p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded-lg flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20"
                   title="Attach document or image"
+                  aria-label="Attach file"
                 >
                   <Paperclip className="w-4 h-4" />
                 </button>
@@ -9015,19 +9095,47 @@ export const Dashboard: React.FC = () => {
                     type="button"
                     onClick={toggleVoice}
                     disabled={isStreaming}
-                    className={`p-1.5 transition-all duration-150 active:scale-95 rounded disabled:opacity-20 ${
+                    className={`min-h-[36px] min-w-[36px] p-1.5 transition-all duration-150 active:scale-95 rounded-lg flex items-center justify-center disabled:opacity-20 ${
                       voice.isRecording
                         ? 'text-[#ffffff] voice-pulse-ring'
                         : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
                     }`}
                     title={voice.isRecording ? 'Stop recording' : 'Voice input'}
+                    aria-label="Voice input"
                   >
                     <Mic className="w-4 h-4" />
                   </button>
                 )}
 
-                {/* Mode Selector Pill Group */}
-                <div className="flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 ml-1 select-none">
+                {/* Mobile Compact Mode Selector Button: [Icon Mode ▾] */}
+                <button
+                  type="button"
+                  onClick={() => setIsModeSheetOpen(true)}
+                  className={`sm:hidden min-h-[36px] px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition duration-150 active:scale-95 select-none ${
+                    mode === 'agent'
+                      ? 'bg-brand-accent/20 border-brand-accent/40 text-brand-accent shadow-sm shadow-brand-accent/20'
+                      : 'bg-white/[0.06] border-white/15 text-white shadow-sm'
+                  }`}
+                  aria-label={`Current mode: ${mode}. Tap to change mode`}
+                  title="Change interaction mode"
+                >
+                  {mode === 'agent' ? (
+                    <Bot className="w-3.5 h-3.5 text-brand-accent shrink-0" />
+                  ) : mode === 'think' ? (
+                    <Brain className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                  ) : mode === 'solve' ? (
+                    <Cpu className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                  ) : (
+                    <MessageSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  )}
+                  <span className="capitalize font-medium text-[11px] tracking-wide">
+                    {mode}
+                  </span>
+                  <ChevronDown className="w-3 h-3 text-[#8e95a2] shrink-0" />
+                </button>
+
+                {/* Desktop Mode Selector Pill Group */}
+                <div className="hidden sm:flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 ml-1 select-none">
                   {([
                     { id: 'think', label: 'Think', icon: Brain },
                     { id: 'solve', label: 'Solve', icon: Cpu },
@@ -9052,7 +9160,7 @@ export const Dashboard: React.FC = () => {
                         }`}
                       >
                         <Icon className="w-3 h-3" />
-                        <span className="hidden sm:inline">{label}</span>
+                        <span>{label}</span>
                       </button>
                     )
                   })}
@@ -9065,25 +9173,27 @@ export const Dashboard: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleStop}
-                    className="w-8 h-8 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
+                    className="min-h-[36px] min-w-[36px] w-9 h-9 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
+                    aria-label="Stop generation"
                   >
-                    <Square className="w-3 h-3 fill-red-400" />
+                    <Square className="w-3.5 h-3.5 fill-red-400" />
                   </button>
                 )}
 
-                 <button
+                <button
                   type="submit"
                   disabled={uploading || (!input.trim() && attachedFiles.length === 0 && pastedSnippets.length === 0)}
-                  className="px-3.5 py-1.5 bg-brand-text text-brand-bg text-[12px] font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow"
+                  className="min-h-[36px] px-3.5 py-1.5 bg-brand-text text-brand-bg text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow shrink-0"
+                  aria-label="Send message"
                 >
                   {uploading ? (
                     <>
-                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       <span className="text-[11px]">Uploading...</span>
                     </>
                   ) : (
                     <>
-                      <span>Send</span>
+                      <span className="hidden xs:inline">Send</span>
                       <Send className="w-3 h-3" />
                     </>
                   )}
@@ -9350,6 +9460,124 @@ export const Dashboard: React.FC = () => {
           onClose={() => setLockMode(null)}
         />
       )}
+      {/* ── Slide-up Bottom Sheet Mode Selector (Mobile) ───────────── */}
+      <div
+        className={`fixed inset-0 z-50 transition-opacity duration-300 sm:hidden ${
+          isModeSheetOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        {/* Backdrop */}
+        <div
+          onClick={() => setIsModeSheetOpen(false)}
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        />
+
+        {/* Bottom Sheet Drawer */}
+        <div
+          className={`absolute bottom-0 left-0 right-0 bg-[#121418] border-t border-white/10 rounded-t-2xl px-5 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom,1.5rem))] shadow-2xl transition-transform duration-300 ease-out transform ${
+            isModeSheetOpen ? 'translate-y-0' : 'translate-y-full'
+          }`}
+        >
+          {/* Dim drag handle bar */}
+          <div className="w-10 h-1 bg-white/25 rounded-full mx-auto mb-4" />
+
+          {/* Header */}
+          <div className="flex items-center justify-between mb-3 pb-2.5 border-b border-white/[0.08]">
+            <div>
+              <h3 className="text-sm font-bold text-white tracking-wide">Select Execution Mode</h3>
+              <p className="text-[11px] text-[#8e95a2] mt-0.5">Choose how Agent Ochuko processes your prompt</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsModeSheetOpen(false)}
+              className="min-h-[36px] min-w-[36px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 transition"
+              aria-label="Close mode sheet"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Mode Options List */}
+          <div className="space-y-2">
+            {([
+              {
+                id: 'agent',
+                name: 'Agent Mode',
+                badge: 'Full Automation',
+                description: 'Autonomous goal execution, tool orchestration, code sandbox, and site deployment.',
+                icon: Bot,
+                iconColor: 'text-brand-accent bg-brand-accent/15 border-brand-accent/30',
+              },
+              {
+                id: 'think',
+                name: 'Deep Think',
+                badge: 'Reasoning',
+                description: 'Extended architectural analysis, complex planning, and step-by-step logic.',
+                icon: Brain,
+                iconColor: 'text-purple-400 bg-purple-500/15 border-purple-500/30',
+              },
+              {
+                id: 'solve',
+                name: 'Code & Solve',
+                badge: 'Engineering',
+                description: 'Hermetic problem solving, debugging, and code generation with verification.',
+                icon: Cpu,
+                iconColor: 'text-blue-400 bg-blue-500/15 border-blue-500/30',
+              },
+              {
+                id: 'discuss',
+                name: 'Discuss & Chat',
+                badge: 'Conversational',
+                description: 'Fast, interactive discussions, brainstorming, and general inquiries.',
+                icon: MessageSquare,
+                iconColor: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30',
+              },
+            ] as const).map(({ id, name, badge, description, icon: Icon, iconColor }) => {
+              const active = mode === id
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    handleModeChange(id)
+                    setIsModeSheetOpen(false)
+                  }}
+                  className={`w-full text-left p-3 rounded-xl border transition flex items-start gap-3 min-h-[56px] active:scale-[0.99] ${
+                    active
+                      ? 'bg-white/[0.08] border-white/30 shadow-md ring-1 ring-white/20'
+                      : 'bg-white/[0.02] border-white/[0.06] hover:bg-white/[0.05] hover:border-white/15'
+                  }`}
+                >
+                  <div className={`w-9 h-9 rounded-lg border flex items-center justify-center shrink-0 mt-0.5 ${iconColor}`}>
+                    <Icon className="w-5 h-5" />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-xs font-bold tracking-tight ${active ? 'text-white' : 'text-white/90'}`}>
+                        {name}
+                      </span>
+                      <span className="text-[9px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/[0.06] text-[#8e95a2] border border-white/[0.06]">
+                        {badge}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#8e95a2] leading-snug mt-1">
+                      {description}
+                    </p>
+                  </div>
+
+                  {active && (
+                    <div className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center shrink-0 self-center">
+                      <Check className="w-3.5 h-3.5 text-white" />
+                    </div>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
       {/* Unified File/Text Preview — Claude-style dock for text artifacts, modal for media */}
       {previewingFile && (() => {
         const pn = previewingFile.name.toLowerCase()
