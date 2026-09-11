@@ -6,6 +6,7 @@ landing pages, portfolios, and web tools to instant public URLs (/v1/sites/{slug
 Includes in-memory cache fallback for resilient zero-downtime deployment.
 """
 
+import os
 import re
 import uuid
 import secrets
@@ -13,6 +14,13 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+
+# Public-facing base URL of the backend — used to build hosted-site preview links.
+# Set BACKEND_PUBLIC_URL in your container/env to the Container App URL.
+_DEFAULT_BASE_URL = os.environ.get(
+    "BACKEND_PUBLIC_URL",
+    "https://agent-ochuko-api.calmbush-d59124b5.southafricanorth.azurecontainerapps.io"
+)
 
 logger = logging.getLogger("app.services.hosted_sites_service")
 
@@ -96,7 +104,7 @@ class HostedSitesService:
         conversation_id: Optional[str] = None,
         is_public: bool = True,
         supabase_client=None,
-        base_url: str = "http://localhost:8000",
+        base_url: str = "",
     ) -> Dict[str, Any]:
         """
         Deploys a static site and returns the site metadata and live preview URL.
@@ -146,7 +154,8 @@ class HostedSitesService:
             except Exception as db_err:
                 logger.warning(f"Supabase hosted_sites insert failed (using memory store): {db_err}")
 
-        preview_url = f"{base_url.rstrip('/')}/v1/sites/{slug}"
+        effective_base = (base_url or _DEFAULT_BASE_URL).rstrip('/')
+        preview_url = f"{effective_base}/v1/sites/{slug}"
 
         return {
             "site_id": site_id,

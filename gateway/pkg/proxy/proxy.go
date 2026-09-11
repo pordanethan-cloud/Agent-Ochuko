@@ -207,7 +207,19 @@ func (gp *GatewayProxy) Handler() http.Handler {
 	})
 }
 
+// publicAdminPaths are admin sub-paths that don't require a JWT (they ARE the login flow).
+var publicAdminPaths = []string{
+	"/v1/admin/login",
+}
+
 func isProtectedPath(path string) bool {
+	// Allow public admin paths through without JWT so the login endpoint works.
+	for _, pub := range publicAdminPaths {
+		if path == pub {
+			return false
+		}
+	}
+
 	protectedPrefixes := []string{
 		"/v1/chat",
 		"/v1/responses",

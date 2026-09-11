@@ -4138,6 +4138,10 @@ export const Dashboard: React.FC = () => {
 
   const isAutoScrollEnabledRef = useRef<boolean>(true)
 
+  // Prevents auto-scroll from triggering during history fetch / cache hydration.
+  // Set to true while messages are being loaded from the DB, false once settled.
+  const isLoadingHistoryRef = useRef<boolean>(false)
+
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null)
 
   const [editingMessageText, setEditingMessageText] = useState("")
@@ -4637,6 +4641,7 @@ export const Dashboard: React.FC = () => {
       try {
         const parsed = JSON.parse(cachedData)
         if (parsed && Array.isArray(parsed.messages)) {
+          isLoadingHistoryRef.current = true  // suppress auto-scroll during cache hydration
           setMessages(parsed.messages)
           setMode(convoMode)
           setActiveConversationId(id)
@@ -4892,6 +4897,7 @@ export const Dashboard: React.FC = () => {
           return serverMsg
         })
 
+        isLoadingHistoryRef.current = true  // suppress auto-scroll during DB fetch
         setMessages(reconciled)
 
         setActiveConversationId(id)
@@ -4917,6 +4923,9 @@ export const Dashboard: React.FC = () => {
     } finally {
 
       setIsFetchingHistory(false)
+      // Re-enable auto-scroll a tick after messages settle.
+      // This prevents the history load from forcing the view to the bottom.
+      setTimeout(() => { isLoadingHistoryRef.current = false }, 100)
 
     }
 
@@ -5005,6 +5014,7 @@ export const Dashboard: React.FC = () => {
             let hydratedConvoMode: 'think' | 'solve' | 'discuss' = 'discuss'
             if (raw) {
               const parsed = JSON.parse(raw)
+              isLoadingHistoryRef.current = true   // suppress auto-scroll during startup hydration
               if (Array.isArray(parsed.messages)) setMessages(parsed.messages)
               if (parsed.mode) {
                 setMode(parsed.mode)
@@ -5137,13 +5147,14 @@ export const Dashboard: React.FC = () => {
   }
 
 
-  // Auto-scroll on new content only if user is already at the bottom
+  // Auto-scroll on new content only if user is at the bottom AND we're not
+  // in the middle of a history load (which would incorrectly snap to bottom).
 
   useEffect(() => {
 
     const container = scrollContainerRef.current
 
-    if (container && isAutoScrollEnabledRef.current) {
+    if (container && isAutoScrollEnabledRef.current && !isLoadingHistoryRef.current) {
 
       const handle = requestAnimationFrame(() => {
 
@@ -7365,7 +7376,7 @@ export const Dashboard: React.FC = () => {
 
                 <div key={group.label} className="mb-4">
 
-                  <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/40 uppercase mb-1.5 px-1">
+                  <p className="text-[9px] font-bold tracking-widest text-[#8e95a2]/70 uppercase mb-1.5 px-2">
 
                     {group.label}
 
@@ -7430,13 +7441,13 @@ export const Dashboard: React.FC = () => {
 
                               title="Double-click to rename"
 
-                              className={`flex-1 text-left px-3 py-2 rounded-lg text-[11px] font-medium truncate transition duration-150 block pr-14 ${
+                              className={`flex-1 text-left px-3 py-2 rounded-lg text-[11.5px] font-medium truncate transition duration-150 block pr-14 ${
 
                                 active
 
-                                  ? 'bg-white/[0.06] text-white border-0'
+                                  ? 'bg-white/[0.07] text-white border-l-2 border-white/50 rounded-l-none pl-2.5'
 
-                                  : 'text-[#8e95a2] hover:text-brand-text hover:bg-white/[0.03] border-0'
+                                  : 'text-[#b0b7c3] hover:text-white hover:bg-white/[0.04] border-0'
 
                               }`}
 
@@ -8703,16 +8714,12 @@ export const Dashboard: React.FC = () => {
 
           )}
 
-          {/* Right-edge turn tracker (Verdent-style) */}
+          {/* Right-edge prompt navigator */}
           <TurnTracker
             turnIndices={messages
-              .map((m, i) => (m.role === 'assistant' && !m.isArchived ? i : -1))
+              .map((m, i) => (m.role === 'user' && !m.isArchived ? i : -1))
               .filter((i) => i >= 0)}
-            activeIndex={
-              isStreaming && messages.length > 0 && messages[messages.length - 1].role === 'assistant'
-                ? messages.length - 1
-                : null
-            }
+            scrollRef={scrollContainerRef}
           />
 
         </div>

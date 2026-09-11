@@ -555,21 +555,39 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
    scrub through turns (pointer-capture slider, works with touch).
    ─────────────────────────────────────────────────────────────────────────── */
 interface TurnTrackerProps {
-  /** Message indices of assistant turns, in order */
+  /** Message indices of USER prompts, in order */
   turnIndices: number[]
-  /** Message index currently streaming (or null when idle) */
-  activeIndex: number | null
+  /** Scroll container ref so we can read/set scrollTop */
+  scrollRef: React.RefObject<HTMLDivElement | null>
 }
 
-export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, activeIndex }) => {
+export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef }) => {
   const railRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
+  const [activeIdx, setActiveIdx] = useState<number>(-1)
+
+  // Track which prompt is currently in view
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    const onScroll = () => {
+      const scrollTop = container.scrollTop
+      const scrollH = container.scrollHeight - container.clientHeight
+      if (scrollH <= 0) return
+      const frac = scrollTop / scrollH
+      const i = Math.round(frac * (turnIndices.length - 1))
+      setActiveIdx(Math.min(Math.max(i, 0), turnIndices.length - 1))
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => container.removeEventListener('scroll', onScroll)
+  }, [scrollRef, turnIndices])
 
   if (turnIndices.length < 2) return null
 
   const jumpTo = (idx: number) => {
-    const el = document.querySelector(`[data-turn-anchor="${idx}"]`)
-    el?.scrollIntoView({ behavior: dragging ? 'auto' : 'smooth', block: 'start' })
+    const el = document.querySelector(`[data-turn-anchor="${turnIndices[idx]}"]`)
+    el?.scrollIntoView({ behavior: dragging ? 'instant' : 'smooth', block: 'start' })
+    setActiveIdx(idx)
   }
 
   const seekFromPointer = (clientY: number) => {
@@ -578,7 +596,7 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, activeInd
     const rect = rail.getBoundingClientRect()
     const frac = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
     const i = Math.round(frac * (turnIndices.length - 1))
-    jumpTo(turnIndices[i])
+    jumpTo(i)
   }
 
   return (
@@ -592,22 +610,33 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, activeInd
       onPointerMove={(e) => { if (dragging) seekFromPointer(e.clientY) }}
       onPointerUp={() => setDragging(false)}
       onPointerCancel={() => setDragging(false)}
-      className="absolute right-0.5 md:right-1 top-1/2 -translate-y-1/2 z-40 flex flex-col items-center justify-between gap-1 py-2 w-5 touch-none cursor-ns-resize select-none"
-      aria-label="Conversation turn scrubber"
+      className="absolute right-1 top-0 bottom-0 z-40 flex flex-col items-end justify-between py-8 w-4 touch-none cursor-ns-resize select-none group"
+      aria-label="Prompt navigator"
       role="slider"
       aria-valuemin={1}
       aria-valuemax={turnIndices.length}
-      aria-valuenow={(activeIndex !== null ? turnIndices.indexOf(activeIndex) : -1) + 1}
+      aria-valuenow={activeIdx + 1}
     >
-      {turnIndices.map((idx) => {
-        const isActive = idx === activeIndex
+      {/* Thin vertical rail line */}
+      <div className="absolute right-1.5 top-8 bottom-8 w-px bg-white/8 rounded-full" />
+
+      {turnIndices.map((_, i) => {
+        const isActive = i === activeIdx
         return (
-          <span
-            key={idx}
-            className={`rounded-full transition-all duration-200 ${
-              isActive ? 'w-[4px] h-5 bg-white/85' : 'w-[3px] h-3 bg-white/25'
-            }`}
-          />
+          <div
+            key={i}
+            onClick={() => jumpTo(i)}
+            className="relative flex items-center justify-end w-full"
+          >
+            {/* Horizontal tick line */}
+            <span
+              className={`block rounded-full transition-all duration-200 ${
+                isActive
+                  ? 'w-3 h-[2px] bg-white/80'
+                  : 'w-2 h-px bg-white/25 group-hover:bg-white/40'
+              }`}
+            />
+          </div>
         )
       })}
     </div>

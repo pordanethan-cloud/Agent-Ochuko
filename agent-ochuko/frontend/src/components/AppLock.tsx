@@ -1,18 +1,36 @@
 import React, { useState, useEffect } from 'react'
-import { Lock, X, Delete, ShieldCheck } from 'lucide-react'
+import { Lock, X, Delete, ShieldCheck, Loader2 } from 'lucide-react'
 
 interface AppLockProps {
   mode: 'unlock' | 'setup' | 'change' | 'disable'
   onSuccess: (newPin?: string) => void
   onClose?: () => void
+  getToken?: () => Promise<string | null>
 }
 
-export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) => {
+const API = import.meta.env.VITE_API_URL ?? ''
+
+async function apiPin(
+  path: string,
+  method: string,
+  body: Record<string, string>,
+  token: string
+): Promise<{ ok: boolean; status: number }> {
+  const res = await fetch(`${API}/v1/user/settings${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  })
+  return { ok: res.ok, status: res.status }
+}
+
+export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose, getToken }) => {
   const [pin, setPin] = useState('')
   const [error, setError] = useState(false)
   const [step, setStep] = useState<'current' | 'new' | 'confirm'>('new')
   const [tempPin, setTempPin] = useState('')
   const [instruction, setInstruction] = useState('')
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (mode === 'unlock') {
@@ -30,128 +48,117 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
   }, [mode])
 
   const handleKeyPress = (num: string) => {
-    if (pin.length >= 4) return
+    if (pin.length >= 4 || loading) return
     const newPin = pin + num
     setPin(newPin)
-
     if (newPin.length === 4) {
-      setTimeout(() => {
-        handleSubmit(newPin)
-      }, 150)
+      setTimeout(() => handleSubmit(newPin), 150)
     }
   }
 
-  const handleBackspace = () => {
-    setPin(prev => prev.slice(0, -1))
-  }
-
-  const handleClear = () => {
-    setPin('')
-  }
+  const handleBackspace = () => { if (!loading) setPin(prev => prev.slice(0, -1)) }
+  const handleClear = () => { if (!loading) setPin('') }
 
   useEffect(() => {
-    // Blur any focused element on mount to prevent focus bleed
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur()
-    }
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
   }, [])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Keep developer / browser shortcuts working
       if (
-        e.key === 'F5' ||
-        e.key === 'F12' ||
+        e.key === 'F5' || e.key === 'F12' ||
         ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') ||
         ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'i')
-      ) {
-        return
-      }
-
-      // Block all other key events from bubbling or performing default actions
+      ) return
       e.preventDefault()
       e.stopPropagation()
-
-      if (e.key >= '0' && e.key <= '9') {
-        handleKeyPress(e.key)
-      } else if (e.key === 'Backspace') {
-        handleBackspace()
-      } else if (e.key === 'Escape' && onClose) {
-        onClose()
-      }
+      if (e.key >= '0' && e.key <= '9') handleKeyPress(e.key)
+      else if (e.key === 'Backspace') handleBackspace()
+      else if (e.key === 'Escape' && onClose) onClose()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [pin, step, tempPin, mode])
-
-  const handleSubmit = (enteredPin: string) => {
-    const savedPin = localStorage.getItem('app_lock_pin') || ''
-
-    if (mode === 'unlock') {
-      if (enteredPin === savedPin) {
-        onSuccess()
-      } else {
-        triggerError()
-      }
-    } else if (mode === 'setup') {
-      if (step === 'new') {
-        setTempPin(enteredPin)
-        setPin('')
-        setStep('confirm')
-        setInstruction('Confirm your new security PIN')
-      } else if (step === 'confirm') {
-        if (enteredPin === tempPin) {
-          localStorage.setItem('app_lock_pin', enteredPin)
-          onSuccess(enteredPin)
-        } else {
-          triggerError()
-          setPin('')
-          setStep('new')
-          setInstruction('PINs did not match. Enter new PIN again')
-        }
-      }
-    } else if (mode === 'change') {
-      if (step === 'current') {
-        if (enteredPin === savedPin) {
-          setPin('')
-          setStep('new')
-          setInstruction('Enter new 4-digit security PIN')
-        } else {
-          triggerError()
-        }
-      } else if (step === 'new') {
-        setTempPin(enteredPin)
-        setPin('')
-        setStep('confirm')
-        setInstruction('Confirm your new security PIN')
-      } else if (step === 'confirm') {
-        if (enteredPin === tempPin) {
-          localStorage.setItem('app_lock_pin', enteredPin)
-          onSuccess(enteredPin)
-        } else {
-          triggerError()
-          setPin('')
-          setStep('new')
-          setInstruction('PINs did not match. Enter new PIN again')
-        }
-      }
-    } else if (mode === 'disable') {
-      if (enteredPin === savedPin) {
-        localStorage.removeItem('app_lock_pin')
-        onSuccess()
-      } else {
-        triggerError()
-      }
-    }
-  }
+  }, [pin, step, tempPin, mode, loading])
 
   const triggerError = () => {
     setError(true)
     setPin('')
-    if (navigator.vibrate) {
-      navigator.vibrate(200)
-    }
+    if (navigator.vibrate) navigator.vibrate(200)
     setTimeout(() => setError(false), 500)
+  }
+
+  const getAuthToken = async (): Promise<string | null> => {
+    if (getToken) return getToken()
+    // fallback: read from supabase session in localStorage
+    try {
+      const keys = Object.keys(localStorage).filter(k => k.includes('supabase') && k.includes('auth'))
+      for (const k of keys) {
+        const raw = localStorage.getItem(k)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          const t = parsed?.access_token ?? parsed?.session?.access_token
+          if (t) return t
+        }
+      }
+    } catch { /* ignore */ }
+    return null
+  }
+
+  const handleSubmit = async (enteredPin: string) => {
+    setLoading(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) { triggerError(); return }
+
+      if (mode === 'unlock') {
+        const res = await apiPin('/pin/verify', 'POST', { pin: enteredPin }, token)
+        if (res.ok) { onSuccess() }
+        else { triggerError() }
+
+      } else if (mode === 'setup') {
+        if (step === 'new') {
+          setTempPin(enteredPin); setPin(''); setStep('confirm')
+          setInstruction('Confirm your new security PIN')
+        } else if (step === 'confirm') {
+          if (enteredPin !== tempPin) {
+            triggerError(); setStep('new')
+            setInstruction('PINs did not match. Enter new PIN again')
+          } else {
+            const res = await apiPin('/pin', 'POST', { pin: enteredPin }, token)
+            if (res.ok) { localStorage.setItem('app_lock_pin', '1'); onSuccess(enteredPin) }
+            else { triggerError() }
+          }
+        }
+
+      } else if (mode === 'change') {
+        if (step === 'current') {
+          const res = await apiPin('/pin/verify', 'POST', { pin: enteredPin }, token)
+          if (res.ok) { setPin(''); setStep('new'); setInstruction('Enter new 4-digit security PIN') }
+          else { triggerError() }
+        } else if (step === 'new') {
+          setTempPin(enteredPin); setPin(''); setStep('confirm')
+          setInstruction('Confirm your new security PIN')
+        } else if (step === 'confirm') {
+          if (enteredPin !== tempPin) {
+            triggerError(); setStep('new')
+            setInstruction('PINs did not match. Enter new PIN again')
+          } else {
+            const res = await apiPin('/pin', 'PATCH', { current_pin: tempPin, new_pin: enteredPin }, token)
+            if (res.ok) { onSuccess(enteredPin) }
+            else { triggerError() }
+          }
+        }
+
+      } else if (mode === 'disable') {
+        const res = await apiPin('/pin', 'DELETE', { pin: enteredPin }, token)
+        if (res.ok) { localStorage.removeItem('app_lock_pin'); onSuccess() }
+        else { triggerError() }
+      }
+    } catch {
+      triggerError()
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -201,8 +208,8 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
             <div
               key={idx}
               className={`w-3.5 h-3.5 rounded-full border transition-all duration-150 ${idx < pin.length
-                  ? 'bg-[#ffffff] border-[#ffffff] scale-110 shadow-lg shadow-[#ffffff]/20'
-                  : 'bg-transparent border-[#1e2025]'
+                ? 'bg-[#ffffff] border-[#ffffff] scale-110 shadow-lg shadow-[#ffffff]/20'
+                : 'bg-transparent border-[#1e2025]'
                 }`}
             />
           ))}
@@ -213,29 +220,33 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose }) =>
             <button
               key={num}
               onClick={() => handleKeyPress(num)}
-              className="h-14 rounded-2xl border border-[#1e2025] bg-[#161b22]/30 hover:bg-[#161b22]/80 text-[18px] font-semibold text-brand-text active:scale-95 transition-all duration-100 flex items-center justify-center select-none"
+              disabled={loading}
+              className="h-14 rounded-2xl border border-[#1e2025] bg-[#161b22]/30 hover:bg-[#161b22]/80 text-[18px] font-semibold text-brand-text active:scale-95 transition-all duration-100 flex items-center justify-center select-none disabled:opacity-40"
             >
               {num}
             </button>
           ))}
           <button
             onClick={handleClear}
-            className="h-14 rounded-2xl text-[11px] font-bold text-brand-muted/50 hover:text-brand-text hover:bg-white/5 active:scale-95 transition flex items-center justify-center uppercase tracking-widest select-none"
+            disabled={loading}
+            className="h-14 rounded-2xl text-[11px] font-bold text-brand-muted/50 hover:text-brand-text hover:bg-white/5 active:scale-95 transition flex items-center justify-center uppercase tracking-widest select-none disabled:opacity-40"
           >
             Clear
           </button>
           <button
             onClick={() => handleKeyPress('0')}
-            className="h-14 rounded-2xl border border-[#1e2025] bg-[#161b22]/30 hover:bg-[#161b22]/80 text-[18px] font-semibold text-brand-text active:scale-95 transition-all duration-100 flex items-center justify-center select-none"
+            disabled={loading}
+            className="h-14 rounded-2xl border border-[#1e2025] bg-[#161b22]/30 hover:bg-[#161b22]/80 text-[18px] font-semibold text-brand-text active:scale-95 transition-all duration-100 flex items-center justify-center select-none disabled:opacity-40"
           >
             0
           </button>
           <button
             onClick={handleBackspace}
-            className="h-14 rounded-2xl hover:bg-white/5 active:scale-95 transition text-[#8e95a2] hover:text-brand-text flex items-center justify-center select-none"
+            disabled={loading}
+            className="h-14 rounded-2xl hover:bg-white/5 active:scale-95 transition text-[#8e95a2] hover:text-brand-text flex items-center justify-center select-none disabled:opacity-40"
             title="Delete"
           >
-            <Delete className="w-5 h-5" />
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Delete className="w-5 h-5" />}
           </button>
         </div>
       </div>
