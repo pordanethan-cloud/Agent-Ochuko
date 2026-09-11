@@ -3152,7 +3152,7 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
   const blocks = parseMarkdownToBlocks(extracted.body)
 
   return (
-    <div className="space-y-2.5 font-serif">
+    <div className="space-y-5 font-serif max-w-[760px]">
       {blocks.map((block, index) => {
         const key = `block-${index}`
 
@@ -3164,43 +3164,43 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
             switch (level) {
               case 1:
                 return (
-                  <h1 key={key} className="text-[17px] font-bold text-white mt-3 mb-1 tracking-tight font-sans">
+                  <h1 key={key} className="text-[18px] font-bold text-white mt-4 mb-2 tracking-tight font-sans">
                     {content}
                   </h1>
                 )
               case 2:
                 return (
-                  <h2 key={key} className="text-[15px] font-semibold text-white mt-2.5 mb-1 tracking-tight font-sans">
+                  <h2 key={key} className="text-[16px] font-semibold text-white mt-3.5 mb-1.5 tracking-tight font-sans">
                     {content}
                   </h2>
                 )
               case 3:
                 return (
-                  <h3 key={key} className="text-[14px] font-semibold text-[#f4f4f5] mt-2 mb-0.5 tracking-tight font-sans">
+                  <h3 key={key} className="text-[14.5px] font-semibold text-[#f4f4f5] mt-3 mb-1 tracking-tight font-sans">
                     {content}
                   </h3>
                 )
               case 4:
                 return (
-                  <h4 key={key} className="text-[13px] font-semibold text-[#e4e4e7] mt-1.5 mb-0.5 tracking-tight font-sans">
+                  <h4 key={key} className="text-[13.5px] font-semibold text-[#e4e4e7] mt-2.5 mb-1 tracking-tight font-sans">
                     {content}
                   </h4>
                 )
               case 5:
                 return (
-                  <h5 key={key} className="text-[12.5px] font-semibold text-[#e4e4e7] mt-1 mb-0.5 tracking-tight font-sans">
+                  <h5 key={key} className="text-[13px] font-semibold text-[#e4e4e7] mt-2 mb-1 tracking-tight font-sans">
                     {content}
                   </h5>
                 )
               case 6:
                 return (
-                  <h6 key={key} className="text-[12px] font-semibold text-[#e4e4e7] mt-1 mb-0.5 tracking-tight font-sans">
+                  <h6 key={key} className="text-[12.5px] font-semibold text-[#e4e4e7] mt-2 mb-1 tracking-tight font-sans">
                     {content}
                   </h6>
                 )
               default:
                 return (
-                  <h1 key={key} className="text-[17px] font-bold text-white mt-3 mb-1 tracking-tight font-sans">
+                  <h1 key={key} className="text-[18px] font-bold text-white mt-4 mb-2 tracking-tight font-sans">
                     {content}
                   </h1>
                 )
@@ -3238,7 +3238,7 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
 
           case 'table': {
             return (
-              <div key={key} className="overflow-x-auto my-2.5 border border-white/10 rounded-lg bg-[#0e1013]/60 shadow-sm font-sans">
+              <div key={key} className="overflow-x-auto my-3 border border-white/10 rounded-lg bg-[#0e1013]/60 shadow-sm font-sans">
                 <table className="min-w-full divide-y divide-white/10 text-left text-[13px]">
                   <thead className="bg-[#1c1e22]/60 text-white">
                     <tr>
@@ -3274,13 +3274,13 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
           case 'list': {
             if (block.ordered) {
               return (
-                <ol key={key} className="my-1.5 space-y-1 pl-0.5">
+                <ol key={key} className="my-3 space-y-3 pl-0.5 max-w-[760px]">
                   {block.items?.map((item, j) => (
-                    <li key={j} className="flex gap-2 leading-normal items-start">
-                      <span className="text-white/50 font-sans font-medium text-[13px] shrink-0 min-w-[1.25rem] mt-[1px]">
+                    <li key={j} className="flex gap-2.5 leading-relaxed items-start">
+                      <span className="text-white/60 font-sans font-semibold text-[13.5px] shrink-0 min-w-[1.4rem] mt-[1.5px]">
                         {j + 1}.
                       </span>
-                      <span className="text-[15px] text-[#e4e4e7] leading-[1.6]">
+                      <span className="text-[15.5px] text-[#e3e3df] leading-[1.75]">
                         {renderInline(item, `${key}-oli-${j}`, generatedFiles)}
                       </span>
                     </li>
@@ -3289,11 +3289,11 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
               )
             } else {
               return (
-                <ul key={key} className="my-1.5 space-y-1 pl-0.5">
+                <ul key={key} className="my-3 space-y-2.5 pl-0.5 max-w-[760px]">
                   {block.items?.map((item, j) => (
-                    <li key={j} className="flex gap-2.5 leading-normal items-start">
-                      <span className="text-white/60 text-[11px] mt-[5px] shrink-0 select-none">•</span>
-                      <span className="text-[15px] text-[#e4e4e7] leading-[1.6]">
+                    <li key={j} className="flex gap-3 leading-relaxed items-start">
+                      <span className="text-white/50 text-[14px] leading-[1.75] shrink-0 select-none">·</span>
+                      <span className="text-[15.5px] text-[#e3e3df] leading-[1.75]">
                         {renderInline(item, `${key}-uli-${j}`, generatedFiles)}
                       </span>
                     </li>
@@ -3304,12 +3304,12 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
           }
 
           case 'hr': {
-            return <hr key={key} className="border-white/10 my-3" />
+            return <hr key={key} className="border-white/10 my-4" />
           }
 
           case 'paragraph': {
             return (
-              <p key={key} className="text-[15px] text-[#e4e4e7] leading-[1.65] tracking-normal font-serif">
+              <p key={key} className="text-[15.5px] text-[#e3e3df] leading-[1.75] tracking-normal font-serif">
                 {renderInline(block.content || '', key, generatedFiles)}
               </p>
             )
@@ -8034,7 +8034,7 @@ export const Dashboard: React.FC = () => {
 
                   {/* Right/Left side container: Bubble + Actions */}
 
-                  <div className={`flex flex-col gap-1.5 ${msg.role === 'user' ? 'max-w-[80%] items-end' : 'flex-1 min-w-0'}`}>
+                  <div className={`flex flex-col gap-1.5 ${msg.role === 'user' ? 'max-w-[80%] items-end' : 'flex-1 min-w-0 max-w-[820px]'}`}>
 
                     {/* Bubble */}
 
