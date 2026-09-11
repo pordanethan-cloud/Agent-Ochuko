@@ -510,11 +510,13 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
   slug: _slug,
 }) => {
   const openInPanel = () => {
+    const extractedSlug = _slug || (previewUrl ? previewUrl.split('/sites/').pop()?.split(/[?#]/)[0] : undefined)
     window.dispatchEvent(new CustomEvent('open-file-preview', {
       detail: {
         name: title || 'Deployed Site',
         type: 'text/html',
         url: previewUrl,
+        siteSlug: extractedSlug,
       },
     }))
   }

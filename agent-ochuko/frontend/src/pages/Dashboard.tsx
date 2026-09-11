@@ -52,7 +52,16 @@ function pickEntryFile<T extends { filename: string; download_url?: string; size
   return entry || files[0] || null
 }
 
-function dispatchOpenFilePreview(detail: { name: string; type: string; url?: string; sizeBytes?: number; content?: string }) {
+function dispatchOpenFilePreview(detail: {
+  name: string
+  type: string
+  url?: string
+  sizeBytes?: number
+  content?: string
+  siteSlug?: string
+  projectFiles?: Record<string, string> | Array<{ name: string; content?: string; url?: string; sizeBytes?: number; type?: string }>
+  siblingFiles?: Array<{ name: string; content?: string; url?: string; sizeBytes?: number; type?: string }>
+}) {
   window.dispatchEvent(new CustomEvent('open-file-preview', { detail }))
 }
 
@@ -4137,6 +4146,9 @@ export const Dashboard: React.FC = () => {
     localObjectUrl?: string
     content?: string
     sizeBytes?: number
+    siteSlug?: string
+    projectFiles?: Record<string, string> | Array<{ name: string; content?: string; url?: string; sizeBytes?: number; type?: string }>
+    siblingFiles?: Array<{ name: string; content?: string; url?: string; sizeBytes?: number; type?: string }>
   } | null>(null)
 
   const [loadedPreviewContent, setLoadedPreviewContent] = useState<string | null>(null)
@@ -4166,11 +4178,16 @@ export const Dashboard: React.FC = () => {
     if (!targetUrl) return
 
     const nameLower = previewingFile.name.toLowerCase()
+    const hasRepoContext = Boolean(
+      previewingFile.siteSlug ||
+      (previewingFile.siblingFiles && previewingFile.siblingFiles.length > 1) ||
+      previewingFile.projectFiles
+    )
     const isImage = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
     const isPdf = previewingFile.type === 'application/pdf' || nameLower.endsWith('.pdf')
     const isBinaryDoc = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin)$/i.test(nameLower)
 
-    if (!isImage && !isPdf && !isBinaryDoc) {
+    if (!isImage && !isPdf && (!isBinaryDoc || hasRepoContext)) {
       setPreviewLoading(true)
       fetch(targetUrl)
         .then(res => res.text())
@@ -4185,6 +4202,43 @@ export const Dashboard: React.FC = () => {
         })
     }
   }, [previewingFile])
+
+  // Collect all generated deliverables and artifacts from conversation history for repo explorer
+  const allRecentFiles = useMemo(() => {
+    const files: Array<{ name: string; type?: string; url?: string; content?: string; sizeBytes?: number }> = []
+    const seen = new Set<string>()
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.generatedFiles) {
+        for (const gf of m.generatedFiles) {
+          if (!seen.has(gf.filename)) {
+            seen.add(gf.filename)
+            files.push({
+              name: gf.filename,
+              type: mimeFromName(gf.filename),
+              url: gf.download_url,
+              sizeBytes: gf.size_bytes,
+            })
+          }
+        }
+      }
+      if (m.agentTaskData?.artifacts) {
+        for (const a of (m.agentTaskData.artifacts as any[])) {
+          const fn = a.filename || a.title
+          if (fn && !seen.has(fn)) {
+            seen.add(fn)
+            files.push({
+              name: fn,
+              type: mimeFromName(fn),
+              url: a.download_url || a.url,
+              sizeBytes: a.size_bytes,
+            })
+          }
+        }
+      }
+    }
+    return files
+  }, [messages])
 
   // Pre-warm the Mermaid chunk during idle time (no cold-start lag on the
   // first diagram).
@@ -5373,6 +5427,12 @@ export const Dashboard: React.FC = () => {
             type: mimeFromName(entry.filename),
             url: entry.download_url,
             sizeBytes: entry.size_bytes,
+            siblingFiles: arts.map((a: any) => ({
+              name: a.filename,
+              type: mimeFromName(a.filename),
+              url: a.download_url,
+              sizeBytes: a.size_bytes,
+            })),
           })
         }
       }
@@ -5437,6 +5497,12 @@ export const Dashboard: React.FC = () => {
             type: mimeFromName(entry.filename),
             url: entry.download_url,
             sizeBytes: entry.size_bytes,
+            siblingFiles: arts.map((a: any) => ({
+              name: a.filename,
+              type: mimeFromName(a.filename),
+              url: a.download_url,
+              sizeBytes: a.size_bytes,
+            })),
           })
         }
       }
@@ -6421,6 +6487,12 @@ export const Dashboard: React.FC = () => {
                     type: mimeFromName(entry.filename),
                     url: entry.download_url,
                     sizeBytes: entry.size_bytes,
+                    siblingFiles: newFiles.map((f) => ({
+                      name: f.filename,
+                      type: mimeFromName(f.filename),
+                      url: f.download_url,
+                      sizeBytes: f.size_bytes,
+                    })),
                   })
                 }
                 setMessages((prev) => {
@@ -8481,6 +8553,12 @@ export const Dashboard: React.FC = () => {
                                   type: mimeFromName(f.filename),
                                   url: f.download_url,
                                   sizeBytes: f.size_bytes,
+                                  siblingFiles: (msg.agentTaskData?.artifacts || []).map((a: any) => ({
+                                    name: a.filename || a.title || 'artifact',
+                                    type: mimeFromName(a.filename || a.title || 'artifact'),
+                                    url: a.download_url || a.url,
+                                    sizeBytes: a.size_bytes,
+                                  })),
                                 })
                               }
                             />
@@ -8509,6 +8587,12 @@ export const Dashboard: React.FC = () => {
                                     type: mimeFromName(gf.filename),
                                     url: gf.download_url,
                                     sizeBytes: gf.size_bytes,
+                                    siblingFiles: (msg.generatedFiles || []).map((f: any) => ({
+                                      name: f.filename,
+                                      type: mimeFromName(f.filename),
+                                      url: f.download_url,
+                                      sizeBytes: f.size_bytes,
+                                    })),
                                   })}
 
                                 />
@@ -9269,10 +9353,16 @@ export const Dashboard: React.FC = () => {
       {/* Unified File/Text Preview — Claude-style dock for text artifacts, modal for media */}
       {previewingFile && (() => {
         const pn = previewingFile.name.toLowerCase()
+        const hasRepoContext = Boolean(
+          previewingFile.siteSlug ||
+          (previewingFile.siblingFiles && previewingFile.siblingFiles.length > 1) ||
+          previewingFile.projectFiles ||
+          (allRecentFiles && allRecentFiles.length > 1)
+        )
         const pIsImg = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(pn)
         const pIsPdf = previewingFile.type === 'application/pdf' || pn.endsWith('.pdf')
         const pIsBin = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(pn)
-        if (!pIsImg && !pIsPdf && !pIsBin) {
+        if (!pIsPdf && (!pIsBin || hasRepoContext) && (!pIsImg || hasRepoContext || pn.endsWith('.svg'))) {
           return (
             <>
               <div className="fixed inset-0 bg-black/40 z-[99] max-md:bg-[#1a1a18]/95" onClick={() => setPreviewingFile(null)} />
@@ -9283,6 +9373,7 @@ export const Dashboard: React.FC = () => {
                 renderMarkdown={renderMarkdown}
                 onClose={() => setPreviewingFile(null)}
                 onPublish={() => showToast('Artifact published successfully!', 'info')}
+                allConversationFiles={allRecentFiles}
               />
             </>
           )
