@@ -268,7 +268,7 @@ export const Login: React.FC = () => {
         {/* Footer info */}
         <div className="mt-8 pt-5 border-t border-brand-border/60 flex items-center justify-center gap-2 text-[10px] text-brand-muted/70 font-semibold tracking-wide">
           <Shield className="w-3.5 h-3.5 text-brand-muted/60" />
-          <span>Secured via Supabase Auth & Row-Level Security</span>
+          <span>Secured via Ochuko Auth & Row-Level Security</span>
         </div>
 
       </div>

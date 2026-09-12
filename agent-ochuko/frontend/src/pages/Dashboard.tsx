@@ -7736,14 +7736,6 @@ export const Dashboard: React.FC = () => {
 
                 <p className="font-semibold text-[13px] text-brand-text tracking-tight truncate">Agent Ochuko</p>
 
-                <div className="flex items-center gap-1.5 mt-0.5">
-
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-
-                  <p className="text-[9px] text-[#ffffff]/80 font-bold tracking-widest uppercase truncate">System Active</p>
-
-                </div>
-
               </div>
 
             </div>
@@ -8483,15 +8475,6 @@ export const Dashboard: React.FC = () => {
                   </button>
                 </div>
               )}
-            </div>
-
-            {/* Floating Connection Indicator */}
-            <div className="flex items-center gap-1.5 px-1.5 py-1 select-none" title="Auth & Sync Connected">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-              </span>
-              <span className="text-[9px] font-bold tracking-widest text-brand-muted/70 uppercase hidden sm:block">Synced</span>
             </div>
           </div>
 
