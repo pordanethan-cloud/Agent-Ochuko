@@ -67,7 +67,8 @@ jobs:
           az containerapp update \
             --name agent-ochuko-api \
             --resource-group rg-ochuko \
-            --image ${{ steps.tag.outputs.IMAGE }}
+            --image ${{ steps.tag.outputs.IMAGE }} \
+            --min-replicas 0
 
       # ── 8. Health check — wait for new revision to be healthy ──────────
       - name: Wait for health check

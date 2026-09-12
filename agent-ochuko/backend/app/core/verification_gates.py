@@ -57,6 +57,58 @@ class VerificationGates:
         except Exception as e:
             return False, f"Header check error: {str(e)}"
 
+    # ── Delivery gates: verify-after-write ────────────────────────────────────
+
+    @staticmethod
+    def verify_written_file(file_path: str) -> Tuple[bool, Optional[str]]:
+        """Confirm a claimed file write actually landed on disk with content."""
+        if not os.path.exists(file_path):
+            return False, f"file does not exist on disk: {file_path}"
+        if os.path.getsize(file_path) <= 0:
+            return False, "file exists but is empty (0 bytes)"
+        return True, None
+
+    @staticmethod
+    def verify_relative_links(html_path: str) -> Tuple[bool, Optional[str]]:
+        """
+        Verify every relative href/src referenced by an HTML file resolves to a
+        real sibling file on disk. Catches the multi-page failure mode where a
+        page is written but its stylesheet/script/sibling-page files never land.
+        External URLs, data URIs, anchors, and inert schemes are ignored.
+        """
+        import re as _re
+
+        if not os.path.exists(html_path):
+            return False, f"file does not exist: {html_path}"
+
+        try:
+            with open(html_path, "r", encoding="utf-8", errors="replace") as f:
+                html = f.read()
+        except Exception as e:
+            return False, f"could not read file: {str(e)}"
+
+        if not html.strip():
+            return False, "HTML file is empty"
+
+        base_dir = os.path.dirname(os.path.abspath(html_path))
+        refs = _re.findall(r'(?:href|src)\s*=\s*["\']([^"\']+)["\']', html, flags=_re.IGNORECASE)
+        missing = []
+        for ref in refs:
+            clean = ref.split("#", 1)[0].split("?", 1)[0].strip()
+            if not clean:
+                continue
+            if clean.lower().startswith(("http://", "https://", "data:", "mailto:", "tel:", "javascript:", "//")):
+                continue
+            candidate = os.path.normpath(os.path.join(base_dir, clean))
+            if not os.path.exists(candidate):
+                missing.append(ref)
+
+        if missing:
+            return False, (
+                f"broken relative link(s) — target files were never written: {sorted(set(missing))}"
+            )
+        return True, None
+
     @staticmethod
     def verify_json_schema(payload_str: str, required_keys: List[str]) -> Tuple[bool, Optional[str]]:
         """Verify JSON payload formatting and required schema keys."""

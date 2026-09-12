@@ -110,6 +110,10 @@ _SITE_MIME_MAP = {
 
 _TRAVERSAL_RE = re.compile(r"(^|[/\\])\.\.($|[/\\])")
 
+# Relative href/src extractor for hosted-site bundle integrity checks (Gate 5).
+_RELATIVE_REF_RE = re.compile(r'(?:href|src)\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+_EXTERNAL_OR_INERT_RE = re.compile(r"^(https?://|data:|mailto:|tel:|javascript:|//)", re.IGNORECASE)
+
 
 def guess_content_type(filename: str) -> str:
     ext = os.path.splitext(filename.lower())[1]
@@ -212,6 +216,29 @@ class HostedSitesService:
         if "index.html" not in normalized_files and full_html:
             normalized_files["index.html"] = full_html
 
+        # ── Delivery Gate: bundle integrity (pre-persist) ───────────────────
+        # An entry page whose nav links point at files that were never bundled
+        # ships a broken preview. Check BEFORE persisting; warnings surface in
+        # the deploy result so the caller can fix and redeploy.
+        integrity_warnings: List[str] = []
+        _entry_html = normalized_files.get("index.html", "")
+        if not _entry_html or not _entry_html.strip():
+            integrity_warnings.append("index.html is empty — preview will render blank")
+        else:
+            for _ref in _RELATIVE_REF_RE.findall(_entry_html):
+                _clean = _ref.split("#", 1)[0].split("?", 1)[0].strip()
+                if not _clean or _EXTERNAL_OR_INERT_RE.match(_clean):
+                    continue
+                _norm = os.path.normpath(_clean).replace("\\", "/")
+                if _norm.startswith(".."):
+                    integrity_warnings.append(f"link escapes site root: {_ref}")
+                elif _norm.lstrip("/") not in normalized_files:
+                    integrity_warnings.append(f"relative link target not bundled: {_ref}")
+            if integrity_warnings:
+                logger.warning(
+                    "Hosted-site bundle integrity warnings for slug=%s: %s", slug, integrity_warnings
+                )
+
         site_record = {
             "id": site_id,
             "slug": slug,
@@ -256,6 +283,18 @@ class HostedSitesService:
         _MEMORY_HOSTED_SITES[slug] = site_record
         _MEMORY_HOSTED_SITES[site_id] = site_record
 
+        # ── Delivery Gate: preview health-check (read-back) ─────────────────
+        # Confirm the preview the URL points at actually serves a non-empty
+        # entry page before the caller advertises it as live.
+        preview_verified = False
+        try:
+            _served = _MEMORY_HOSTED_SITES.get(slug)
+            preview_verified = bool(
+                _served and (_served.get("files") or {}).get("index.html", "").strip()
+            )
+        except Exception as _pv_err:
+            logger.warning(f"Hosted-site preview health-check skipped: {_pv_err}")
+
         # Persist to Supabase if available
         if supabase_client:
             try:
@@ -291,6 +330,8 @@ class HostedSitesService:
             "files": sorted(normalized_files.keys()),
             "files_urls": urls,
             "multi_file": len(normalized_files) > 1,
+            "preview_verified": preview_verified,
+            "integrity_warnings": integrity_warnings,
         }
 
     @staticmethod

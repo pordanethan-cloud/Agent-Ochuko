@@ -3,8 +3,9 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
+import { wakeBackend } from '../utils/wakeBackend'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, ChevronRight, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Sliders } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, ChevronRight, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Sliders, Eye } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -381,7 +382,12 @@ const triggerDirectDownload = async (url: string, fallbackFilename: string) => {
   } catch (_) {}
 
   try {
-    const res = await fetch(url)
+    const token = await getEffectiveToken()
+    const headers: Record<string, string> = {}
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    const res = await fetch(url, { headers })
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
     const blob = await res.blob()
     const blobUrl = URL.createObjectURL(blob)
@@ -394,7 +400,16 @@ const triggerDirectDownload = async (url: string, fallbackFilename: string) => {
     URL.revokeObjectURL(blobUrl)
   } catch (err) {
     console.error("Direct download failed, falling back to window.open:", err)
-    window.open(url, '_blank')
+    try {
+      const token = await getEffectiveToken()
+      let finalUrl = url
+      if (token && !finalUrl.includes('token=')) {
+        finalUrl += (finalUrl.includes('?') ? '&' : '?') + `token=${encodeURIComponent(token)}`
+      }
+      window.open(finalUrl, '_blank')
+    } catch (_) {
+      window.open(url, '_blank')
+    }
   }
 }
 
@@ -1949,23 +1964,66 @@ function renderInline(text: string, keyBase: string, generatedFiles?: any[]): Re
 
       if (isDownloadable) {
         const isZip = lowerUrl.endsWith('.zip') || label.toLowerCase().includes('zip') || label.toLowerCase().includes('website')
+        const isHtmlOrWeb = lowerUrl.endsWith('.html') || lowerUrl.endsWith('.htm') || label.toLowerCase().includes('.html') || lowerUrl.includes('/v1/sites/')
+        const targetFilename = label || (url.split('/').pop()?.split('?')[0] || 'file')
+
+        const handleReview = (e: React.MouseEvent) => {
+          e.preventDefault()
+          e.stopPropagation()
+          window.dispatchEvent(new CustomEvent('open-file-preview', {
+            detail: {
+              name: targetFilename,
+              type: mimeFromName(targetFilename),
+              url: url,
+            }
+          }))
+        }
+
         segments.push(
-          <button
+          <div
             key={`${keyBase}-l${match.index}`}
-            type="button"
-            onClick={(e) => {
-              e.preventDefault()
-              triggerDirectDownload(url, label || 'download')
-            }}
-            className="inline-flex items-center gap-2 px-3 py-1.5 my-1 rounded-xl bg-white/[0.07] hover:bg-white/[0.14] border border-white/15 text-white font-medium text-[13px] transition active:scale-98 cursor-pointer group select-none shadow-sm align-middle"
-            title={`Download ${label}`}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 my-1 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] border border-white/15 text-white font-medium text-[13px] transition select-none shadow-sm align-middle group max-w-full"
           >
-            <Download className="w-3.5 h-3.5 text-blue-400 group-hover:text-blue-300 transition shrink-0" />
-            <span className="truncate max-w-[280px] sm:max-w-md">{label}</span>
+            {/* Click to Review / Preview */}
+            <button
+              type="button"
+              onClick={handleReview}
+              className="inline-flex items-center gap-2 hover:text-emerald-400 transition cursor-pointer text-left min-w-0"
+              title={`Review ${label}`}
+            >
+              <Eye className="w-3.5 h-3.5 text-emerald-400 group-hover:text-emerald-300 transition shrink-0" />
+              <span className="truncate max-w-[200px] sm:max-w-xs">{label}</span>
+            </button>
+
+            {/* Quick Review badge button */}
+            <button
+              type="button"
+              onClick={handleReview}
+              className="px-1.5 py-0.5 rounded text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition shrink-0 cursor-pointer"
+              title={`Review ${label}`}
+            >
+              Review
+            </button>
+
+            {/* Direct Download Button */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                triggerDirectDownload(url, label || 'download')
+              }}
+              className="p-1 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition shrink-0 cursor-pointer"
+              title={`Download ${label}`}
+            >
+              <Download className="w-3.5 h-3.5 text-blue-400 hover:text-blue-300" />
+            </button>
+
+            {/* Format badge */}
             <span className="text-[9.5px] font-mono text-white/50 uppercase px-1.5 py-0.5 rounded bg-white/5 border border-white/10 shrink-0">
-              {isZip ? 'ZIP' : 'FILE'}
+              {isZip ? 'ZIP' : isHtmlOrWeb ? 'WEB' : 'FILE'}
             </span>
-          </button>
+          </div>
         )
       } else {
         segments.push(
@@ -5059,6 +5117,14 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
 
+    // Zero-cost cold-start warm-up: with the backend scaled to 0, the first
+    // request after inactivity refuses connections until the container starts.
+    // Ping /health with backoff on mount so the container is warm before the
+    // user sends a message (the ping is the request that wakes it anyway).
+    wakeBackend().then((ok) => {
+      if (!ok) console.warn('[warm-up] Backend still unreachable after wake cycle')
+    })
+
     supabase.auth.getUser().then(({ data: { user } }) => {
 
       if (user) {
@@ -7700,8 +7766,10 @@ export const Dashboard: React.FC = () => {
 
       <aside
         onClick={() => {
-          // Promote sidebar to pinned open when user interacts inside it
-          setIsSidebarOpen(true)
+          // Promote sidebar to pinned open only when user interacts inside it while hovered on desktop
+          if (isSidebarHovered && !isSidebarOpen) {
+            setIsSidebarOpen(true)
+          }
         }}
         onMouseLeave={() => {
           // Keep sidebar open if search input is focused or query is typed
@@ -7748,15 +7816,17 @@ export const Dashboard: React.FC = () => {
             {/* Close Button (X) */}
             <button
               type="button"
-              onClick={() => {
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
                 setIsSidebarOpen(false)
                 setIsSidebarHovered(false)
               }}
-              className="min-h-[44px] min-w-[44px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 active:bg-white/15 transition-colors"
+              className="min-h-[44px] min-w-[44px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 active:bg-white/15 transition-colors cursor-pointer touch-manipulation relative z-20"
               aria-label="Close navigation sidebar"
               title="Close Sidebar"
             >
-              <X className="w-5 h-5" />
+              <X className="w-5 h-5 pointer-events-none" />
             </button>
 
           </div>
@@ -9516,11 +9586,16 @@ export const Dashboard: React.FC = () => {
                   <span>Share Conversation</span>
                 </h3>
                 <button
-                  onClick={() => setIsShareModalOpen(false)}
-                  className="min-h-[44px] min-w-[44px] -mr-2 -my-2 flex items-center justify-center rounded-xl text-white/50 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] transition-colors touch-manipulation"
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsShareModalOpen(false)
+                  }}
+                  className="min-h-[44px] min-w-[44px] -mr-2 -my-2 flex items-center justify-center rounded-xl text-white/50 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] transition-colors touch-manipulation cursor-pointer"
                   title="Close"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-5 h-5 pointer-events-none" />
                 </button>
               </div>
 
@@ -9714,11 +9789,15 @@ export const Dashboard: React.FC = () => {
             </div>
             <button
               type="button"
-              onClick={() => setIsModeSheetOpen(false)}
-              className="min-h-[36px] min-w-[36px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 transition cursor-pointer"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setIsModeSheetOpen(false)
+              }}
+              className="min-h-[44px] min-w-[44px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 transition cursor-pointer touch-manipulation"
               aria-label="Close mode sheet"
             >
-              <X className="w-5 h-5 sm:w-4 sm:h-4" />
+              <X className="w-5 h-5 sm:w-4 sm:h-4 pointer-events-none" />
             </button>
           </div>
 

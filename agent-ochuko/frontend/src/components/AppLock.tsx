@@ -177,11 +177,16 @@ export const AppLock: React.FC<AppLockProps> = ({ mode, onSuccess, onClose, getT
       <div className={`relative w-full max-w-sm rounded-3xl border border-[#1e2025] bg-[#0d0f11]/90 p-8 shadow-2xl backdrop-blur-xl transition duration-200 ${error ? 'shake-element border-red-500/30' : ''}`}>
         {onClose && (
           <button
-            onClick={onClose}
-            className="absolute top-4 right-4 p-1.5 rounded-full border border-[#1e2025] bg-[#161b22]/50 text-[#8e95a2] hover:text-brand-text hover:bg-white/5 transition"
+            type="button"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onClose()
+            }}
+            className="absolute top-4 right-4 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full border border-[#1e2025] bg-[#161b22]/50 text-[#8e95a2] hover:text-brand-text hover:bg-white/5 transition cursor-pointer touch-manipulation z-10"
             title="Cancel"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4 pointer-events-none" />
           </button>
         )}
 

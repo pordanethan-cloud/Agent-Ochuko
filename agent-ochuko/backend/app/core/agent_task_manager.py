@@ -321,7 +321,12 @@ class AgentTaskManager:
                     "If displaying mathematical formulas, use standard markdown math $$...$$. "
                     "CRITICAL: Only mention deliverables or created files if they are explicitly listed under GENERATED ARTIFACTS. Never invent fake files. "
                     "Deliverables must be complete and usable — never describe a file as truncated or partial. "
-                    "This reply is chat text: a short status and summary. NEVER include full file contents or code dumps — deliverables reach the user only as sandbox files with download links.\n\n"
+                    "When the task involves website design, software architecture, or implementation planning: "
+                    "deliver a comprehensive, elite implementation plan and architectural breakdown matching the highest caliber of Think Mode "
+                    "(system design, UI/UX aesthetics, component hierarchy, responsive breakdown, and interactive preview links). "
+                    "For multi-file projects, note that while the full repository is bundled in a zip for bulk download, "
+                    "every individual file is also individually accessible, viewable, and demandable directly. "
+                    "For single-file deliverables, ensure they are provided directly without zipping.\n\n"
                     + AGENT_CONDUCT + "\n\n" + ULTRA_IDENTITY
                 )
                 input_payload = [

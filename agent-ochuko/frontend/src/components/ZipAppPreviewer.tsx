@@ -430,11 +430,15 @@ export const ZipAppPreviewer: React.FC<ZipAppPreviewerProps> = ({
 
           <button
             type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-white/70 hover:text-white border border-white/10 transition ml-1"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onClose()
+            }}
+            className="p-1.5 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-white/70 hover:text-white border border-white/10 transition ml-1 cursor-pointer touch-manipulation"
             title="Close Preview (Esc)"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4 pointer-events-none" />
           </button>
         </div>
       </div>

@@ -778,11 +778,15 @@ export function ArtifactPanel({
           {/* Close Panel */}
           <button
             type="button"
-            onClick={onClose}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onClose()
+            }}
             title="Close Preview (Esc)"
-            className="p-1.5 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition ml-1"
+            className="p-1.5 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition ml-1 cursor-pointer touch-manipulation"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4 pointer-events-none" />
           </button>
         </div>
       </div>

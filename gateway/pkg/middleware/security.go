@@ -1,6 +1,9 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // SecurityHeaders adds defensive HTTP security headers to every response from
 // the Go Edge Gateway. These headers defend against the most common web attacks:
@@ -19,21 +22,9 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		// Force HTTPS for 1 year; include subdomains; allow preload submission.
 		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
 
-		// ── Clickjacking Protection ───────────────────────────────────────────
-		// Prevent the app being embedded in any iframe on an external origin.
-		h.Set("X-Frame-Options", "DENY")
-
 		// ── MIME Type Sniffing ────────────────────────────────────────────────
 		// Disable browser MIME guessing; honour the declared Content-Type only.
 		h.Set("X-Content-Type-Options", "nosniff")
-
-		// ── Content Security Policy ───────────────────────────────────────────
-		// Strict policy for an API gateway:
-		//   - default-src 'none'   → nothing allowed unless explicitly listed
-		//   - frame-ancestors 'none' → redundant with X-Frame-Options, belt+braces
-		//   - upgrade-insecure-requests → force HTTP→HTTPS upgrades on mixed content
-		h.Set("Content-Security-Policy",
-			"default-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests")
 
 		// ── Referrer Policy ───────────────────────────────────────────────────
 		// Don't leak the full URL (with JWTs/tokens in query strings) to external
@@ -51,16 +42,39 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		// stack (Go/net-http sets "Go" by default).
 		h.Set("Server", "agent-ochuko-gateway")
 
-		// ── Cross-Origin Policies ─────────────────────────────────────────────
-		// Prevent cross-origin reads of our API responses via Spectre side-channels.
-		h.Set("Cross-Origin-Opener-Policy", "same-origin")
-		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		isHostedSite := strings.HasPrefix(r.URL.Path, "/v1/sites")
 
-		// ── Cache Control (API responses) ─────────────────────────────────────
-		// Ensure API responses are never cached by proxies or shared caches.
-		// Individual handlers can override this for specific endpoints.
-		if h.Get("Cache-Control") == "" {
-			h.Set("Cache-Control", "no-store, max-age=0")
+		if !isHostedSite {
+			// ── Clickjacking Protection (Standard API Routes) ─────────────────
+			// Prevent the API from being embedded in any iframe on an external origin.
+			h.Set("X-Frame-Options", "DENY")
+
+			// ── Content Security Policy (Strict API Gateway) ──────────────────
+			h.Set("Content-Security-Policy",
+				"default-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests")
+
+			// ── Cross-Origin Policies ─────────────────────────────────────────
+			h.Set("Cross-Origin-Opener-Policy", "same-origin")
+			h.Set("Cross-Origin-Resource-Policy", "same-origin")
+
+			// ── Cache Control (API responses) ─────────────────────────────────
+			if h.Get("Cache-Control") == "" {
+				h.Set("Cache-Control", "no-store, max-age=0")
+			}
+		} else {
+			// ── Hosted Static Site Previews (/v1/sites) ───────────────────────
+			// Allow hosted sites to be framed by the Ochuko frontend and users.
+			// Do NOT set X-Frame-Options DENY (which blocks all iframes unconditionally).
+			h.Set("Content-Security-Policy",
+				"default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:; "+
+					"img-src 'self' https: data: blob:; "+
+					"style-src 'self' 'unsafe-inline' https:; "+
+					"font-src 'self' https: data:; "+
+					"frame-ancestors 'self' http://localhost:* https://*;")
+
+			// Allow cross-origin asset loading for embedded preview iframes
+			h.Set("Cross-Origin-Resource-Policy", "cross-origin")
+			h.Set("Cross-Origin-Opener-Policy", "unsafe-none")
 		}
 
 		next.ServeHTTP(w, r)

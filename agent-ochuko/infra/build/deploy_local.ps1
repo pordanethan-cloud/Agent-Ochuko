@@ -71,6 +71,7 @@ az containerapp update `
     --name $ContainerAppName `
     --resource-group $ResourceGroup `
     --image $DockerImage `
+    --min-replicas 0 `
     --set-env-vars $EnvVars
 if ($LASTEXITCODE -ne 0) { Write-Error "Container App update failed!"; Stop-Transcript; exit 1 }
 
@@ -85,10 +86,14 @@ Write-Host " FRONTEND: npm build -> Azure Blob Storage (`$web)" -ForegroundColor
 Write-Host "======================================" -ForegroundColor Cyan
 
 # 2a. Install dependencies (skip if node_modules already fresh)
-Write-Host "`n[1/3] Installing frontend dependencies..." -ForegroundColor Yellow
 Push-Location $FrontendPath
-npm ci
-if ($LASTEXITCODE -ne 0) { Write-Error "npm ci failed!"; Pop-Location; Stop-Transcript; exit 1 }
+if (-not (Test-Path "node_modules")) {
+    Write-Host "`n[1/3] Installing frontend dependencies..." -ForegroundColor Yellow
+    npm ci
+    if ($LASTEXITCODE -ne 0) { Write-Error "npm ci failed!"; Pop-Location; Stop-Transcript; exit 1 }
+} else {
+    Write-Host "`n[1/3] node_modules exists, skipping npm ci..." -ForegroundColor Gray
+}
 
 # 2b. Build (uses .env.production automatically - points to Azure Container App URL)
 Write-Host "`n[2/3] Building frontend..." -ForegroundColor Yellow

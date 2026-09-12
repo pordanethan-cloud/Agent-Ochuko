@@ -55,7 +55,7 @@ _THINKING_INSTRUCTION = (
     "2. If computation, data parsing, algorithmic simulation, financial modeling, or graphing is required: immediately call `execute_code` in the sandbox and deliver real computed figures and outputs — NEVER return dead code snippets for the user to run themselves.\n"
     "3. If real-time facts, comparative benchmarks, or market info are needed: immediately call `search_web` or `deep_research`.\n"
     "4. If interactive UI widgets, calculators, or dynamic tables are needed: call `visualize__show_widget`.\n"
-    "5. If creating or modifying files or projects: call `sandbox_write` or `deploy_site`.\n"
+    "5. If creating or modifying files or projects: call `sandbox_write` for every file, then `present_deliverable` to package and surface the deliverable. Never reference `deploy_site` — it is not available in this environment.\n"
     "6. If the user asks to zip, package, or download the project, repository, or website files: NEVER output Python script code into chat for the user to run. Instead, execute code in the sandbox using `execute_code` to produce `project.zip` so a downloadable archive is generated directly for the user.\n"
     "7. After the closing </thinking> tag, you MUST ALWAYS provide the complete, detailed, polished final response with the actual findings and deliverables."
 )
@@ -2447,6 +2447,35 @@ async def chat_stream_generator(
                                     + "\n\n"
                                 )
                                 receipt = await sandbox_write_file(conversation_id, target, content)
+
+                                # ── Delivery Gate: verify-after-write ────────────
+                                # The write receipt alone proves nothing — a silent
+                                # sandbox error or failed upload previously still left
+                                # the model free to declare the deliverable complete.
+                                # Confirm the file actually landed on disk (non-empty)
+                                # and, for HTML, that every relative link resolves to
+                                # a real sibling file. The result rides back to the
+                                # model so it must fix-and-retry before finishing.
+                                try:
+                                    from app.core.verification_gates import verification_gates as _delivery_verify
+                                    _v_full_path = _resolve_sandbox_path(conversation_id, target)
+                                    _v_ok, _v_err = _delivery_verify.verify_written_file(_v_full_path)
+                                    if _v_ok and str(_v_full_path).lower().endswith((".html", ".htm")):
+                                        _v_ok, _v_err = _delivery_verify.verify_relative_links(_v_full_path)
+                                    if _v_ok:
+                                        tool_outputs.append(
+                                            f"[Verification] OK: {target} written and verified "
+                                            "(exists, non-empty, relative links resolve)."
+                                        )
+                                    else:
+                                        tool_outputs.append(
+                                            f"[Verification] FAILED for {target}: {_v_err} "
+                                            "Do NOT declare this deliverable complete — rewrite the "
+                                            "missing/broken file with sandbox_write and re-verify first."
+                                        )
+                                except Exception as _v_exc:
+                                    logger.warning(f"sandbox_write verification skipped: {_v_exc}")
+
                                 # Upload to R2 so the user gets a downloadable artifact card.
                                 # Preserve the sandbox-relative path so multi-file
                                 # projects keep working relative links on the CDN.
@@ -3056,7 +3085,18 @@ async def chat_stream_generator(
                             tool_outputs.append(f"end_conversation error: {str(e)}")
 
                     else:
-                        tool_outputs.append(f"Unknown tool name: {t_name}")
+                        # Gate 1 — tool-availability feedback: a phantom or
+                        # unregistered tool call must never silently produce a
+                        # "done" narrative. Tell the model plainly so it re-plans.
+                        tool_outputs.append(
+                            f"Tool '{t_name}' is NOT available in this environment and was NOT executed. "
+                            "Do not call it again and do not describe it as used. Re-plan using only the tools "
+                            "in your current roster (search_web, deep_research, fetch_url, execute_code, terminal, "
+                            "sandbox_ls/read/write/edit, generate_image, fetch_stock_image, visualize__read_me + "
+                            "visualize__show_widget, memory_save/recall/edit, ask_user_input, present_deliverable, "
+                            "weather_fetch, render_* card tools). If the deliverable depends on this missing tool, "
+                            "state the blocker plainly instead of claiming completion."
+                        )
 
                 # Add tool response messages to local history
                 for tc, t_out in zip(current_tool_calls, tool_outputs):

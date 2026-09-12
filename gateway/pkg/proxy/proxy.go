@@ -148,6 +148,11 @@ func (gp *GatewayProxy) Handler() http.Handler {
 
 		// 3. JWT Verification & Context Injection
 		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			if qToken := r.URL.Query().Get("token"); qToken != "" {
+				authHeader = "Bearer " + qToken
+			}
+		}
 		var userCtx *auth.UserContext
 		var authErr error
 
@@ -218,6 +223,16 @@ func isProtectedPath(path string) bool {
 		if path == pub {
 			return false
 		}
+	}
+
+	// Allow public sandbox file downloads without JWT
+	if strings.HasPrefix(path, "/v1/files/sandbox/") {
+		return false
+	}
+
+	// Allow public static site renders without JWT
+	if strings.HasPrefix(path, "/v1/sites") {
+		return false
 	}
 
 	protectedPrefixes := []string{

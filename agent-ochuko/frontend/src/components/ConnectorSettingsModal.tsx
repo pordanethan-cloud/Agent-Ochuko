@@ -225,11 +225,16 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
-            className="p-2 rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/5 transition"
+            type="button"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onClose()
+            }}
+            className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/5 transition cursor-pointer touch-manipulation"
             aria-label="Close modal"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5 pointer-events-none" />
           </button>
         </div>
 
