@@ -124,6 +124,56 @@ def _scan_local_workspace(data_dir: str) -> List[Dict[str, Any]]:
     return files
 
 
+def prune_expired_sandboxes(max_age_seconds: int = 7200) -> int:
+    """
+    Cleans up stale conversation sandbox workspaces from the container's ephemeral storage.
+    Azure Container Apps have a 1Gi ephemeral limit. Workspaces inactive for > 2 hours (default 7200s)
+    are purged to prevent container disk exhaustion. Returns count of pruned directories.
+    """
+    import tempfile
+    import shutil
+    import time
+
+    base_dir = tempfile.gettempdir()
+    pruned_count = 0
+    now = time.time()
+
+    try:
+        for entry in os.scandir(base_dir):
+            if entry.is_dir() and entry.name.startswith("sandbox_"):
+                try:
+                    stat = entry.stat()
+                    last_active = stat.st_mtime
+                    age_seconds = now - last_active
+                    if age_seconds > max_age_seconds:
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                        pruned_count += 1
+                        logger.info(f"Pruned expired sandbox workspace: {entry.name} (age: {int(age_seconds)}s)")
+                except Exception as e:
+                    logger.warning(f"Failed to check/prune sandbox {entry.name}: {e}")
+    except Exception as e:
+        logger.warning(f"Error scanning temp directory for sandbox pruning: {e}")
+
+    # Also check /tmp directly if on Linux container
+    if os.name != "nt" and base_dir != "/tmp" and os.path.exists("/tmp"):
+        try:
+            for entry in os.scandir("/tmp"):
+                if entry.is_dir() and entry.name.startswith("sandbox_"):
+                    try:
+                        stat = entry.stat()
+                        last_active = stat.st_mtime
+                        if (now - last_active) > max_age_seconds:
+                            shutil.rmtree(entry.path, ignore_errors=True)
+                            pruned_count += 1
+                            logger.info(f"Pruned expired sandbox workspace: /tmp/{entry.name}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    return pruned_count
+
+
 async def sync_conversation_sandbox_workspace(conversation_id: str, user_id: str) -> List[Dict[str, Any]]:
     """
     Ensures the conversation sandbox workspace is fully populated and synchronized.
@@ -339,7 +389,7 @@ async def sandbox_write_file(conversation_id: str, subpath: str, content: str) -
 
 async def sandbox_edit_file(conversation_id: str, subpath: str, old_str: str, new_str: str) -> str:
     """
-    Claude-style str_replace: old_str must match EXACTLY ONCE in the file.
+    Strict str_replace: old_str must match EXACTLY ONCE in the file.
     Surgical edit without a full rewrite. Refuses traversal and read-only zones.
     """
     def _edit():

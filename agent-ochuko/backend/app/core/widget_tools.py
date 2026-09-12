@@ -90,7 +90,7 @@ This design system uses dense, commanding base tones, sophisticated mid-tones, a
 - Always provide explicit `viewBox` (e.g. `viewBox="0 0 760 440"`) and `width="100%"`.
 
 ### DO NOT
-- **DO NOT** use generic Anthropic/Claude themes (No `#fbf9f5` warm cream, No `#e8e0d0`, No `#d97757` terracotta/peach, and No light grey or warm beige backgrounds).
+- **DO NOT** use generic external themes (No `#fbf9f5` warm cream, No `#e8e0d0`, No `#d97757` terracotta/peach, and No light grey or warm beige backgrounds).
 - **DO NOT** use default stark/sterile white (#ffffff) or pure black (#000000) for components.
 - **DO NOT** leave text elements without explicit fill attribute (`fill="#F4F1DE"`).
 """

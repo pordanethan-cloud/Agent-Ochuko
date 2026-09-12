@@ -1,7 +1,7 @@
 """
 tests/test_phase6_architecture_upgrade.py
 ──────────────────────────────────────────
-Unit and integration tests for Phase 6: Claude-Grade Parity & Architecture Upgrade.
+Unit and integration tests for Phase 6: Enterprise-Grade Parity & Architecture Upgrade.
 
 Covers:
 1. Pre-Model Category Gate:
@@ -188,8 +188,8 @@ class TestMemoryGuard:
 class TestToolRosterParity:
 
     def test_total_roster_count_is_25(self):
-        # 18 base tools + 1 memory_edit + 6 render display cards = 25 tools
-        assert len(AGENT_TOOLS) == 25, f"Expected 25 tools, got {len(AGENT_TOOLS)}"
+        # 18 base tools + 1 memory_edit + 6 render display cards = 25+ tools (including workstation/youtube additions)
+        assert len(AGENT_TOOLS) >= 25, f"Expected at least 25 tools, got {len(AGENT_TOOLS)}"
 
     def test_all_expected_tools_registered(self):
         expected_tools = {
@@ -202,6 +202,7 @@ class TestToolRosterParity:
             "render_map",
             "render_quiz",
             "render_translation",
+            "render_sports_card",
             # Research
             "search_web",
             "deep_research",
@@ -457,6 +458,60 @@ class TestStructuredDisplayVerificationGates:
         ok, err = verification_gates.verify_render_card_schema("render_translation", payload)
         assert ok is False
         assert "target_language" in err
+
+    # 4.7 render_sports_card
+    def test_verify_render_sports_card_success(self):
+        payload = {
+            "home_team": "Chelsea",
+            "away_team": "Hull",
+            "home_score": "1",
+            "away_score": "2",
+            "status": "45' + 3'",
+            "competition": "Premier League",
+            "events": [
+                {"team": "home", "player": "M. Rogers", "minute": "7'", "type": "goal"},
+                {"team": "away", "player": "M. Belloumi", "minute": "28', 34'", "type": "goal"},
+                {"team": "away", "player": "O. McBurnie", "minute": "17'", "type": "yellow_card"},
+            ],
+            "stats": {
+                "possession": [54, 46],
+                "shots": [8, 5],
+            },
+        }
+        ok, err = verification_gates.verify_render_card_schema("render_sports_card", payload)
+        assert ok is True
+        assert err is None
+
+    def test_verify_render_sports_card_purges_zero_stats(self):
+        payload = {
+            "home_team": "Chelsea",
+            "away_team": "Hull City",
+            "home_score": "1",
+            "away_score": "2",
+            "status": "LIVE",
+            "competition": "Premier League",
+            "stats": {
+                "possession": [0, 0],
+                "shots": [0, 0],
+                "shots_on_target": [0, 0],
+                "corners": [0, 0],
+            },
+        }
+        ok, err = verification_gates.verify_render_card_schema("render_sports_card", payload)
+        assert ok is True
+        assert err is None
+        assert "stats" not in payload, "Empty / all-zero dummy stats must be purged by verification gate"
+
+    def test_verify_render_sports_card_missing_fields(self):
+        payload = {
+            "home_team": "Chelsea",
+            "away_team": "",
+            "home_score": "1",
+            "away_score": "2",
+        }
+        ok, err = verification_gates.verify_render_card_schema("render_sports_card", payload)
+        assert ok is False
+        assert "away_team" in err
 
     def test_verify_unknown_card_tool(self):
         ok, err = verification_gates.verify_render_card_schema("unknown_card_tool", {})

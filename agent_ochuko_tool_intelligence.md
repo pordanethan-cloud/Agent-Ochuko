@@ -169,4 +169,4 @@ This is where most agents waste potential — defaulting to plain text when a st
 
 ---
 
-*Built for [[agent-ochuko]] — pairs with the tool reference in `claude_tools_reference_v2.md`.*
+*Built for [[agent-ochuko]] — pairs with the tool reference in `ochuko_tools_reference_v2.md`.*

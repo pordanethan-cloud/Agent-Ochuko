@@ -399,9 +399,9 @@ Request arrives
 
 ---
 
-#### THINK Mode System Prompt — *Claude-like depth, token-efficient*
+#### THINK Mode System Prompt — *Ochuko-like depth, token-efficient*
 
-> **Design philosophy**: The original had a mandatory "list 3 assumptions, 2 edge cases" format that generated 100–200 extra tokens on *every* response, even trivial ones. This version uses conditional depth — it only goes deep when the question warrants it. The character is Claude-like: intellectually honest, prose-forward, no filler, direct but not blunt.
+> **Design philosophy**: The original had a mandatory "list 3 assumptions, 2 edge cases" format that generated 100–200 extra tokens on *every* response, even trivial ones. This version uses conditional depth — it only goes deep when the question warrants it. The character is Ochuko-like: intellectually honest, prose-forward, no filler, direct but not blunt.
 
 ```
 You are a sharp, deeply thoughtful reasoning partner — intellectually curious,
@@ -708,7 +708,7 @@ $$;
 
 | Key | Value | Notes |
 |---|---|---|
-| `THINK_PROMPT` | `[full THINK prompt text]` | Claude-like reasoning |
+| `THINK_PROMPT` | `[full THINK prompt text]` | Ochuko-like reasoning |
 | `SOLVE_PROMPT` | `[full SOLVE prompt text]` | Deterministic computation |
 | `DISCUSS_PROMPT` | `[full DISCUSS prompt text]` | Conversational, Nano-powered |
 | `NANO_PROMPT` | `[full NANO prompt text]` | Interceptor only — 3-sentence max |
@@ -1453,7 +1453,7 @@ Queue image analysis job.
 ---
 
 #### `POST /v1/audio/transcriptions`
-Synchronous Speech-to-Text & Stitching (used for Claude-style dictation).
+Synchronous Speech-to-Text & Stitching (used for Ochuko-style dictation).
 **Request**: `multipart/form-data` with:
 - `file`: audio file chunk (webm)
 - `existing_text`: optional string representing the current text input bar value
@@ -1763,7 +1763,7 @@ export const useJob = (jobId: string | null) => {
 }
 ```
 
-### Claude-Style Dictation Hook (`useVoice.ts`)
+### Ochuko-Style Dictation Hook (`useVoice.ts`)
 
 Implements a hybrid client-side silence-detection (VAD) and Groq-Whisper chunk transcription engine. 
 * **Visual state**: text box blurs (connotes voice input mode, not typing) and overlays a subtle pulsating waveform.
@@ -2436,4 +2436,4 @@ Since the original approval of the system plan, several core components have bee
 - **Download Proxy Endpoint**: Added a `GET /v1/agents/download-proxy` endpoint in [agents.py](file:///C:/Users/T14%20GEN%205/Documents/WORK%20AND%20PLAN/AZURE%20SYSTEM-AUTH%20AT%20SCALE/agent-ochuko/backend/app/api/v1/endpoints/agents.py#L545-L585) to stream R2 files to clients directly as attachments, bypassing cross-origin browser download security policies.
 - **Admin Budget Fix**: Adjusted `admin_service.py` to upsert budgets using a composite constraint on `(user_id, period)` to prevent DB key clashes.
 - **Search Syntax Error Fix**: Resolved a 500 server error caused by database search syntax exceptions during conversational message lookup.
-- **Branding**: Renamed references of "Claude" to "Agent Ochuko" inside instructions and skill sets.
+- **Branding**: Renamed references of "Ochuko" to "Agent Ochuko" inside instructions and skill sets.

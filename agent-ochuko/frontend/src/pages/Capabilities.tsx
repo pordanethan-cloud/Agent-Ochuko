@@ -20,6 +20,8 @@ import {
   ShieldCheck,
   Zap,
   Layers,
+  Monitor,
+  FolderOpen,
 } from 'lucide-react'
 
 interface CapabilityCard {
@@ -34,6 +36,32 @@ interface CapabilityCard {
 }
 
 const CAPABILITY_SECTIONS: CapabilityCard[] = [
+  {
+    id: 'workstation-access',
+    title: 'Workstation Computer Access & Local Machine Collaboration',
+    icon: Monitor,
+    tools: ['mcp_workstation_read', 'mcp_workstation_list', 'mcp_workstation_write', 'mcp_workstation_exec'],
+    recommendedMode: 'agent',
+    description:
+      'Directly navigates, reads, and writes to files on your local workstation (Downloads, Desktop, active project repositories) and executes terminal commands via a dual-tier zero-install browser folder mount and high-speed local companion daemon.',
+    prompt:
+      'Inspect my local Downloads folder, find the latest downloaded file, analyze its contents, and generate an executive summary with key metrics.',
+    expectedOutcome:
+      'Ochuko scans your local Downloads directory using reverse-mtime discovery, reads the latest file directly without uploading your entire drive, and provides full analysis.',
+  },
+  {
+    id: 'universal-ingestion',
+    title: '100+ File Format Universal Ingestion & Document Intelligence',
+    icon: FolderOpen,
+    tools: ['sandbox_read', 'execute_code', 'multimodal_vision'],
+    recommendedMode: 'think',
+    description:
+      'Seamlessly processes 100+ file extensions across spreadsheets (.xlsx, .csv, .parquet), compressed archives (.zip, .tar, .7z), audio & WhatsApp voice notes (.opus, .m4a, .mp3), machine learning graphs (.pb, .onnx), code repositories, and high-resolution diagrams.',
+    prompt:
+      'Extract and audit data from our uploaded financial workbook: decompress the archive, parse the multi-tab spreadsheet, calculate variance between budgeted and actual expenditures, and export a clean executive summary table.',
+    expectedOutcome:
+      'Autonomously unpacks, parses formulas and sheets, computes financial metrics in Python, and renders formatted analytical tables.',
+  },
   {
     id: 'quantitative',
     title: 'Quantitative Modeling & Algorithmic Valuation',
@@ -170,23 +198,23 @@ export const Capabilities: React.FC = () => {
   return (
     <div className="h-screen w-full overflow-y-auto bg-brand-bg text-brand-text flex flex-col font-sans selection:bg-brand-accent/20 scroll-smooth">
       {/* Top Navigation Bar */}
-      <nav className="h-14 border-b border-brand-border bg-brand-surface/95 backdrop-blur-md sticky top-0 z-50 flex items-center justify-between px-6 select-none shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-6 h-6 rounded bg-brand-card flex items-center justify-center border border-brand-border">
+      <nav className="h-14 border-b border-brand-border bg-brand-surface/95 backdrop-blur-md sticky top-0 z-50 flex items-center justify-between px-3 sm:px-6 select-none shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="w-6 h-6 rounded bg-brand-card flex items-center justify-center border border-brand-border shrink-0">
             <Cpu className="w-3.5 h-3.5 text-brand-accent" />
           </div>
-          <span className="text-[13px] font-bold tracking-wider text-brand-text uppercase">
+          <span className="text-xs sm:text-[13px] font-bold tracking-wider text-brand-text uppercase truncate max-w-[150px] xs:max-w-none">
             Develop AI Agents in Azure
           </span>
-          <span className="text-brand-border">|</span>
-          <span className="text-[11px] font-medium text-brand-muted tracking-wide">
-            Ochuko Frontier Capabilities & System Directory
+          <span className="text-brand-border hidden sm:inline">|</span>
+          <span className="text-[11px] font-medium text-brand-muted tracking-wide hidden sm:inline">
+            Frontier Capabilities & System Directory
           </span>
         </div>
 
         <button
           onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-brand-muted hover:text-brand-text transition-colors duration-150 rounded-lg px-3 py-1.5 border border-transparent hover:border-brand-border hover:bg-brand-card focus:outline-none focus:ring-1 focus:ring-brand-accent"
+          className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-brand-muted hover:text-brand-text transition-colors duration-150 rounded-lg px-2.5 sm:px-3 py-1.5 border border-transparent hover:border-brand-border hover:bg-brand-card focus:outline-none focus:ring-1 focus:ring-brand-accent shrink-0 cursor-pointer"
           aria-label="Navigate back to chat"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
@@ -195,7 +223,7 @@ export const Capabilities: React.FC = () => {
       </nav>
 
       {/* Main Content Layout */}
-      <div className="flex-1 max-w-6xl w-full mx-auto px-6 py-10 flex gap-10">
+      <div className="flex-1 max-w-6xl w-full mx-auto px-3.5 sm:px-6 py-6 sm:py-10 flex gap-10">
         {/* Left Side: Table of Contents / Sticky Navigation */}
         <aside className="w-64 hidden md:block shrink-0">
           <div className="sticky top-20 space-y-6">
@@ -436,8 +464,9 @@ export const Capabilities: React.FC = () => {
                   <span>Agent Mode</span>
                 </div>
                 <p className="text-xs text-brand-muted leading-relaxed">
-                  Full OODA loop autonomy. Plans multi-stage tasks, manages state across steps, generates
-                  complete codebases, and deploys live web applications.
+                  Full OODA loop autonomy with Workstation Computer Access. Decomposes goals into structured plans,
+                  inspects local directories, executes terminal commands, manages multi-step state, and delivers
+                  finished deliverables with human-in-the-loop review governance.
                 </p>
               </div>
 

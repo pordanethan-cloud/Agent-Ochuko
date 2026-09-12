@@ -153,11 +153,20 @@ def _is_simple_request(message_text: str) -> bool:
     return False
 
 
+# Queries asking to summarize or inspect parsed non-OCR files
+_DOC_INQUIRY_RE = re.compile(
+    r"\b(summarize|summary|overview|what('?s|\s+is)\s+(in|inside)|explain|describe|read|list|contents?|outline)\b",
+    re.IGNORECASE
+)
+
+
 async def route(
     user_message: str,
     mode: str,
     conversation_id: Optional[str] = None,
     nano_turn_count: int = 0,
+    has_non_ocr_attachments: bool = False,
+    has_ocr_attachments: bool = False,
 ) -> RoutingDecision:
     """
     Determine which model deployment and system prompt to use.
@@ -167,6 +176,8 @@ async def route(
         mode: Requested mode from frontend ("think", "solve", "discuss")
         conversation_id: For nano turn tracking (optional)
         nano_turn_count: Current nano turn count for this conversation
+        has_non_ocr_attachments: True if text, code, tables, or archives are attached
+        has_ocr_attachments: True if images or scanned documents requiring OCR/vision are attached
 
     Returns:
         RoutingDecision with deployment, prompt, mode, and reasoning.
@@ -224,6 +235,31 @@ async def route(
                 was_intercepted=False,
                 skill=skill,
                 complexity=tier,
+                reasoning_effort=effort,
+            )
+
+    # ── Layer 0b: Non-OCR Document Fast Path ────────────────────────────────
+    # Files decoded natively (text, tables, archive manifest) without OCR
+    # route to nano for summarization and Q&A to optimize cost and latency.
+    if (
+        has_non_ocr_attachments
+        and not has_ocr_attachments
+        and mode != "agent"
+        and not _needs_grounded_search(user_message)
+    ):
+        if _DOC_INQUIRY_RE.search(user_message) or len(user_message.strip()) <= 100:
+            effort = await get_reasoning_effort("discuss", "low", nano_deployment)
+            return RoutingDecision(
+                deployment=nano_deployment,
+                system_prompt=skill_prompt,
+                routing_mode="nano",
+                routing_reason=(
+                    f"Non-OCR parsed attachment query — routed to nano ({nano_deployment}) | "
+                    f"complexity=low | effort={effort} | skill={skill}"
+                ),
+                was_intercepted=True,
+                skill=skill,
+                complexity="low",
                 reasoning_effort=effort,
             )
 

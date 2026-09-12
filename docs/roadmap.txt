@@ -404,7 +404,7 @@ Picking up from Phase 6.1:
 - [ ] Handle network drop during chunk upload: retry once, then show error toast, keep recording
 - [ ] Mobile: test on Chrome Android + Safari iOS — MediaRecorder `audio/webm` may need fallback to `audio/mp4` on Safari
 
-**✅ Milestone**: Full voice loop working. User speaks → text appears in input bar → send → assistant responds → user clicks play → hears the response. Claude-style dictation experience.
+**✅ Milestone**: Full voice loop working. User speaks → text appears in input bar → send → assistant responds → user clicks play → hears the response. Ochuko-style dictation experience.
 
 ---
 

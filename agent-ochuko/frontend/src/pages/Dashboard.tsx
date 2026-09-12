@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, ChevronRight, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Terminal } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -12,12 +12,17 @@ import { useVoice } from '../hooks/useVoice'
 import {
   AgentExecutionStepper,
   AgentHITLApprovalCard,
+  AgentUserInputCard,
   AgentSiteDeploymentCard,
   TurnTracker,
   AgentFileChangesCard,
 } from '../components/AgentModeWidgets'
 import type { PlanStepItem, AgentTaskData } from '../components/AgentModeWidgets'
 import { ArtifactPanel } from '../components/ArtifactPanel'
+import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
+import { RepositoryDeliverableCard } from '../components/RepositoryDeliverableCard'
+import { SportsMatchCard } from '../components/SportsMatchCard'
+
 
 
 
@@ -26,18 +31,54 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 // ─── Artifact helpers ──────────────────────────────────────────────────────────
 // Single presentation path: every artifact open routes through the
-// `open-file-preview` event → ArtifactPanel (Claude-style right dock).
+// `open-file-preview` event → ArtifactPanel (Ochuko right dock).
 // The old inline sidebar/fullscreen artifact UI is retired for text artifacts.
 
 function mimeFromName(name: string): string {
   const ext = (name || '').toLowerCase().split('.').pop() || ''
   const map: Record<string, string> = {
+    // Web & Code
     html: 'text/html', htm: 'text/html', css: 'text/css',
-    js: 'text/javascript', mjs: 'text/javascript',
+    js: 'text/javascript', mjs: 'text/javascript', cjs: 'text/javascript',
+    ts: 'text/typescript', tsx: 'text/typescript', jsx: 'text/javascript',
     json: 'application/json', md: 'text/markdown', markdown: 'text/markdown',
+    txt: 'text/plain', py: 'text/x-python', yaml: 'text/yaml', yml: 'text/yaml',
+    xml: 'application/xml', sql: 'text/x-sql', sh: 'application/x-sh', bash: 'application/x-sh',
+    bat: 'application/x-msdos-program', cmd: 'text/plain', ps1: 'text/plain',
+    java: 'text/x-java-source', c: 'text/x-c', cpp: 'text/x-c', cc: 'text/x-c', h: 'text/x-c', hpp: 'text/x-c',
+    cs: 'text/plain', rs: 'text/rust', go: 'text/x-go', rb: 'text/x-ruby', php: 'text/x-php',
+    kt: 'text/x-kotlin', gradle: 'text/plain', properties: 'text/plain', ini: 'text/plain', cfg: 'text/plain',
+    toml: 'application/toml', env: 'text/plain', dockerfile: 'text/plain', graphql: 'application/graphql', gql: 'application/graphql',
+    proto: 'text/plain', pb: 'application/x-protobuf', swift: 'text/x-swift', scala: 'text/x-scala', r: 'text/x-r', lua: 'text/x-lua',
+    dart: 'application/dart', zig: 'text/plain', sol: 'text/plain', wasm: 'application/wasm',
+    diff: 'text/x-diff', patch: 'text/x-diff', vue: 'text/plain', svelte: 'text/plain',
+    tex: 'text/x-tex', log: 'text/plain', ipynb: 'application/json',
+    // Tabular & Spreadsheets
     csv: 'text/csv', tsv: 'text/tab-separated-values',
-    svg: 'image/svg+xml', txt: 'text/plain', py: 'text/x-python',
-    ts: 'text/typescript', tsx: 'text/typescript', yaml: 'text/yaml', yml: 'text/yaml',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    xls: 'application/vnd.ms-excel', xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    ods: 'application/vnd.oasis.opendocument.spreadsheet', parquet: 'application/octet-stream',
+    // Documents
+    pdf: 'application/pdf',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    doc: 'application/msword',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ppt: 'application/vnd.ms-powerpoint',
+    rtf: 'application/rtf', odt: 'application/vnd.oasis.opendocument.text',
+    odp: 'application/vnd.oasis.opendocument.presentation', epub: 'application/epub+zip',
+    // Compressed Archives & Disk Images
+    zip: 'application/zip', tar: 'application/x-tar', gz: 'application/gzip',
+    tgz: 'application/gzip', bz2: 'application/x-bzip2', tbz2: 'application/x-bzip2',
+    xz: 'application/x-xz', txz: 'application/x-xz', '7z': 'application/x-7z-compressed',
+    rar: 'application/vnd.rar', zst: 'application/zstd', lzma: 'application/x-lzma',
+    cab: 'application/vnd.ms-cab-compressed', iso: 'application/x-iso9660-image', dmg: 'application/x-apple-diskimage',
+    // Images & Media
+    svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp', ico: 'image/x-icon',
+    tiff: 'image/tiff', tif: 'image/tiff', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif',
+    // Audio (including WhatsApp voice notes & recordings)
+    mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg',
+    opus: 'audio/opus', oga: 'audio/ogg', amr: 'audio/amr', flac: 'audio/flac', aac: 'audio/aac',
   }
   return map[ext] || 'text/plain'
 }
@@ -296,6 +337,8 @@ interface Message {
 
   widgetData?: { code: string; title: string; loadingMessages?: string[]; widgetType?: string; widgetLoading?: boolean }[]
 
+  displayCards?: { card_type: string; payload: any; summary?: string }[]
+
   timestamp?: number     // Unix ms — set at send/receive time for relative display
 
   generatedFiles?: { filename: string; download_url: string; size_bytes: number }[]
@@ -314,6 +357,14 @@ interface Message {
     step: PlanStepItem
     taskId: string
     reason?: string
+  }
+
+  agentUserInputRequired?: {    // Interactive clarification question / options prompt
+    taskId: string
+    stepIndex: number
+    question: string
+    options: string[]
+    selectType?: string
   }
 
 }
@@ -3077,8 +3128,21 @@ export function renderMarkdown(text: string, generatedFiles?: any[]): React.Reac
 
           case 'code': {
             const content = block.content || ''
+            const lang = (block.language || '').toLowerCase().trim()
 
-            // Claude parity: code blocks in chat are ALWAYS plain highlighted
+            // Sports match card native rendering: if the code block is tagged sports_card / match_card
+            if (lang === 'sports_card' || lang === 'match_card' || lang === 'live_score' || lang === 'scoreboard') {
+              try {
+                const cardData = JSON.parse(content)
+                if (cardData && typeof cardData === 'object' && cardData.home_team && cardData.away_team) {
+                  return <SportsMatchCard key={key} {...cardData} />
+                }
+              } catch {
+                // fall through to standard code block if parsing fails
+              }
+            }
+
+            // Ochuko parity: code blocks in chat are ALWAYS plain highlighted
             // code with a single Copy action. No inline iframe previews, no
             // auto-SVG cards — deliverables live in files (sandbox_write) and
             // present through the ArtifactPanel; widgets arrive via
@@ -3415,39 +3479,39 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: st
   const percent = Math.min(100, Math.round((currentStep / totalSteps) * 100))
 
   return (
-    <div className="my-3 px-3.5 py-2.5 rounded-lg bg-[#0c0d10]/95 border border-white/[0.08] shadow-lg backdrop-blur-xl select-none animate-fadeIn space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 overflow-hidden">
-          {/* Minimalist Ash Dot */}
+    <div className="w-full max-w-full min-w-0 my-2 px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-[#0c0d10]/95 border border-white/[0.08] shadow-md backdrop-blur-xl select-none animate-fadeIn flex flex-col gap-1.5 box-border overflow-hidden">
+      <div className="flex items-center justify-between gap-1.5 sm:gap-2.5 w-full min-w-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 overflow-hidden">
+          {/* Minimalist Status Dot */}
           <div className="flex items-center justify-center shrink-0 w-2.5 h-2.5">
             <span className={`w-1.5 h-1.5 rounded-full ${isComplete ? 'bg-[#8e95a2]' : 'bg-[#a0a6b2] animate-pulse'}`} />
           </div>
 
-          {/* Monospace Badge & Action Label */}
-          <div className="flex items-center gap-2 overflow-hidden">
-            <span className="px-2 py-0.5 rounded bg-[#16181d] border border-white/10 text-[9.5px] font-mono font-medium text-[#a0a6b2] tracking-wider uppercase shrink-0">
-              {hasKnownMax ? `STEP ${currentStep}/${totalSteps}` : `STEP ${currentStep}`}
+          {/* Monospace Badge */}
+          <span className="px-1.5 sm:px-2 py-0.5 rounded bg-[#16181d] border border-white/10 text-[9px] sm:text-[9.5px] font-mono font-medium text-[#a0a6b2] tracking-wider uppercase shrink-0">
+            {hasKnownMax ? `STEP ${currentStep}/${totalSteps}` : `STEP ${currentStep}`}
+          </span>
+
+          {/* Action Label — responsive truncation */}
+          {label ? (
+            <span className="text-[11px] sm:text-[11.5px] font-sans text-[#cbd5e1] truncate min-w-0 flex-1 leading-snug" title={label}>
+              {label}
             </span>
-            {label ? (
-              <span className="text-[11px] font-sans text-[#cbd5e1] truncate max-w-[360px]" title={label}>
-                {label}
-              </span>
-            ) : (
-              <span className="text-[11px] font-sans text-[#717784] italic truncate">
-                {isComplete ? 'Completed' : 'Running pipeline...'}
-              </span>
-            )}
-          </div>
+          ) : (
+            <span className="text-[11px] sm:text-[11.5px] font-sans text-[#717784] italic truncate min-w-0 flex-1 leading-snug">
+              {isComplete ? 'Completed' : 'Running pipeline...'}
+            </span>
+          )}
         </div>
 
         {/* Monospace Percentage */}
-        <span className="text-[10px] font-mono font-medium text-[#717784] tracking-wider shrink-0">
+        <span className="text-[10px] font-mono font-medium text-[#717784] tracking-wider shrink-0 tabular-nums ml-1">
           {isComplete ? '100%' : `${percent}%`}
         </span>
       </div>
 
-      {/* Razor-thin Ash Progress Track */}
-      <div className="w-full h-[1px] bg-white/[0.08] rounded-full overflow-hidden">
+      {/* Razor-thin Progress Track */}
+      <div className="w-full h-[1.5px] sm:h-[2px] bg-white/[0.08] rounded-full overflow-hidden">
         <div
           className="h-full bg-[#8e95a2] transition-all duration-300 ease-out rounded-full opacity-80"
           style={{ width: isComplete ? '100%' : `${percent}%` }}
@@ -3942,17 +4006,37 @@ export const Dashboard: React.FC = () => {
   }
 
   const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
+  const [isConnectorSettingsOpen, setIsConnectorSettingsOpen] = useState(false)
+  const [isWorkstationAccessEnabled, setIsWorkstationAccessEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('ochuko_workstation_access_enabled') === 'true'
+  })
   const headerSettingsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    const handleStorageChange = () => {
+      setIsWorkstationAccessEnabled(localStorage.getItem('ochuko_workstation_access_enabled') === 'true')
+    }
+    window.addEventListener('storage', handleStorageChange)
+    window.addEventListener('ochuko_workstation_access_changed', handleStorageChange)
+    return () => {
+      window.removeEventListener('storage', handleStorageChange)
+      window.removeEventListener('ochuko_workstation_access_changed', handleStorageChange)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!isHeaderSettingsOpen) return
-    const handler = (e: MouseEvent) => {
+    const handler = (e: MouseEvent | TouchEvent) => {
       if (headerSettingsRef.current && !headerSettingsRef.current.contains(e.target as Node)) {
         setIsHeaderSettingsOpen(false)
       }
     }
     document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    document.addEventListener('touchstart', handler)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('touchstart', handler)
+    }
   }, [isHeaderSettingsOpen])
 
   // Legacy `open-artifact` events (code-block "View as Artifact") route into the
@@ -4225,12 +4309,25 @@ export const Dashboard: React.FC = () => {
 
   const uploadFile = async (file: File) => {
     const allowedExts = [
-      '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.docx',
-      '.txt', '.html', '.css', '.js', '.ts', '.tsx', '.jsx', '.java', 
-      '.py', '.c', '.cpp', '.h', '.cs', '.sh', '.json', '.md', 
-      '.yaml', '.yml', '.xml', '.sql', '.csv', '.rs', '.go', '.rb', 
-      '.php', '.kt', '.gradle', '.properties', '.ipynb', '.ini', '.cfg',
-      '.bat', '.cmd', '.ps1'
+      // Documents & PDF
+      '.pdf', '.docx', '.doc', '.pptx', '.ppt', '.odp', '.odt', '.rtf', '.epub', '.tex',
+      // Tabular & Spreadsheets
+      '.xlsx', '.xls', '.xlsm', '.csv', '.tsv', '.ods', '.parquet',
+      // Compressed Archives & Disk Images
+      '.zip', '.tar', '.gz', '.tgz', '.bz2', '.tbz2', '.xz', '.txz', '.7z', '.rar', '.zst', '.lzma', '.cab', '.iso', '.dmg',
+      // Images & Multimodal Vision
+      '.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.tiff', '.tif', '.ico', '.heic', '.heif', '.avif',
+      // Audio & Media (including WhatsApp voice notes & recordings)
+      '.mp3', '.wav', '.m4a', '.ogg', '.opus', '.oga', '.amr', '.flac', '.aac',
+      // Web & Scripting
+      '.html', '.htm', '.css', '.js', '.mjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte',
+      // Code & Languages
+      '.py', '.ipynb', '.java', '.c', '.cpp', '.cc', '.h', '.hpp', '.cs', '.rs', '.go', '.rb', '.php',
+      '.kt', '.swift', '.scala', '.r', '.lua', '.dart', '.zig', '.sol', '.wasm',
+      // Shell & System
+      '.sh', '.bash', '.bat', '.cmd', '.ps1', '.sql',
+      // Config & Markup & ML Models
+      '.json', '.md', '.yaml', '.yml', '.xml', '.toml', '.ini', '.cfg', '.properties', '.gradle', '.env', '.dockerfile', '.graphql', '.gql', '.proto', '.pb', '.diff', '.patch', '.log', '.txt'
     ]
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
     if (!allowedExts.includes(ext)) {
@@ -4259,7 +4356,7 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           filename: file.name,
-          mime_type: file.type,
+          mime_type: file.type || mimeFromName(file.name),
           conversation_id: convoId
         })
       })
@@ -4277,7 +4374,7 @@ export const Dashboard: React.FC = () => {
         if (upload_url.includes('blob.core.windows.net')) {
           xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob')
         }
-        xhr.setRequestHeader('Content-Type', file.type)
+        xhr.setRequestHeader('Content-Type', file.type || mimeFromName(file.name))
         xhr.upload.onprogress = (evt) => {
           if (evt.lengthComputable) {
             const pct = Math.round((evt.loaded / evt.total) * 100)
@@ -4308,14 +4405,7 @@ export const Dashboard: React.FC = () => {
         xhr.send(file)
       })
 
-      let inferredType = file.type
-      if (!inferredType) {
-        const extLower = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
-        if (extLower === '.pdf') inferredType = 'application/pdf'
-        else if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'].includes(extLower)) inferredType = `image/${extLower === '.jpg' ? 'jpeg' : extLower.slice(1)}`
-        else if (['.txt', '.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.md', '.html', '.css', '.sql', '.csv', '.yaml', '.yml'].includes(extLower)) inferredType = 'text/plain'
-        else inferredType = 'application/octet-stream'
-      }
+      const inferredType = file.type || mimeFromName(file.name) || 'application/octet-stream'
 
       const localUrl = URL.createObjectURL(file)
 
@@ -5060,6 +5150,8 @@ export const Dashboard: React.FC = () => {
 
         if (e.key === '3') { e.preventDefault(); handleModeChange('discuss'); return }
 
+        if (e.key === '4') { e.preventDefault(); handleModeChange('agent'); return }
+
       }
 
       // Ctrl/Cmd + K → focus search
@@ -5398,6 +5490,23 @@ export const Dashboard: React.FC = () => {
         }
         return updated
       })
+    } else if (data.type === 'agent_ask_user_input' || data.type === 'ask_user_input') {
+      setMessages((prev) => {
+        const updated = [...prev]
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          targetMsg.agentUserInputRequired = {
+            taskId: data.task_id || activeConversationId || 'chat',
+            stepIndex: data.step_index !== undefined ? data.step_index : 0,
+            question: data.question || 'Input required',
+            options: Array.isArray(data.options) ? data.options : [],
+            selectType: data.select_type || 'single_select',
+          }
+          updated[targetIdx] = targetMsg
+        }
+        return updated
+      })
     } else if (data.type === 'agent_task_complete') {
       // Auto-open the final deliverable (entry file first) in the ArtifactPanel
       if (data.artifacts && data.artifacts.length > 0) {
@@ -5442,6 +5551,7 @@ export const Dashboard: React.FC = () => {
               elapsed_seconds: data.duration_seconds || targetMsg.agentTaskData.elapsed_seconds,
             }
             targetMsg.agentApprovalRequired = undefined
+            targetMsg.agentUserInputRequired = undefined
             updated[targetIdx] = targetMsg
           }
         }
@@ -5456,7 +5566,12 @@ export const Dashboard: React.FC = () => {
   // The /approve endpoint returns an SSE stream that resumes execution.
   // Reading it here keeps steps, approvals, artifacts and the final synthesis
   // flowing into the SAME message bubble (this was the old approve-stall bug).
-  const streamApproval = async (taskId: string, stepIndex: number | undefined, action: 'approve' | 'skip' | 'cancel') => {
+  const streamApproval = async (
+    taskId: string,
+    stepIndex: number | undefined,
+    action: 'approve' | 'skip' | 'cancel' | 'respond',
+    userResponse?: string
+  ) => {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token
       if (!token) return
@@ -5466,7 +5581,7 @@ export const Dashboard: React.FC = () => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ action, step_index: stepIndex }),
+        body: JSON.stringify({ action, step_index: stepIndex, user_response: userResponse }),
       })
 
       const contentType = res.headers.get('content-type') || ''
@@ -5515,6 +5630,26 @@ export const Dashboard: React.FC = () => {
               }
             } else if (typeof data.type === 'string' && data.type.startsWith('agent_')) {
               applyAgentTaskEvent(data)
+            } else if (data.type === 'display_card') {
+              setMessages((prev) => {
+                const updated = [...prev]
+                const last = updated[updated.length - 1]
+                if (last && last.role === 'assistant') {
+                  const existing = last.displayCards || []
+                  updated[updated.length - 1] = {
+                    ...last,
+                    displayCards: [
+                      ...existing,
+                      {
+                        card_type: data.card_type,
+                        payload: data.payload,
+                        summary: data.summary,
+                      },
+                    ],
+                  }
+                }
+                return updated
+              })
             } else if (data.type === 'error') {
               showToast(`Agent error: ${data.error || 'unknown'}`, 'error')
             }
@@ -5547,6 +5682,92 @@ export const Dashboard: React.FC = () => {
       'info'
     )
     await streamApproval(taskId, stepIndex, action)
+  }
+
+  const handleUserInputSubmit = async (taskId: string, stepIndex: number, answer: string) => {
+    // Clear user input card from message
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.agentUserInputRequired?.taskId === taskId
+          ? { ...m, agentUserInputRequired: undefined }
+          : m
+      )
+    )
+
+    let finalAnswer = answer
+
+    if (answer.toLowerCase().includes('mount local folder') || answer.toLowerCase().includes('mount folder')) {
+      try {
+        if ('showDirectoryPicker' in window) {
+          showToast('Select local folder to mount...', 'info')
+          const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' })
+          if (dirHandle) {
+            ;(window as any)._ochuko_dir_handle = dirHandle
+            const folderName = dirHandle.name
+            localStorage.setItem('ochuko_mounted_folder_name', folderName)
+
+            const fileSummaries: { name: string; size: number; isDir: boolean; mtime: number }[] = []
+            let totalCount = 0
+            for await (const [name, handle] of (dirHandle as any).entries()) {
+              if (name.startsWith('.') && name !== '.env') continue
+              totalCount++
+              const isDir = handle.kind === 'directory'
+              let sz = 0
+              let mt = Date.now()
+              if (!isDir) {
+                try {
+                  const f = await handle.getFile()
+                  sz = f.size
+                  mt = f.lastModified
+                } catch {}
+              }
+              fileSummaries.push({ name, size: sz, isDir, mtime: mt })
+            }
+
+            // Sort newest first
+            fileSummaries.sort((a, b) => b.mtime - a.mtime)
+
+            // Format compact representation (max 25 items, zero blind uploads)
+            const compactLines = fileSummaries.slice(0, 25).map(item => {
+              if (item.isDir) return `[DIR] ${item.name}`
+              const szStr = item.size < 1024 ? `${item.size}B` : item.size < 1024 * 1024 ? `${Math.round(item.size / 1024)}KB` : `${(item.size / (1024 * 1024)).toFixed(1)}MB`
+              return `${item.name} (${szStr})`
+            })
+
+            const countNotice = totalCount > 25 ? ` (showing 25 of ${totalCount} items)` : ` (${totalCount} items)`
+            finalAnswer = `Mounted local folder '${folderName}'${countNotice}. Accessible files: ${compactLines.join(', ')}. Zero blind uploads enabled; files will be streamed on-demand if read.`
+          }
+        } else {
+          showToast('Directory picker not supported in this browser. Please upload files directly.', 'info')
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('Folder mount error:', err)
+        }
+      }
+    } else if (answer.toLowerCase().includes('upload file') || answer.toLowerCase().includes('select and upload')) {
+      if (fileInputRef && fileInputRef.current) {
+        fileInputRef.current.click()
+        return
+      }
+    } else if (answer.toLowerCase().includes('workstation bridge')) {
+      try {
+        const res = await fetch('http://127.0.0.1:3920/health', { signal: AbortSignal.timeout(1500) })
+        if (res.ok) {
+          const bInfo = await res.json()
+          finalAnswer = `Local companion bridge active on port 3920 (${bInfo.platform || 'Host'}). Proceeding with workstation access.`
+        }
+      } catch {
+        showToast('Bridge not running on 127.0.0.1:3920. Run: python -m app.connectors.workstation_bridge', 'info')
+      }
+    }
+
+    showToast('Response submitted! Continuing...', 'info')
+    if (taskId && taskId !== 'chat' && taskId !== activeConversationId) {
+      await streamApproval(taskId, stepIndex, 'respond', finalAnswer)
+    } else {
+      await triggerStream(messages, finalAnswer)
+    }
   }
 
   const triggerStream = async (history: Message[], newUserMessage: string | Message, overrideConvoId?: string, attachments?: any[]) => {
@@ -5616,6 +5837,10 @@ export const Dashboard: React.FC = () => {
           local_time: new Date().toString(),
 
           viewport: window.innerWidth < 640 ? 'mobile' : 'desktop',
+
+          workstation_access_enabled: isWorkstationAccessEnabled,
+
+          review_policy: localStorage.getItem('ochuko_review_policy') || 'always_ask',
 
         }),
 
@@ -6429,15 +6654,29 @@ export const Dashboard: React.FC = () => {
                 })
               }
 
-            } else if (typeof data.type === 'string' && data.type.startsWith('agent_')) {
-
+            } else if (data.type === 'display_card') {
+              setMessages((prev) => {
+                const updated = [...prev]
+                if (updated.length > 0) {
+                  const last = { ...updated[updated.length - 1] }
+                  const existing = last.displayCards || []
+                  last.displayCards = [
+                    ...existing,
+                    {
+                      card_type: data.card_type,
+                      payload: data.payload,
+                      summary: data.summary,
+                    },
+                  ]
+                  updated[updated.length - 1] = last
+                }
+                return updated
+              })
+            } else if (typeof data.type === 'string' && (data.type.startsWith('agent_') || data.type === 'ask_user_input')) {
               // Shared agent-task event path — also used by the approve-resume stream
               applyAgentTaskEvent(data)
-
             } else if (data.type === 'error') {
-
               throw new Error(`Agent error: ${data.error}`)
-
             }
 
           } catch (err: any) {
@@ -6623,22 +6862,13 @@ export const Dashboard: React.FC = () => {
       ? activeConversationId
       : undefined
 
-    const binaryDocExts = ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt']
-    const codeExts = [
-      '.txt', '.html', '.css', '.js', '.ts', '.tsx', '.jsx', '.java',
-      '.py', '.c', '.cpp', '.h', '.cs', '.sh', '.json', '.md',
-      '.yaml', '.yml', '.xml', '.sql', '.csv', '.rs', '.go', '.rb',
-      '.php', '.kt', '.gradle', '.properties', '.ipynb', '.ini', '.cfg',
-      '.bat', '.cmd', '.ps1'
-    ]
+    const imgExts = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.tiff', '.tif', '.ico', '.heic', '.heif', '.avif']
 
     const attachments = files.map(f => {
       const nameLower = f.name.toLowerCase()
       const isPdf = f.type === 'application/pdf' || nameLower.endsWith('.pdf')
-      const isDocxFamily = binaryDocExts.some(ext => nameLower.endsWith(ext))
-      const isCode = codeExts.some(ext => nameLower.endsWith(ext))
-      const isImg = f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(nameLower)
-      const jobType = isPdf ? 'ocr' : (isImg ? 'vision' : (isDocxFamily || isCode ? 'code' : 'vision'))
+      const isImg = f.type.startsWith('image/') || imgExts.some(ext => nameLower.endsWith(ext))
+      const jobType = isPdf ? 'ocr' : (isImg ? 'vision' : 'code')
 
       return {
         name: f.name,
@@ -6660,28 +6890,10 @@ export const Dashboard: React.FC = () => {
 
     try {
       const backendAttachments = attachments.map(a => {
-        const nameLower = a.name.toLowerCase()
-        let mime = 'text/plain'
-        if (a.jobType === 'ocr' || nameLower.endsWith('.pdf')) {
-          mime = 'application/pdf'
-        } else if (a.jobType === 'vision' || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(nameLower)) {
-          mime = nameLower.endsWith('.png') ? 'image/png'
-            : nameLower.endsWith('.gif') ? 'image/gif'
-            : nameLower.endsWith('.webp') ? 'image/webp'
-            : nameLower.endsWith('.svg') ? 'image/svg+xml'
-            : 'image/jpeg'
-        } else {
-          if (nameLower.endsWith('.docx')) mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-          else if (nameLower.endsWith('.doc')) mime = 'application/msword'
-          else if (nameLower.endsWith('.xlsx')) mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-          else if (nameLower.endsWith('.pptx')) mime = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-          else if (nameLower.endsWith('.pdf')) mime = 'application/pdf'
-          else mime = 'text/plain'
-        }
         return {
           filename: a.name,
           url: a.url || '',
-          mime_type: mime,
+          mime_type: mimeFromName(a.name),
         }
       })
 
@@ -7096,9 +7308,9 @@ export const Dashboard: React.FC = () => {
         onSubmit={handleSend}
         className={`w-full max-w-full bg-[#0d0f11]/95 border ${
           isCentered
-            ? 'border-[#262a33] shadow-[0_12px_40px_rgba(0,0,0,0.5)] rounded-2xl p-3 sm:p-4'
-            : 'border-[#1e2025] rounded-xl pt-2 px-2.5 sm:px-3.5 pb-2 shadow-2xl'
-        } flex flex-col gap-1.5 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/25 pointer-events-auto overflow-hidden box-border`}
+            ? 'border-[#262a33] shadow-[0_8px_30px_rgba(0,0,0,0.45)] rounded-xl p-2.5 sm:p-3.5'
+            : 'border-[#1e2025] rounded-xl py-1.5 px-2.5 sm:px-3 shadow-xl'
+        } flex flex-col gap-1 relative z-10 backdrop-blur-xl transition-all duration-200 focus-within:border-[#ffffff]/25 pointer-events-auto overflow-hidden box-border`}
       >
         {/* Uploading progress indicator */}
         {uploading && (
@@ -7130,7 +7342,7 @@ export const Dashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Claude-style Attached Files Deck — positioned prominently above textarea */}
+        {/* Attached Files Deck — positioned prominently above textarea */}
         {(attachedFiles.length > 0 || pastedSnippets.length > 0) && (
           <div className="flex flex-wrap items-center gap-2 px-1 py-1.5 border-b border-white/[0.08] mb-1 max-w-full overflow-x-auto">
             {attachedFiles.map((file, idx) => {
@@ -7172,10 +7384,10 @@ export const Dashboard: React.FC = () => {
                         if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
                         setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
                       }}
-                      className="absolute top-1 right-1 p-1 rounded-full bg-black/70 hover:bg-red-500 text-white/80 hover:text-white transition shadow z-10"
+                      className="absolute top-1 right-1 min-w-[28px] min-h-[28px] flex items-center justify-center rounded-full bg-black/70 hover:bg-red-500 active:bg-red-600 text-white/80 hover:text-white transition shadow z-10 touch-manipulation"
                       title="Remove image"
                     >
-                      <X className="w-3 h-3" />
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 )
@@ -7211,7 +7423,7 @@ export const Dashboard: React.FC = () => {
                       if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
                       setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
                     }}
-                    className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
+                    className="min-w-[28px] min-h-[28px] flex items-center justify-center p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 active:bg-white/20 transition shrink-0 touch-manipulation"
                     title="Remove file"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -7244,7 +7456,7 @@ export const Dashboard: React.FC = () => {
                     e.stopPropagation()
                     setPastedSnippets(prev => prev.filter(s => s.id !== snippet.id))
                   }}
-                  className="p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 transition shrink-0"
+                  className="min-w-[28px] min-h-[28px] flex items-center justify-center p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 active:bg-white/20 transition shrink-0 touch-manipulation"
                   title="Remove pasted text"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -7254,11 +7466,11 @@ export const Dashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Middle Row: Textarea input */}
+        {/* Middle Row: Textarea input - Compact, lean height */}
         <div className="relative flex-1">
           <textarea
             ref={inputRef as any}
-            rows={isCentered ? 2 : 1}
+            rows={1}
             value={input}
             onPaste={handlePaste}
             onKeyDown={(e) => {
@@ -7280,26 +7492,26 @@ export const Dashboard: React.FC = () => {
               pastedSnippets.length > 0 ? (pastedSnippets.length > 1 ? `Add prompt details for ${pastedSnippets.length} pasted snippets...` : 'Add prompt details for the pasted text...') :
               "Let's talk"
             }
-            className={`w-full bg-transparent text-[13.5px] sm:text-[14.5px] text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-48 overflow-y-auto py-0.5 ${
-              isCentered ? 'min-h-[44px]' : 'h-[22px]'
+            className={`w-full bg-transparent text-[14px] sm:text-[14px] leading-snug text-brand-text placeholder-brand-muted/40 focus:outline-none resize-none max-h-36 overflow-y-auto py-0 ${
+              isCentered ? 'min-h-[34px]' : 'h-[20px] min-h-[18px]'
             }`}
           />
         </div>
 
-        {/* Bottom Row: Attachments status & action buttons */}
-        <div className="flex items-center justify-between gap-1 sm:gap-2 pt-1.5 w-full min-w-0">
+        {/* Bottom Row: Attachments status & action buttons - Compact and sleek */}
+        <div className="flex items-center justify-between gap-1 pt-0.5 sm:pt-1 w-full min-w-0">
           {/* Left Side: Attach File, Voice, Mode selector */}
-          <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 shrink">
+          <div className="flex items-center gap-1 min-w-0 shrink">
 
             <button
               type="button"
               onClick={handleTriggerUpload}
               disabled={uploading}
-              className="min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 rounded-lg flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20 shrink-0"
+              className="h-8 w-8 sm:h-7.5 sm:w-7.5 p-1 text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10 rounded-md flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20 shrink-0 cursor-pointer touch-manipulation"
               title="Attach document or image"
               aria-label="Attach file"
             >
-              <Paperclip className="w-4 h-4" />
+              <Paperclip className="w-3.5 h-3.5" />
             </button>
 
             {/* Voice mic button */}
@@ -7309,69 +7521,69 @@ export const Dashboard: React.FC = () => {
                 type="button"
                 onClick={toggleVoice}
                 disabled={isStreaming}
-                className={`min-h-[36px] min-w-[36px] h-9 w-9 p-1.5 transition-all duration-150 active:scale-95 rounded-lg flex items-center justify-center disabled:opacity-20 shrink-0 ${
+                className={`h-8 w-8 sm:h-7.5 sm:w-7.5 p-1 transition-all duration-150 active:scale-95 rounded-md flex items-center justify-center disabled:opacity-20 shrink-0 cursor-pointer touch-manipulation ${
                   voice.isRecording
                     ? 'text-[#ffffff] voice-pulse-ring'
-                    : 'text-brand-muted hover:text-brand-text hover:bg-white/5'
+                    : 'text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10'
                 }`}
                 title={voice.isRecording ? 'Stop recording' : 'Voice input'}
                 aria-label="Voice input"
               >
-                <Mic className="w-4 h-4" />
+                <Mic className="w-3.5 h-3.5" />
               </button>
             )}
 
-            {/* Mobile & Tablet Compact Mode Selector Button: [Icon Mode ▾] */}
+            {/* Mobile & Compact Mode Selector Button: [Icon Mode ▾] */}
             <button
               type="button"
               onClick={() => setIsModeSheetOpen(true)}
-              className={`md:hidden min-h-[36px] h-9 px-2 xs:px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition duration-150 active:scale-95 select-none shrink-0 ${
+              className={`lg:hidden h-8 sm:h-7.5 px-2 py-0.5 rounded-md border text-[10.5px] font-semibold flex items-center gap-1 transition duration-150 active:scale-95 select-none shrink-0 cursor-pointer touch-manipulation ${
                 mode === 'agent'
                   ? 'bg-brand-accent/20 border-brand-accent/40 text-brand-accent shadow-sm shadow-brand-accent/20'
-                  : 'bg-white/[0.06] border-white/15 text-white shadow-sm'
+                  : mode === 'think'
+                  ? 'bg-purple-500/20 border-purple-500/40 text-purple-300 shadow-sm shadow-purple-500/20'
+                  : mode === 'solve'
+                  ? 'bg-blue-500/20 border-blue-500/40 text-blue-300 shadow-sm shadow-blue-500/20'
+                  : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/20'
               }`}
               aria-label={`Current mode: ${mode}. Tap to change mode`}
               title="Change interaction mode"
             >
               {mode === 'agent' ? (
-                <Bot className="w-3.5 h-3.5 text-brand-accent shrink-0" />
+                <Bot className="w-3 h-3 text-brand-accent shrink-0" />
               ) : mode === 'think' ? (
-                <Brain className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                <Brain className="w-3 h-3 text-purple-400 shrink-0" />
               ) : mode === 'solve' ? (
-                <Cpu className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                <Cpu className="w-3 h-3 text-blue-400 shrink-0" />
               ) : (
-                <MessageSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <MessageSquare className="w-3 h-3 text-emerald-400 shrink-0" />
               )}
-              <span className="capitalize font-medium text-[11px] tracking-wide hidden xs:inline">
+              <span className="capitalize font-medium text-[10px] tracking-wide hidden xs:inline">
                 {mode}
               </span>
-              <ChevronDown className="w-3 h-3 text-[#8e95a2] shrink-0" />
+              <ChevronDown className="w-2.5 h-2.5 text-[#8e95a2] shrink-0" />
             </button>
 
-            {/* Desktop Mode Selector Pill Group (Only on md / desktop where width >= 768px allows it) */}
-            <div className="hidden md:flex items-center gap-0.5 bg-[#ffffff]/3 p-0.5 rounded-lg border border-brand-border/40 shrink-0 select-none">
+            {/* Desktop Mode Selector Pill Group */}
+            <div className="hidden lg:flex items-center gap-0.5 bg-[#ffffff]/5 p-0.5 rounded-md border border-brand-border/60 shrink-0 select-none">
               {([
-                { id: 'think', label: 'Think', icon: Brain },
-                { id: 'solve', label: 'Solve', icon: Cpu },
-                { id: 'discuss', label: 'Discuss', icon: MessageSquare },
-                { id: 'agent', label: 'Agent', icon: Bot },
-              ] as const).map(({ id, label, icon: Icon }) => {
+                { id: 'think', label: 'Think', icon: Brain, activeClass: 'bg-purple-500/25 text-purple-200 border-purple-500/60 shadow-sm shadow-purple-500/25', inactiveClass: 'text-purple-300/60 hover:text-purple-200 hover:bg-purple-500/10' },
+                { id: 'solve', label: 'Solve', icon: Cpu, activeClass: 'bg-blue-500/25 text-blue-200 border-blue-500/60 shadow-sm shadow-blue-500/25', inactiveClass: 'text-blue-300/60 hover:text-blue-200 hover:bg-blue-500/10' },
+                { id: 'discuss', label: 'Discuss', icon: MessageSquare, activeClass: 'bg-emerald-500/25 text-emerald-200 border-emerald-500/60 shadow-sm shadow-emerald-500/25', inactiveClass: 'text-emerald-300/60 hover:text-emerald-200 hover:bg-emerald-500/10' },
+                { id: 'agent', label: 'Agent', icon: Bot, activeClass: 'bg-brand-accent/30 text-brand-accent border-brand-accent/60 shadow-sm shadow-brand-accent/25', inactiveClass: 'text-brand-accent/70 hover:text-brand-accent hover:bg-brand-accent/10' },
+              ] as const).map(({ id, label, icon: Icon, activeClass, inactiveClass }) => {
                 const active = mode === id
-                const isAgent = id === 'agent'
                 return (
                   <button
                     key={id}
                     type="button"
                     onClick={() => handleModeChange(id)}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-bold transition-all duration-150 tracking-wider uppercase ${
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded text-[9.5px] font-bold transition-all duration-150 tracking-wider uppercase cursor-pointer border ${
                       active
-                        ? isAgent
-                          ? 'bg-brand-accent/25 text-brand-accent border border-brand-accent/40 shadow-sm shadow-brand-accent/20'
-                          : 'bg-[#ffffff]/8 text-[#ffffff] shadow-sm'
-                        : isAgent
-                        ? 'text-brand-accent/70 hover:text-brand-accent hover:bg-brand-accent/10'
-                        : 'text-brand-muted hover:text-brand-text/75'
+                        ? activeClass
+                        : `border-transparent ${inactiveClass}`
                     }`}
+                    title={`Switch to ${label} mode`}
                   >
                     <Icon className="w-3 h-3" />
                     <span>{label}</span>
@@ -7382,28 +7594,28 @@ export const Dashboard: React.FC = () => {
           </div>
 
           {/* Right Side: Stop/Send Actions */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 shrink-0">
             {isStreaming && (
               <button
                 type="button"
                 onClick={handleStop}
-                className="min-h-[36px] min-w-[36px] h-9 w-9 bg-brand-surface border border-brand-border text-red-400 rounded-lg flex items-center justify-center hover:bg-red-950/15 transition active:scale-95 shadow shrink-0"
+                className="h-8 w-8 sm:h-7.5 sm:w-7.5 bg-brand-surface border border-brand-border text-red-400 rounded-md flex items-center justify-center hover:bg-red-950/15 active:bg-red-950/30 transition active:scale-95 shadow shrink-0 cursor-pointer touch-manipulation"
                 aria-label="Stop generation"
               >
-                <Square className="w-3.5 h-3.5 fill-red-400" />
+                <Square className="w-3 h-3 fill-red-400" />
               </button>
             )}
 
             <button
               type="submit"
               disabled={uploading || (!input.trim() && attachedFiles.length === 0 && pastedSnippets.length === 0)}
-              className="min-h-[36px] h-9 px-2.5 xs:px-3.5 py-1.5 bg-brand-text text-brand-bg text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 hover:opacity-90 transition disabled:opacity-20 active:scale-95 shadow shrink-0"
+              className="h-8 sm:h-7.5 px-2.5 xs:px-3 py-1 bg-brand-text text-brand-bg text-[11px] font-bold rounded-md flex items-center justify-center gap-1 hover:opacity-90 active:opacity-80 transition disabled:opacity-20 active:scale-95 shadow shrink-0 cursor-pointer touch-manipulation"
               aria-label="Send message"
             >
               {uploading ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                  <span className="text-[11px] hidden xs:inline">Uploading...</span>
+                  <span className="text-[10px] hidden xs:inline">Uploading...</span>
                 </>
               ) : (
                 <>
@@ -7420,7 +7632,7 @@ export const Dashboard: React.FC = () => {
           type="file"
           multiple
           onChange={handleFileChange}
-          accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.docx,.txt,.html,.css,.js,.ts,.tsx,.jsx,.java,.py,.c,.cpp,.h,.cs,.sh,.json,.md,.yaml,.yml,.xml,.sql,.csv,.rs,.go,.rb,.php,.kt,.gradle,.properties,.ipynb,.ini,.cfg,.bat,.cmd,.ps1"
+          accept=".pdf,.docx,.doc,.pptx,.ppt,.odp,.odt,.rtf,.epub,.tex,.xlsx,.xls,.xlsm,.csv,.tsv,.ods,.parquet,.zip,.tar,.gz,.tgz,.bz2,.tbz2,.xz,.txz,.7z,.rar,.zst,.lzma,.cab,.iso,.dmg,.png,.jpg,.jpeg,.webp,.gif,.svg,.bmp,.tiff,.tif,.ico,.heic,.heif,.avif,.mp3,.wav,.m4a,.ogg,.opus,.oga,.amr,.flac,.aac,.html,.htm,.css,.js,.mjs,.ts,.tsx,.jsx,.vue,.svelte,.py,.ipynb,.java,.c,.cpp,.cc,.h,.hpp,.cs,.rs,.go,.rb,.php,.kt,.swift,.scala,.r,.lua,.dart,.zig,.sol,.wasm,.sh,.bash,.bat,.cmd,.ps1,.sql,.json,.md,.yaml,.yml,.xml,.toml,.ini,.cfg,.properties,.gradle,.env,.dockerfile,.graphql,.gql,.proto,.pb,.diff,.patch,.log,.txt"
           className="hidden"
         />
         {!voice.isRecording && voice.isTranscribing && (
@@ -7429,8 +7641,8 @@ export const Dashboard: React.FC = () => {
       </form>
 
       {/* Mysterious One-Line Micro-Footer */}
-      <div className="pt-2 pb-0.5 text-center select-none pointer-events-none">
-        <p className="text-[11px] font-mono text-brand-muted/40 tracking-[0.22em] uppercase transition-colors duration-300">
+      <div className="pt-1 pb-0.5 text-center select-none pointer-events-none">
+        <p className="text-[10px] font-mono text-brand-muted/30 tracking-[0.2em] uppercase transition-colors duration-300">
           Beyond the prompt lies the pattern.
         </p>
       </div>
@@ -7481,9 +7693,9 @@ export const Dashboard: React.FC = () => {
           maxWidth: isDesktop ? undefined : '320px',
         }}
 
-        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] sm:top-3 sm:left-3 sm:h-[calc(100dvh-24px)] bg-[#0d0f11]/98 border-r sm:border border-[#1e2025] rounded-none sm:rounded-lg z-40 flex flex-col justify-between px-4 sm:px-5 py-4 sm:py-6 backdrop-blur-xl shadow-2xl shadow-black/80 ${
+        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] sm:top-3 sm:left-3 sm:h-[calc(100dvh-24px)] bg-[#0d0f11]/98 border-r sm:border border-[#1e2025] rounded-none sm:rounded-lg z-40 flex flex-col justify-between px-4 sm:px-5 py-4 sm:py-6 pb-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] backdrop-blur-xl shadow-2xl shadow-black/80 ${
           isDraggingSidebar ? 'transition-none' : 'transition-all duration-300 ease-out'
-        } overflow-hidden ${
+        } overflow-y-auto overflow-x-hidden custom-scrollbar ${
           isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100 pointer-events-auto' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
         }`}
       >
@@ -7957,32 +8169,37 @@ export const Dashboard: React.FC = () => {
 
         {/* ── 3. Fixed Bottom Section (Profile & Account Actions) ─────── */}
 
-        <div className="shrink-0 border-t border-[#1e2025] pt-3.5 space-y-2.5">
+        <div className="shrink-0 border-t border-[#1e2025] pt-3 pb-1 space-y-2 select-none">
 
-          <div className="flex items-center gap-3">
-
-            <div className="w-8 h-8 rounded-full overflow-hidden border border-[#1e2025] bg-brand-bg shrink-0">
-
-              <img src="/favicon.png" alt="User" className="w-full h-full object-cover" />
-
+          {/* User Profile & Integrated Sign Out */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-full overflow-hidden border border-[#1e2025] bg-brand-bg shrink-0">
+                <img src="/favicon.png" alt="User" className="w-full h-full object-cover" />
+              </div>
+              <div className="truncate">
+                <p className="text-[11px] text-brand-text font-bold truncate">{preferredName}</p>
+                <p className="text-[9.5px] text-brand-muted truncate mt-0.5">{userEmail}</p>
+              </div>
             </div>
-
-            <div className="truncate">
-
-              <p className="text-[11px] text-brand-text font-bold truncate">{preferredName}</p>
-
-              <p className="text-[9.5px] text-brand-muted truncate mt-0.5">{userEmail}</p>
-
-            </div>
-
+            <button
+              type="button"
+              onClick={handleSignOut}
+              title="Sign Out"
+              className="p-2 min-h-[36px] min-w-[36px] text-red-400/70 hover:text-red-300 hover:bg-red-950/20 rounded-lg transition border border-transparent hover:border-red-900/30 shrink-0 flex items-center justify-center cursor-pointer"
+              aria-label="Sign Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
 
+          {/* App Lock / PIN Row */}
           {localStorage.getItem('app_lock_pin') ? (
-            <div className="flex gap-2 w-full">
+            <div className="flex gap-1.5 w-full">
               <button
                 type="button"
                 onClick={() => setIsLocked(true)}
-                className="flex-1 min-h-[38px] text-[#ffffff] hover:text-[#ffffff] hover:bg-[#ffffff]/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/20 hover:border-[#ffffff]/40"
+                className="flex-1 min-h-[34px] text-[#ffffff] hover:text-[#ffffff] hover:bg-[#ffffff]/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/20 hover:border-[#ffffff]/40 cursor-pointer"
                 title="Lock App"
               >
                 <Lock className="w-3 h-3" />
@@ -7991,7 +8208,7 @@ export const Dashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setLockMode('change')}
-                className="min-h-[38px] px-2.5 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[10px] font-semibold border border-[#1e2025]"
+                className="min-h-[34px] px-2 text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[10px] font-semibold border border-[#1e2025] cursor-pointer"
                 title="Change PIN"
               >
                 Change
@@ -7999,7 +8216,7 @@ export const Dashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setLockMode('disable')}
-                className="min-h-[38px] px-2.5 text-red-400/50 hover:text-red-400 hover:bg-red-950/10 transition duration-150 rounded-lg text-[10px] font-semibold border border-transparent hover:border-red-950/20"
+                className="min-h-[34px] px-2 text-red-400/50 hover:text-red-400 hover:bg-red-950/10 transition duration-150 rounded-lg text-[10px] font-semibold border border-transparent hover:border-red-950/20 cursor-pointer"
                 title="Disable PIN"
               >
                 Disable
@@ -8009,67 +8226,54 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => setLockMode('setup')}
-              className="w-full min-h-[38px] text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#1e2025] hover:border-white/10"
+              className="w-full min-h-[34px] text-brand-muted hover:text-brand-text hover:bg-white/5 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-2 px-3 border border-[#1e2025] hover:border-white/10 cursor-pointer"
             >
               <Lock className="w-3 h-3" />
               <span>Setup PIN Lock</span>
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => {
-              if (window.innerWidth < 768) {
-                setIsSidebarOpen(false)
-                setIsSidebarHovered(false)
-              }
-              navigate('/capabilities')
-            }}
-            className="w-full min-h-[38px] text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2 px-3 border border-[#ffffff]/30 hover:border-[#ffffff]/50 mb-1"
-          >
-            <Cpu className="w-3.5 h-3.5" />
-            <span>Agent Capabilities</span>
-          </button>
+          {/* Capabilities & Zoom Controls 2-Column Grid */}
+          <div className="grid grid-cols-2 gap-1.5 w-full">
+            <button
+              type="button"
+              onClick={() => {
+                if (window.innerWidth < 768) {
+                  setIsSidebarOpen(false)
+                  setIsSidebarHovered(false)
+                }
+                navigate('/capabilities')
+              }}
+              className="w-full min-h-[34px] text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[10.5px] font-semibold flex items-center justify-center gap-1.5 px-2 border border-[#ffffff]/25 hover:border-[#ffffff]/45 cursor-pointer"
+              title="View Agent Capabilities"
+            >
+              <Cpu className="w-3.5 h-3.5 shrink-0 text-brand-accent" />
+              <span className="truncate">Capabilities</span>
+            </button>
 
-          {/* Zoom Controls */}
-          <div className="flex items-center gap-2 w-full mb-1">
-            <button
-              type="button"
-              onClick={() => setPageZoom(prev => Math.max(0.5, prev - 0.1))}
-              className="flex-1 min-h-[38px] text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
-              title="Zoom out"
-            >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[10px] text-brand-muted font-mono w-12 text-center">{Math.round(pageZoom * 100)}%</span>
-            <button
-              type="button"
-              onClick={() => setPageZoom(prev => Math.min(1.5, prev + 0.1))}
-              className="flex-1 min-h-[38px] text-brand-text hover:text-white hover:bg-white/10 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 border border-[#ffffff]/30 hover:border-[#ffffff]/50"
-              title="Zoom in"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
+            {/* Compact Zoom Controls */}
+            <div className="flex items-center justify-between px-1 bg-white/[0.03] rounded-lg border border-white/10 min-h-[34px]">
+              <button
+                type="button"
+                onClick={() => setPageZoom(prev => Math.max(0.5, prev - 0.1))}
+                className="w-7 h-7 flex items-center justify-center text-brand-muted hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
+                title="Zoom out"
+                aria-label="Zoom out"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <span className="text-[10px] text-brand-text font-mono select-none">{Math.round(pageZoom * 100)}%</span>
+              <button
+                type="button"
+                onClick={() => setPageZoom(prev => Math.min(1.5, prev + 0.1))}
+                className="w-7 h-7 flex items-center justify-center text-brand-muted hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
+                title="Zoom in"
+                aria-label="Zoom in"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
           </div>
-
-          {/* ── Danger zone divider ─────────────────────────────────────── */}
-          <div className="border-t border-[#ffffff]/10 mt-1 mb-1" />
-
-          <button
-
-            type="button"
-
-            onClick={handleSignOut}
-
-            className="w-full min-h-[40px] text-[#c4636a] hover:text-red-300 hover:bg-red-950/30 transition duration-150 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 px-3 border border-red-900/20 hover:border-red-900/50"
-
-          >
-
-            <LogOut className="w-3.5 h-3.5" />
-
-            <span>Sign Out</span>
-
-          </button>
 
           {/* Resizing Handle */}
           {isDesktop && (isSidebarOpen || isSidebarHovered) && (
@@ -8090,41 +8294,28 @@ export const Dashboard: React.FC = () => {
           isDraggingSidebar ? 'transition-none' : 'transition-all duration-300 ease-out'
         }`}
         style={{
-          marginLeft: isDesktop && isSidebarOpen ? `${sidebarWidth + 24}px` : '0px'
+          marginLeft: isDesktop && isSidebarOpen ? `${sidebarWidth + 24}px` : '0px',
+          width: isDesktop && isSidebarOpen ? `calc(100% - ${sidebarWidth + 24}px)` : '100%',
+          maxWidth: isDesktop && isSidebarOpen ? `calc(100% - ${sidebarWidth + 24}px)` : '100%',
         }}
       >
 
         {/* Header */}
 
-        <header className="relative z-30 h-14 border-b border-brand-border bg-brand-bg/80 backdrop-blur-md flex items-center justify-between px-2 sm:px-5 shrink-0">
+        {/* Floating Top Navigation - Seamless, borderless, and optimized for mobile touch */}
 
-          <div className="flex items-center gap-2 sm:gap-3.5">
+        <header className="relative z-30 h-13 sm:h-14 bg-transparent flex items-center justify-between px-2 sm:px-4 shrink-0 select-none">
 
+          <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+            {/* Floating Menu Icon Button */}
             <button
-
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-
               onMouseEnter={() => setIsSidebarHovered(true)}
-
-              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg border border-brand-border bg-brand-surface/20 hover:bg-brand-surface text-brand-muted hover:text-brand-text hover:border-[#ffffff]/25 transition duration-150 active:scale-95"
-
+              className="min-h-[44px] min-w-[44px] w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl text-white/75 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] transition duration-150 active:scale-95 cursor-pointer shrink-0 touch-manipulation"
               aria-label="Toggle Sidebar"
-
             >
-
-              <Menu className="w-4 h-4" />
-
+              <Menu className="w-5 h-5 sm:w-4 sm:h-4" />
             </button>
-
-            <div className="w-px h-4 bg-[#1e2025]" />
-
-            <span className="font-semibold text-[13px] text-brand-text tracking-tight">Agent Ochuko</span>
-
-            <span className="text-[9px] uppercase tracking-widest px-2 py-[3px] rounded border border-[#ffffff]/15 text-[#ffffff]/70 font-bold hidden sm:inline-block">
-
-              {mode}
-
-            </span>
 
             {isFetchingHistory && (
               <span className="flex items-center gap-1.5 text-[10px] text-brand-muted animate-pulse ml-1">
@@ -8132,40 +8323,90 @@ export const Dashboard: React.FC = () => {
                 <span className="hidden sm:inline">Syncing...</span>
               </span>
             )}
-
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-3">
+          <div className="flex items-center gap-0.5 sm:gap-1.5">
+            {/* Floating Share Button */}
             {activeConversationId && activeConversationId !== '00000000-0000-0000-0000-000000000000' ? (
               <button
                 onClick={() => setIsShareModalOpen(true)}
-                className="flex items-center min-h-[44px] px-3 py-2 rounded-lg border border-brand-border hover:border-[#ffffff]/20 bg-brand-surface/10 hover:bg-[#ffffff]/5 text-[11px] font-bold text-[#a6a29c] hover:text-brand-text transition duration-150 active:scale-95"
+                className="min-h-[44px] min-w-[44px] w-11 h-11 sm:w-auto sm:min-h-[34px] sm:h-9 sm:px-2.5 flex items-center justify-center rounded-xl text-white/75 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] text-[11px] font-semibold transition duration-150 active:scale-95 cursor-pointer shrink-0 touch-manipulation"
                 title="Share Conversation"
               >
-                <Share2 className="w-4 h-4" />
+                <Share2 className="w-5 h-5 sm:w-4 sm:h-4" />
                 <span className="hidden sm:inline sm:ml-1.5">Share</span>
               </button>
             ) : (
               <button
                 disabled
-                className="flex items-center min-h-[44px] px-3 py-2 rounded-lg border border-brand-border/50 bg-brand-surface/5 text-[11px] font-bold text-[#a6a29c]/30 cursor-not-allowed select-none"
+                className="min-h-[44px] min-w-[44px] w-11 h-11 sm:w-auto sm:min-h-[34px] sm:h-9 sm:px-2.5 flex items-center justify-center rounded-xl text-white/20 cursor-not-allowed select-none shrink-0 touch-manipulation"
                 title="Send a message first to share"
               >
-                <Share2 className="w-4 h-4 opacity-30" />
-                <span className="hidden sm:inline sm:ml-1.5">Share</span>
+                <Share2 className="w-5 h-5 sm:w-4 sm:h-4 opacity-40" />
+                <span className="hidden sm:inline sm:ml-1.5 text-[11px] font-semibold">Share</span>
               </button>
             )}
 
+            {/* Floating Settings Button */}
             <div ref={headerSettingsRef} className="relative">
               <button
                 onClick={() => setIsHeaderSettingsOpen(o => !o)}
-                className="p-2.5 min-w-[44px] min-h-[44px] rounded-lg border border-brand-border bg-brand-surface/10 hover:bg-[#ffffff]/5 text-brand-muted hover:text-brand-text hover:border-[#ffffff]/20 transition duration-150 active:scale-95 flex items-center justify-center"
+                className="min-h-[44px] min-w-[44px] w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl text-white/75 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] transition duration-150 active:scale-95 cursor-pointer shrink-0 touch-manipulation"
                 title="Settings & security"
               >
-                <Settings className="w-4 h-4" />
+                <Settings className="w-5 h-5 sm:w-4 sm:h-4" />
               </button>
               {isHeaderSettingsOpen && (
-                <div className="absolute right-0 mt-1.5 w-52 rounded-lg border border-brand-border bg-brand-card/95 backdrop-blur-md shadow-2xl overflow-hidden z-50 py-1 select-none">
+                <div className="absolute right-0 mt-1.5 w-60 sm:w-56 max-h-[calc(100dvh-70px)] sm:max-h-[calc(100vh-80px)] overflow-y-auto rounded-xl border border-brand-border bg-brand-card/95 backdrop-blur-md shadow-2xl z-50 py-1.5 select-none touch-manipulation">
+                  {mode === 'agent' && (
+                    <>
+                      <div
+                        role="switch"
+                        aria-checked={isWorkstationAccessEnabled}
+                        aria-label="Toggle Workstation Access"
+                        onClick={() => {
+                          const val = !isWorkstationAccessEnabled
+                          setIsWorkstationAccessEnabled(val)
+                          localStorage.setItem('ochuko_workstation_access_enabled', val ? 'true' : 'false')
+                          window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+                        }}
+                        className="px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-[40px] flex items-center justify-between gap-3 cursor-pointer hover:bg-white/5 active:bg-white/10 transition-colors select-none"
+                      >
+                        <div className="flex flex-col min-w-0 pointer-events-none">
+                          <span className="text-brand-text text-xs sm:text-[11px] font-semibold flex items-center gap-1.5 truncate">
+                            <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" /> Workstation Access
+                          </span>
+                          <span className="text-[10px] sm:text-[9.5px] text-cyan-400/80 font-medium pl-5">Agent Mode Only</span>
+                        </div>
+                        <div
+                          className={`relative inline-flex h-6 w-11 sm:h-5 sm:w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out pointer-events-none ${
+                            isWorkstationAccessEnabled ? 'bg-cyan-500 shadow-sm shadow-cyan-500/30' : 'bg-white/[0.15]'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-5 w-5 sm:h-4 sm:w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                              isWorkstationAccessEnabled ? 'translate-x-5 sm:translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsConnectorSettingsOpen(true)
+                          setIsHeaderSettingsOpen(false)
+                        }}
+                        className="w-full text-left px-3.5 py-2.5 min-h-[40px] text-xs sm:text-[11px] text-brand-muted hover:text-cyan-300 hover:bg-white/5 active:bg-white/10 transition flex items-center justify-between font-medium cursor-pointer border-t border-[#1e2025]/50"
+                      >
+                        <span className="flex items-center gap-2 truncate">
+                          <Terminal className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <span>Workstation Setup & Bridge...</span>
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-brand-muted/60 shrink-0" />
+                      </button>
+                      <div className="border-t border-[#1e2025]/50 my-1" />
+                    </>
+                  )}
                   {localStorage.getItem('app_lock_pin') ? (
                     <>
                       <button
@@ -8173,9 +8414,9 @@ export const Dashboard: React.FC = () => {
                           setIsLocked(true)
                           setIsHeaderSettingsOpen(false)
                         }}
-                        className="w-full text-left px-4 py-2.5 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold"
+                        className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-brand-text hover:bg-white/5 active:bg-white/10 transition flex items-center gap-2 font-semibold"
                       >
-                        <Lock className="w-3.5 h-3.5 text-brand-muted" />
+                        <Lock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
                         <span>Lock App</span>
                       </button>
                       <button
@@ -8183,9 +8424,9 @@ export const Dashboard: React.FC = () => {
                           setLockMode('change')
                           setIsHeaderSettingsOpen(false)
                         }}
-                        className="w-full text-left px-4 py-2.5 text-[11px] text-brand-muted hover:text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
+                        className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
                       >
-                        <KeyRound className="w-3.5 h-3.5 text-brand-muted" />
+                        <KeyRound className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
                         <span>Change PIN</span>
                       </button>
                       <button
@@ -8193,9 +8434,9 @@ export const Dashboard: React.FC = () => {
                           setLockMode('disable')
                           setIsHeaderSettingsOpen(false)
                         }}
-                        className="w-full text-left px-4 py-2.5 text-[11px] text-red-400/70 hover:text-red-400 hover:bg-red-950/10 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
+                        className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-red-400/70 hover:text-red-400 hover:bg-red-950/10 active:bg-red-950/20 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
                       >
-                        <Unlock className="w-3.5 h-3.5 text-red-400/50" />
+                        <Unlock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-red-400/50 shrink-0" />
                         <span>Disable PIN</span>
                       </button>
                     </>
@@ -8205,9 +8446,9 @@ export const Dashboard: React.FC = () => {
                         setLockMode('setup')
                         setIsHeaderSettingsOpen(false)
                       }}
-                      className="w-full text-left px-4 py-2.5 text-[11px] text-brand-text hover:bg-white/5 transition flex items-center gap-2 font-semibold"
+                      className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-brand-text hover:bg-white/5 active:bg-white/10 transition flex items-center gap-2 font-semibold"
                     >
-                      <Lock className="w-3.5 h-3.5 text-brand-muted" />
+                      <Lock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
                       <span>Setup PIN Lock</span>
                     </button>
                   )}
@@ -8216,21 +8457,22 @@ export const Dashboard: React.FC = () => {
                       handleSignOut()
                       setIsHeaderSettingsOpen(false)
                     }}
-                    className="w-full text-left px-4 py-2.5 text-[11px] text-red-400/75 hover:text-red-450 hover:bg-red-950/15 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]"
+                    className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-red-400/75 hover:text-red-450 hover:bg-red-950/15 active:bg-red-950/25 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]"
                   >
-                    <LogOut className="w-3.5 h-3.5" />
+                    <LogOut className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
                     <span>Terminate Session</span>
                   </button>
                 </div>
               )}
             </div>
 
-            <div className="flex items-center gap-2 ml-1">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#ffffff] opacity-50" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#ffffff]" />
+            {/* Floating Connection Indicator */}
+            <div className="flex items-center gap-1.5 px-1.5 py-1 select-none" title="Auth & Sync Connected">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </span>
-              <span className="text-[9px] font-bold tracking-widest text-brand-muted uppercase hidden sm:block">Auth Synced</span>
+              <span className="text-[9px] font-bold tracking-widest text-brand-muted/70 uppercase hidden sm:block">Synced</span>
             </div>
           </div>
 
@@ -8253,13 +8495,9 @@ export const Dashboard: React.FC = () => {
           <div className="flex-1 flex flex-col min-w-0 relative">
 
             <div
-
               ref={scrollContainerRef}
-
               onScroll={handleScroll}
-
-              className="flex-1 overflow-y-auto overflow-x-hidden pt-6 sm:pt-8 pb-4 px-3 sm:px-5 md:px-8 relative z-10"
-
+              className="flex-1 overflow-y-auto overflow-x-hidden pt-3 sm:pt-6 pb-4 px-2.5 sm:px-5 md:px-8 relative z-10"
             >
 
           {isFetchingHistory && messages.length === 0 ? (
@@ -8268,11 +8506,11 @@ export const Dashboard: React.FC = () => {
 
           ) : messages.length === 0 ? (
 
-            <div className="min-h-full flex flex-col items-center justify-center max-w-2xl mx-auto px-2 sm:px-4 w-full py-8 sm:py-12 my-auto">
+            <div className="min-h-full flex flex-col items-center justify-center max-w-2xl mx-auto px-2 sm:px-4 w-full py-4 sm:py-10 my-auto">
 
-              <div className="flex flex-col items-center text-center space-y-4 mb-6 sm:mb-8">
+              <div className="flex flex-col items-center text-center space-y-3 sm:space-y-4 mb-4 sm:mb-8">
 
-                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
+                <div className="w-12 h-12 sm:w-16 sm:h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
 
                   <div className="absolute inset-0 bg-[#ffffff]/4 opacity-0 group-hover:opacity-100 transition duration-500" />
 
@@ -8290,10 +8528,10 @@ export const Dashboard: React.FC = () => {
 
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5 sm:space-y-2">
 
                   <div className="flex items-center gap-2 justify-center">
-                    <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
+                    <h2 className="text-xl sm:text-3xl font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
                   </div>
 
                   {isEditingNickname && (
@@ -8337,7 +8575,7 @@ export const Dashboard: React.FC = () => {
 
               </div>
 
-              {/* Claude-style Centered Input Console in New Chat */}
+              {/* Centered Input Console in New Chat */}
               <div className="w-full">
                 {renderInputConsole(true)}
               </div>
@@ -8697,64 +8935,45 @@ export const Dashboard: React.FC = () => {
 
                           )}
 
-                          <div className="flex items-center gap-2 py-1">
-
-                            {msg.agentStep && msg.agentStep > 0 ? (
-
-                              /* OODA loop active — show step counter */
-
+                          {msg.agentStep && msg.agentStep > 0 ? (
+                            /* OODA loop active — show step counter */
+                            <div className="w-full min-w-0 max-w-full py-0.5">
                               <AgentStepIndicator
-
                                 step={msg.agentStep}
-
                                 maxSteps={msg.agentMaxSteps || agentMaxSteps}
-
                                 label={msg.agentLabel || (webSearchStatus === 'searching' ? activityLabel : undefined)}
-
                               />
-
-                            ) : webSearchStatus === 'searching' ? (
-
-                              <div className="inline-flex items-center gap-2 py-1 text-xs text-white/60 select-none">
-
-                                <Globe className="w-3.5 h-3.5 text-white/70 animate-pulse" />
-
-                                <span className="text-[12px] font-sans font-normal text-white/70">
-
-                                  {activityLabel || 'Searching the web...'}
-
-                                </span>
-
-                              </div>
-
-                            ) : activityLabel ? (
-
-                              <div className="inline-flex items-center gap-2 py-1 text-xs text-white/60 select-none">
-
-                                <span className="w-1.5 h-1.5 rounded-full bg-white/50 animate-pulse" />
-
-                                <span className="text-[12px] font-sans font-normal text-white/70">
-
-                                  {activityLabel}
-
-                                </span>
-
-                              </div>
-
-                            ) : msg.thinkingContent ? (
-                              <div className="inline-flex items-center gap-2 py-1 text-xs select-none">
-                                <span className="w-1.5 h-1.5 rounded-full bg-white/70 animate-pulse" />
-                                <span className="text-[12px] font-sans font-normal text-white/70 animate-pulse">
-                                  Synthesizing answer...
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1.5 py-1.5 px-0.5 select-none">
-                                <span className="w-2 h-2 rounded-full bg-white/40 animate-pulse" />
-                              </div>
-                            )}
-
-                          </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 py-1">
+                              {webSearchStatus === 'searching' ? (
+                                <div className="inline-flex items-center gap-2 py-1 text-xs text-white/60 select-none">
+                                  <Globe className="w-3.5 h-3.5 text-white/70 animate-pulse" />
+                                  <span className="text-[12px] font-sans font-normal text-white/70">
+                                    {activityLabel || 'Searching the web...'}
+                                  </span>
+                                </div>
+                              ) : activityLabel ? (
+                                <div className="inline-flex items-center gap-2 py-1 text-xs text-white/60 select-none">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white/50 animate-pulse" />
+                                  <span className="text-[12px] font-sans font-normal text-white/70">
+                                    {activityLabel}
+                                  </span>
+                                </div>
+                              ) : msg.thinkingContent ? (
+                                <div className="inline-flex items-center gap-2 py-1 text-xs select-none">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white/70 animate-pulse" />
+                                  <span className="text-[12px] font-sans font-normal text-white/70 animate-pulse">
+                                    Synthesizing answer...
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5 py-1.5 px-0.5 select-none">
+                                  <span className="w-2 h-2 rounded-full bg-white/40 animate-pulse" />
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                         </div>
 
@@ -8777,19 +8996,14 @@ export const Dashboard: React.FC = () => {
                           )}
 
                           {msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content && msg.content.trim().length > 0 && (
-
-                            <AgentStepIndicator
-
-                              step={msg.agentStep!}
-
-                              maxSteps={msg.agentMaxSteps || agentMaxSteps}
-
-                              label={msg.agentLabel || (webSearchStatus === 'searching' && i === messages.length - 1 ? activityLabel : undefined)}
-
-                              isComplete={!isStreaming || i !== messages.length - 1}
-
-                            />
-
+                            <div className="w-full min-w-0 max-w-full">
+                              <AgentStepIndicator
+                                step={msg.agentStep!}
+                                maxSteps={msg.agentMaxSteps || agentMaxSteps}
+                                label={msg.agentLabel || (webSearchStatus === 'searching' && i === messages.length - 1 ? activityLabel : undefined)}
+                                isComplete={!isStreaming || i !== messages.length - 1}
+                              />
+                            </div>
                           )}
 
                           {/* Autonomous Agent Mode Widgets — rendered ABOVE the streaming text response */}
@@ -8828,6 +9042,23 @@ export const Dashboard: React.FC = () => {
                               }
                             />
                           )}
+
+                          {/* In-chat User Input / Clarification Card */}
+                          {msg.agentUserInputRequired && (
+                            <AgentUserInputCard
+                              question={msg.agentUserInputRequired.question}
+                              options={msg.agentUserInputRequired.options}
+                              selectType={msg.agentUserInputRequired.selectType}
+                              onSubmit={(ans) =>
+                                handleUserInputSubmit(
+                                  msg.agentUserInputRequired!.taskId,
+                                  msg.agentUserInputRequired!.stepIndex,
+                                  ans
+                                )
+                              }
+                            />
+                          )}
+
 
                           {msg.content && msg.content.trim().length > 0 && renderRichContent(
 
@@ -8902,43 +9133,64 @@ export const Dashboard: React.FC = () => {
                             />
                           )}
 
-                          {/* Generated file download cards — shown BEFORE image so files are always reachable */}
-
+                          {/* Generated file download cards / Unified Repository Deliverable Card */}
                           {msg.generatedFiles && msg.generatedFiles.length > 0 && (
+                            (() => {
+                              const isRepoOrBundle = msg.generatedFiles.length > 1 ||
+                                msg.generatedFiles.some((f: any) =>
+                                  (f.filename || '').includes('/') ||
+                                  (f.filename || '').endsWith('.html') ||
+                                  (f.filename || '').endsWith('.zip')
+                                )
 
-                            <div className="mt-3 space-y-2">
+                              if (isRepoOrBundle) {
+                                return (
+                                  <RepositoryDeliverableCard
+                                    files={msg.generatedFiles}
+                                    onPreview={(file, allFiles) => {
+                                      dispatchOpenFilePreview({
+                                        name: file.filename,
+                                        type: mimeFromName(file.filename),
+                                        url: file.download_url,
+                                        sizeBytes: file.size_bytes,
+                                        siblingFiles: allFiles.map((f) => ({
+                                          name: f.filename,
+                                          type: mimeFromName(f.filename),
+                                          url: f.download_url,
+                                          sizeBytes: f.size_bytes,
+                                        })),
+                                      })
+                                    }}
+                                    onDownloadSingle={(url, filename) => triggerDirectDownload(url, filename)}
+                                  />
+                                )
+                              }
 
-                              {msg.generatedFiles.map((gf, gfi) => (
-
-                                <FileDownloadCard
-
-                                  key={gfi}
-
-                                  filename={gf.filename}
-
-                                  download_url={gf.download_url}
-
-                                  size_bytes={gf.size_bytes}
-
-                                  onView={() => dispatchOpenFilePreview({
-                                    name: gf.filename,
-                                    type: mimeFromName(gf.filename),
-                                    url: gf.download_url,
-                                    sizeBytes: gf.size_bytes,
-                                    siblingFiles: (msg.generatedFiles || []).map((f: any) => ({
-                                      name: f.filename,
-                                      type: mimeFromName(f.filename),
-                                      url: f.download_url,
-                                      sizeBytes: f.size_bytes,
-                                    })),
-                                  })}
-
-                                />
-
-                              ))}
-
-                            </div>
-
+                              return (
+                                <div className="mt-3 space-y-2">
+                                  {msg.generatedFiles.map((gf, gfi) => (
+                                    <FileDownloadCard
+                                      key={gfi}
+                                      filename={gf.filename}
+                                      download_url={gf.download_url}
+                                      size_bytes={gf.size_bytes}
+                                      onView={() => dispatchOpenFilePreview({
+                                        name: gf.filename,
+                                        type: mimeFromName(gf.filename),
+                                        url: gf.download_url,
+                                        sizeBytes: gf.size_bytes,
+                                        siblingFiles: (msg.generatedFiles || []).map((f: any) => ({
+                                          name: f.filename,
+                                          type: mimeFromName(f.filename),
+                                          url: f.download_url,
+                                          sizeBytes: f.size_bytes,
+                                        })),
+                                      })}
+                                    />
+                                  ))}
+                                </div>
+                              )
+                            })()
                           )}
 
                           {/* Inline visual widgets (visualize__show_widget) */}
@@ -8969,6 +9221,18 @@ export const Dashboard: React.FC = () => {
 
                             </div>
 
+                          )}
+
+                          {/* Structured Display Cards (e.g. sports match card) */}
+                          {msg.displayCards && msg.displayCards.length > 0 && (
+                            <div className="mt-3 space-y-3">
+                              {msg.displayCards.map((card, cIdx) => {
+                                if (card.card_type === 'render_sports_card') {
+                                  return <SportsMatchCard key={cIdx} {...card.payload} />
+                                }
+                                return null
+                              })}
+                            </div>
                           )}
 
 
@@ -9128,21 +9392,22 @@ export const Dashboard: React.FC = () => {
 
           )}
 
-          {/* Right-edge prompt navigator */}
-          <TurnTracker
-            turnIndices={messages
-              .map((m, i) => (m.role === 'user' && !m.isArchived ? i : -1))
-              .filter((i) => i >= 0)}
-            scrollRef={scrollContainerRef}
-          />
-
         </div>
 
-        {/* Pinned Input Area — only displayed when conversation has active messages or history is loading for existing chat (Claude style) */}
+        {/* Right-edge prompt navigator — fixed in viewport, outside scrolling container */}
+        <TurnTracker
+          turnIndices={messages
+            .map((m, i) => (m.role === 'user' && !m.isArchived ? i : -1))
+            .filter((i) => i >= 0)}
+          scrollRef={scrollContainerRef}
+        />
+
+
+        {/* Pinned Input Area — only displayed when conversation has active messages or history is loading for existing chat */}
         {(messages.length > 0 || (isFetchingHistory && activeConversationId !== '00000000-0000-0000-0000-000000000000')) && (
           <div
             style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0.5rem))' }}
-            className="shrink-0 w-full px-2 sm:px-4 md:px-6 pt-1.5 sm:pt-2 z-20"
+            className="shrink-0 w-full px-2 sm:px-4 md:px-6 pt-1 sm:pt-1.5 z-20"
           >
             {renderInputConsole(false)}
           </div>
@@ -9217,57 +9482,67 @@ export const Dashboard: React.FC = () => {
         const shareUrl = shareToken ? `${window.location.origin}/shared/?token=${shareToken}` : ''
 
         return (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
-            <div className="bg-[#0d0f11] border border-[#1e2025] rounded-lg w-full max-w-md p-6 shadow-2xl space-y-6">
-              <div className="flex items-center justify-between border-b border-[#1c1e22] pb-3">
-                <h3 className="text-sm font-semibold text-brand-text flex items-center gap-2">
-                  <Share2 className="w-4 h-4 text-[#ffffff]" />
+          <div
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 p-3 sm:p-4 animate-in fade-in duration-200"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIsShareModalOpen(false)
+            }}
+          >
+            <div
+              className="bg-[#14161a] border border-white/10 rounded-2xl w-full max-w-md p-5 sm:p-6 shadow-2xl space-y-5 transition-all duration-200"
+              style={{ boxShadow: '0 12px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06)' }}
+            >
+              <div className="flex items-center justify-between border-b border-white/[0.08] pb-3.5">
+                <h3 className="text-sm sm:text-[15px] font-semibold text-white flex items-center gap-2">
+                  <Share2 className="w-4 h-4 text-white" />
                   <span>Share Conversation</span>
                 </h3>
                 <button
                   onClick={() => setIsShareModalOpen(false)}
-                  className="text-brand-muted hover:text-brand-text transition"
+                  className="min-h-[44px] min-w-[44px] -mr-2 -my-2 flex items-center justify-center rounded-xl text-white/50 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] transition-colors touch-manipulation"
+                  title="Close"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
               {isShared ? (
                 <div className="space-y-4">
-                  <p className="text-[12px] text-[#8e95a2] leading-relaxed">
+                  <p className="text-xs sm:text-[13px] text-[#9aa0ae] leading-relaxed">
                     Anyone with this link can view the conversation history and export it as JSON.
                   </p>
-                  
-                  <div className="flex items-center gap-2 bg-brand-card border border-brand-border rounded-lg p-2">
+
+                  <div className="flex items-center gap-2 bg-[#0d0f11] border border-white/10 rounded-xl p-1.5 focus-within:border-white/30 transition-colors">
                     <input
                       type="text"
                       readOnly
                       value={shareUrl}
                       onClick={(e) => (e.target as HTMLInputElement).select()}
-                      className="bg-transparent border-0 outline-none text-[11px] text-brand-text font-mono flex-1 px-1 select-all"
+                      className="bg-transparent border-0 outline-none text-xs sm:text-[12.5px] text-[#e2e5eb] font-mono flex-1 px-2.5 py-1.5 select-all truncate"
                     />
                     <button
                       onClick={async () => {
                         await navigator.clipboard.writeText(shareUrl)
-                        showToast('Link copied!', 'info')
+                        showToast('Link copied to clipboard!', 'info')
                       }}
-                      className="px-2.5 py-1 rounded bg-[#ffffff]/10 hover:bg-[#ffffff]/20 border border-[#ffffff]/20 text-[10px] font-bold text-[#ffffff] transition"
+                      className="min-h-[38px] px-4 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 active:bg-white/30 border border-white/15 text-xs font-bold text-white transition-all shrink-0 flex items-center gap-1.5 touch-manipulation"
                     >
-                      Copy
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy</span>
                     </button>
                   </div>
 
-                  <div className="flex items-center justify-between pt-2">
+                  <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center sm:justify-between gap-2.5 pt-2">
                     <button
                       onClick={() => handleShareToggle(false)}
                       disabled={sharing}
-                      className="px-3.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-[11px] font-semibold text-red-450 transition disabled:opacity-50"
+                      className="min-h-[44px] px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 active:bg-red-500/30 text-xs sm:text-sm font-semibold text-red-400 transition-colors flex items-center justify-center touch-manipulation disabled:opacity-50"
                     >
                       {sharing ? 'Processing...' : 'Stop Sharing'}
                     </button>
                     <button
                       onClick={() => setIsShareModalOpen(false)}
-                      className="px-3.5 py-1.5 rounded-lg border border-[#1e2025] hover:bg-white/5 text-[11px] font-semibold text-brand-text transition"
+                      className="min-h-[44px] px-5 py-2 rounded-xl border border-white/10 hover:bg-white/5 active:bg-white/10 text-xs sm:text-sm font-semibold text-[#e2e5eb] transition-colors flex items-center justify-center touch-manipulation"
                     >
                       Close
                     </button>
@@ -9275,20 +9550,20 @@ export const Dashboard: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <p className="text-[12px] text-[#8e95a2] leading-relaxed">
+                  <p className="text-xs sm:text-[13px] text-[#9aa0ae] leading-relaxed">
                     Create a public link to share this conversation with others.
                   </p>
-                  <div className="flex items-center justify-end gap-3 pt-2">
+                  <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center sm:justify-end gap-2.5 sm:gap-3 pt-2">
                     <button
                       onClick={() => setIsShareModalOpen(false)}
-                      className="px-3.5 py-1.5 rounded-lg border border-[#1e2025] hover:bg-white/5 text-[11px] font-semibold text-brand-text transition"
+                      className="min-h-[44px] px-4 py-2.5 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] active:bg-white/[0.12] text-xs sm:text-sm font-semibold text-[#e2e5eb] transition-colors flex items-center justify-center touch-manipulation"
                     >
                       Cancel
                     </button>
                     <button
                       onClick={() => handleShareToggle(true)}
                       disabled={sharing}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#ffffff] hover:bg-[#e2e8f0] text-black text-[11px] font-semibold transition disabled:opacity-50"
+                      className="min-h-[44px] px-5 py-2.5 rounded-xl bg-white hover:bg-[#f0f2f5] active:bg-[#e2e5eb] text-black text-xs sm:text-sm font-bold shadow-md transition-all flex items-center justify-center touch-manipulation disabled:opacity-50"
                     >
                       {sharing ? 'Creating Link...' : 'Create Link'}
                     </button>
@@ -9385,40 +9660,47 @@ export const Dashboard: React.FC = () => {
           onClose={() => setLockMode(null)}
         />
       )}
-      {/* ── Slide-up Bottom Sheet Mode Selector (Mobile) ───────────── */}
+
+      {/* Connectors & Workstation Access Settings Modal */}
+      <ConnectorSettingsModal
+        isOpen={isConnectorSettingsOpen}
+        onClose={() => setIsConnectorSettingsOpen(false)}
+      />
+
+      {/* ── Responsive Mode Selector Modal (Mobile Bottom Sheet + Desktop Centered Dialog) ── */}
       <div
-        className={`fixed inset-0 z-50 transition-opacity duration-300 sm:hidden ${
+        className={`fixed inset-0 z-50 transition-opacity duration-300 sm:flex sm:items-center sm:justify-center sm:p-4 ${
           isModeSheetOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
         {/* Backdrop */}
         <div
           onClick={() => setIsModeSheetOpen(false)}
-          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          className="absolute inset-0 bg-black/70 backdrop-blur-sm"
         />
 
-        {/* Bottom Sheet Drawer */}
+        {/* Modal / Sheet Card */}
         <div
-          className={`absolute bottom-0 left-0 right-0 bg-[#121418] border-t border-white/10 rounded-t-2xl px-5 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom,1.5rem))] shadow-2xl transition-transform duration-300 ease-out transform ${
-            isModeSheetOpen ? 'translate-y-0' : 'translate-y-full'
+          className={`absolute bottom-0 left-0 right-0 sm:relative sm:bottom-auto sm:left-auto sm:right-auto sm:max-w-lg sm:w-full bg-[#121418] border-t sm:border border-white/10 sm:border-white/15 rounded-t-2xl sm:rounded-2xl px-5 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom,1.5rem))] sm:p-6 shadow-2xl transition-all duration-300 ease-out transform ${
+            isModeSheetOpen ? 'translate-y-0 scale-100 opacity-100' : 'translate-y-full sm:translate-y-4 sm:scale-95 opacity-0'
           }`}
         >
-          {/* Dim drag handle bar */}
-          <div className="w-10 h-1 bg-white/25 rounded-full mx-auto mb-4" />
+          {/* Dim drag handle bar (mobile only) */}
+          <div className="w-10 h-1 bg-white/25 rounded-full mx-auto mb-4 sm:hidden" />
 
           {/* Header */}
-          <div className="flex items-center justify-between mb-3 pb-2.5 border-b border-white/[0.08]">
+          <div className="flex items-center justify-between mb-3.5 pb-3 border-b border-white/[0.08]">
             <div>
-              <h3 className="text-sm font-bold text-white tracking-wide">Select Execution Mode</h3>
-              <p className="text-[11px] text-[#8e95a2] mt-0.5">Choose how Agent Ochuko processes your prompt</p>
+              <h3 className="text-sm sm:text-base font-bold text-white tracking-wide">Select Execution Mode</h3>
+              <p className="text-[11px] sm:text-xs text-[#8e95a2] mt-0.5">Choose how Agent Ochuko processes your prompt</p>
             </div>
             <button
               type="button"
               onClick={() => setIsModeSheetOpen(false)}
-              className="min-h-[36px] min-w-[36px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 transition"
+              className="min-h-[36px] min-w-[36px] -mr-1 flex items-center justify-center rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/10 transition cursor-pointer"
               aria-label="Close mode sheet"
             >
-              <X className="w-4 h-4" />
+              <X className="w-5 h-5 sm:w-4 sm:h-4" />
             </button>
           </div>
 
@@ -9503,7 +9785,7 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Unified File/Text Preview — Claude-style dock for text artifacts, modal for media */}
+      {/* Unified File/Text Preview — Ochuko dock for text artifacts, modal for media */}
       {previewingFile && (() => {
         const pn = previewingFile.name.toLowerCase()
         const hasRepoContext = Boolean(

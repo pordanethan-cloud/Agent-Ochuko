@@ -87,6 +87,15 @@ CONNECTOR_CATALOG = [
         "icon": "folder",
         "default_permissions": ["read", "write"],
     },
+    {
+        "name": "workstation_access",
+        "title": "Workstation Computer Access MCP",
+        "description": "Direct read, write, directory navigation, and terminal command execution on your workstation (Agent Mode only).",
+        "type": "mcp",
+        "category": "System",
+        "icon": "cpu",
+        "default_permissions": ["read", "write", "execute"],
+    },
 ]
 
 

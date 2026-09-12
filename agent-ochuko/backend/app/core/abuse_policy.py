@@ -2,7 +2,7 @@
 """
 Abuse policy — Phase 5 (item #14).
 
-Claude-grade self-protection, implemented as a STATE MACHINE so the
+Enterprise-grade self-protection, implemented as a STATE MACHINE so the
 one-warning guarantee is exactly-once by construction, not by model judgment:
 
     none ──(abuse detected)──► warned ──(abuse detected again)──► ended

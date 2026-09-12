@@ -23,12 +23,27 @@ logger = logging.getLogger("app.api.v1.endpoints.files")
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {
-    ".pdf", ".png", ".jpg", ".docx", ".jpeg", ".webp", ".gif",
-    ".txt", ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".java", 
-    ".py", ".c", ".cpp", ".h", ".cs", ".sh", ".json", ".md", 
-    ".yaml", ".yml", ".xml", ".sql", ".csv", ".rs", ".go", ".rb", 
-    ".php", ".kt", ".gradle", ".properties", ".ipynb", ".ini", ".cfg",
-    ".bat", ".cmd", ".ps1"
+    # Documents, PDFs & eBooks
+    ".pdf", ".docx", ".doc", ".rtf", ".odt", ".epub", ".tex", ".txt", ".md", ".log",
+    # Spreadsheets & Data
+    ".xlsx", ".xls", ".xlsm", ".csv", ".tsv", ".ods", ".parquet", ".json", ".xml", ".yaml", ".yml",
+    # Presentations
+    ".pptx", ".ppt", ".odp",
+    # Compressed Archives & Disk Images
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz", ".7z", ".rar", ".zst", ".lzma", ".cab", ".iso", ".dmg",
+    # Visual & Images
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".tiff", ".tif", ".ico", ".heic", ".heif", ".avif",
+    # Audio & Media (including WhatsApp voice notes & recordings)
+    ".mp3", ".wav", ".m4a", ".ogg", ".opus", ".oga", ".amr", ".flac", ".aac",
+    # Web & Scripting
+    ".html", ".htm", ".css", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte",
+    # Programming Languages
+    ".py", ".ipynb", ".java", ".c", ".cpp", ".cc", ".h", ".hpp", ".cs", ".rs", ".go", ".rb", ".php",
+    ".kt", ".swift", ".scala", ".r", ".lua", ".dart", ".zig", ".sol", ".wasm",
+    # Shell & System Scripts
+    ".sh", ".bash", ".bat", ".cmd", ".ps1", ".sql",
+    # Build & Configs & ML Protobuf
+    ".toml", ".ini", ".cfg", ".properties", ".gradle", ".env", ".dockerfile", ".graphql", ".gql", ".proto", ".pb", ".diff", ".patch"
 }
 
 

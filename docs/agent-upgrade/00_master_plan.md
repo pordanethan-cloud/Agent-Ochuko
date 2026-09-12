@@ -171,3 +171,6 @@ Each phase has its own detailed sub-plan document with file-by-file change break
 | [02_phase2_browser_and_background.md](./02_phase2_browser_and_background.md) | Playwright browser agent, background worker, durable state upgrade, Realtime push, 15-min tasks |
 | [03_phase3_mcp_connectors.md](./03_phase3_mcp_connectors.md) | MCP server framework, Gmail/Calendar/GitHub connectors, OAuth flow, permission UI, dynamic tools |
 | [04_phase4_workspace_agents.md](./04_phase4_workspace_agents.md) | Shared team agents, custom prompts, scoped access, analytics |
+| [05_phase5_webdesign_conduct_and_website_engine.md](./05_phase5_webdesign_conduct_and_website_engine.md) | Web design engine, sandbox rendering, visual widgets, conduct gates |
+| [06_tools_architecture_claude_parity_and_ooda_loop.md](./06_tools_architecture_claude_parity_and_ooda_loop.md) | 18-tool roster, OODA iteration engine, prompt contracts, conduct perimeter |
+| [07_workstation_access_and_cowork_engine_under_the_hood.md](./07_workstation_access_and_cowork_engine_under_the_hood.md) | Workstation computer access & collaboration engine ("cowork"), dual-tier bridge, reverse-mtime file discovery, HitL safety, mobile-first toggle architecture |

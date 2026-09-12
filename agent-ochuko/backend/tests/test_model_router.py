@@ -88,7 +88,7 @@ async def test_route_non_trivial_message():
 def test_base_identity_token_cap():
     # BASE_IDENTITY must stay within the 650-token budget (word-count proxy:
     # tokens ~= words * 1.3 for prose). Phase 5 relaxed the cap to carry the
-    # Claude-grade conduct and length calibration contracts.
+    # enterprise-grade conduct and length calibration contracts.
     estimated_tokens = int(len(BASE_IDENTITY.split()) * 1.3)
     assert estimated_tokens <= 650, (
         f"BASE_IDENTITY bloat: ~{estimated_tokens} estimated tokens "
@@ -316,3 +316,34 @@ async def test_is_reasoning_model_includes_gpt56_family():
     assert await is_reasoning_model("gpt-5.6-terra") is True
     assert await is_reasoning_model("gpt-5.6-luna") is True
     assert await is_reasoning_model("gpt-think-test") is False
+
+
+@pytest.mark.asyncio
+async def test_non_ocr_attachments_route_to_nano():
+    _CONFIG_CACHE["NANO_MODEL_DEPLOYMENT"] = "gpt-4o-mini-test"
+    _CONFIG_CACHE["THINK_MODEL_DEPLOYMENT"] = "gpt-5.6-terra"
+
+    # A non-OCR summary request with non-OCR attachments routes to nano
+    decision = await model_router.route(
+        user_message="Summarize this attached archive and spreadsheet",
+        mode="think",
+        conversation_id="conv-att-1",
+        nano_turn_count=0,
+        has_non_ocr_attachments=True,
+        has_ocr_attachments=False,
+    )
+    assert decision.routing_mode == "nano"
+    assert decision.deployment == "gpt-4o-mini-test"
+    assert decision.was_intercepted is True
+
+    # If OCR/image is present, it does NOT intercept to nano
+    decision_ocr = await model_router.route(
+        user_message="Summarize this attached document image",
+        mode="think",
+        conversation_id="conv-att-2",
+        nano_turn_count=0,
+        has_non_ocr_attachments=False,
+        has_ocr_attachments=True,
+    )
+    assert decision_ocr.routing_mode == "think"
+    assert decision_ocr.deployment == "gpt-5.6-terra"

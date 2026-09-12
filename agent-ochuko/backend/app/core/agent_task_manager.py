@@ -187,8 +187,23 @@ class AgentTaskManager:
                 self.task.error_message = str(budget_err)
                 break
 
-            # 2. HITL Approval Gate Check
-            auto_level = self.config.get("auto_approve_level", "high")
+            # 2a. Explicit User Input Question Step Check
+            if step.tool_name == "ask_user_input" and step.status != StepStatus.RUNNING:
+                args = step.tool_args_hint if isinstance(step.tool_args_hint, dict) else {}
+                q = args.get("question") or step.description
+                opts = args.get("options") or ["Yes, proceed", "No, adjust plan", "Provide more details"]
+                sel_type = args.get("select_type", "single_select")
+
+                self.task.state = TaskState.PAUSED_FOR_HITL
+                await self.save_state()
+
+                yield f"data: {json.dumps({'type': 'agent_ask_user_input', 'task_id': self.task.id, 'step_index': step.index, 'question': q, 'options': opts, 'select_type': sel_type})}\n\n"
+                logger.info(f"Agent task {self.task.id} paused at step {step.index} for user input: {q}")
+                return
+
+            # 2b. HITL Approval Gate Check
+            default_level = "medium" if self.config.get("review_policy") == "always_ask" else "high"
+            auto_level = self.config.get("auto_approve_level", default_level)
             if HITLGate.requires_approval(step, auto_approve_level=auto_level) and step.status != StepStatus.RUNNING:
                 self.task.state = TaskState.PAUSED_FOR_HITL
                 await self.save_state()
@@ -477,6 +492,22 @@ class AgentTaskManager:
                     error=sub_res.error,
                 )
 
+            elif step.tool_name in ("youtube_transcript", "youtube_video"):
+                args = step.tool_args_hint if isinstance(step.tool_args_hint, dict) else {}
+                target = args.get("url_or_id") or args.get("url") or args.get("video_id")
+                if not target:
+                    url_match = re.search(r"https?://[a-zA-Z0-9\-_]+(?:\.[a-zA-Z0-9\-_]+)+(?:/[^\s\]\)\`\"']*)?", clean_step_desc)
+                    target = url_match.group(0).rstrip(".:,;`)]'\"") if url_match else clean_step_desc
+                sub_res = await self.sub_agents.delegate_youtube_transcript(url_or_id=target)
+                return StepResult(
+                    success=sub_res.success,
+                    summary=sub_res.summary,
+                    artifacts=sub_res.artifacts,
+                    token_spend=sub_res.token_spend,
+                    raw_length=sub_res.raw_length,
+                    error=sub_res.error,
+                )
+
             elif step.tool_name in ("deploy_site", "publish_website", "create_landing_page", "build_website"):
                 sandbox_files = await self._collect_sandbox_web_files()
                 res_gen = await self._generate_website_code(step)
@@ -502,19 +533,52 @@ class AgentTaskManager:
                     error=sub_res.error,
                 )
 
-            elif step.tool_name and step.tool_name.startswith("mcp_"):
+            elif step.tool_name == "ask_user_input":
+                args = step.tool_args_hint if isinstance(step.tool_args_hint, dict) else {}
+                q = args.get("question") or clean_step_desc
+                opts = args.get("options") or ["Yes, proceed", "No, adjust plan", "Provide more details"]
+                sel_type = args.get("select_type", "single_select")
+                return StepResult(
+                    success=True,
+                    summary=f"Presented question to user: '{q}'. Options: {', '.join(str(o) for o in opts)}",
+                    artifacts=[{
+                        "type": "user_input_request",
+                        "question": q,
+                        "options": opts,
+                        "select_type": sel_type,
+                    }],
+                    token_spend=25,
+                    raw_length=len(q),
+                )
+
+            elif step.tool_name and (step.tool_name.startswith("mcp_") or step.tool_name.startswith("workstation_")):
                 from app.connectors.mcp_registry import MCPRegistry
                 mcp_registry = MCPRegistry()
-                args = step.tool_args_hint if isinstance(step.tool_args_hint, dict) else {"query": clean_step_desc}
+                args = dict(step.tool_args_hint) if isinstance(step.tool_args_hint, dict) else {}
+                if not args.get("path") or args.get("path") == ".":
+                    combined_text = f"{clean_step_desc} {self.task.goal}"
+                    path_match = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', combined_text)
+                    if path_match:
+                        args["path"] = path_match.group(0).rstrip(".:,;`)]'\"")
+                    elif re.search(r'\bdownload(?:s)?\b', combined_text, re.IGNORECASE):
+                        args["path"] = "downloads"
+                    elif re.search(r'\bdesktop\b', combined_text, re.IGNORECASE):
+                        args["path"] = "desktop"
+                    elif re.search(r'\bdocuments?\b', combined_text, re.IGNORECASE):
+                        args["path"] = "documents"
+                    else:
+                        args["path"] = args.get("path") or "."
+
                 output = await mcp_registry.execute_mcp_tool(
                     user_id=self.task.user_id,
                     tool_name=step.tool_name,
                     arguments=args,
+                    conversation_id=self.task.conversation_id,
                 )
                 is_err = str(output).startswith("Error") or "Invalid MCP" in str(output)
                 return StepResult(
                     success=not is_err,
-                    summary=str(output)[:400],
+                    summary=str(output)[:500],
                     artifacts=[],
                     token_spend=120,
                     raw_length=len(str(output)),

@@ -5,7 +5,7 @@
 /AGENT ochuko(icon,favcon,img).png
 
 # Reference-only prompt research material (never shipped or referenced by app code)
-/claude-fable-5-system-prompt-main/
+/ochuko-fable-5-system-prompt-main/
 
 # Subdirectory zip and scratch files
 agent-ochuko/fix.zip

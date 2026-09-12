@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Bot,
   Check,
@@ -11,6 +11,11 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
+  HelpCircle,
+  Send,
+  Folder,
+  FolderOpen,
+  ChevronRight,
 } from 'lucide-react'
 
 export interface PlanStepItem {
@@ -495,6 +500,92 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
+   3b. INTERACTIVE USER INPUT / CLARIFICATION CARD
+   ─────────────────────────────────────────────────────────────────────────── */
+export interface AgentUserInputProps {
+  question: string
+  options: string[]
+  selectType?: string
+  onSubmit: (answer: string) => void
+}
+
+export const AgentUserInputCard: React.FC<AgentUserInputProps> = ({
+  question,
+  options,
+  selectType: _selectType,
+  onSubmit,
+}) => {
+  const [customInput, setCustomInput] = useState('')
+
+  const handleCustomSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (customInput.trim()) {
+      onSubmit(customInput.trim())
+    }
+  }
+
+  return (
+    <div className="w-full my-3.5 rounded-2xl bg-[#12141c] border border-cyan-500/30 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
+      <div className="absolute top-0 right-0 w-36 h-36 bg-cyan-500/[0.05] rounded-full blur-2xl pointer-events-none" />
+
+      <div className="flex items-start gap-3 mb-3.5">
+        <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0 mt-0.5">
+          <HelpCircle className="w-4 h-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h4 className="text-[13px] font-semibold text-white tracking-tight">
+              Input Required from You
+            </h4>
+            <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-bold uppercase tracking-wider">
+              Clarification
+            </span>
+          </div>
+          <p className="text-[12.5px] text-white/90 mt-1.5 font-medium leading-relaxed">
+            {question}
+          </p>
+        </div>
+      </div>
+
+      {/* Clickable Option Pills */}
+      {options && options.length > 0 && (
+        <div className="flex flex-wrap gap-2 pt-1 pb-3">
+          {options.map((opt, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => onSubmit(opt)}
+              className="px-3.5 py-1.5 rounded-xl text-[12px] font-medium bg-white/[0.06] hover:bg-cyan-500/20 hover:text-cyan-200 border border-white/10 hover:border-cyan-500/40 text-white/90 transition active:scale-95 text-left cursor-pointer"
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Custom write-in response form */}
+      <form onSubmit={handleCustomSubmit} className="flex items-center gap-2 pt-2.5 border-t border-white/[0.06]">
+        <input
+          type="text"
+          value={customInput}
+          onChange={(e) => setCustomInput(e.target.value)}
+          placeholder="Or type your custom response..."
+          className="flex-1 bg-white/[0.04] border border-white/10 rounded-xl px-3 py-1.5 text-[12px] text-white placeholder-white/40 focus:outline-none focus:border-cyan-500/50 transition"
+        />
+        <button
+          type="submit"
+          disabled={!customInput.trim()}
+          className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-30 text-black text-[12px] font-bold transition active:scale-95 flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+        >
+          <span>Send</span>
+          <Send className="w-3 h-3 stroke-[2.5]" />
+        </button>
+      </form>
+    </div>
+  )
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
    4. INSTANT STATIC SITE DEPLOYMENT CARD (/sites/:slug) — compact, no inline
    iframe in the thread; preview opens in the ArtifactPanel right dock.
    ─────────────────────────────────────────────────────────────────────────── */
@@ -626,7 +717,7 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef
       onPointerMove={(e) => { if (dragging) seekFromPointer(e.clientY) }}
       onPointerUp={() => setDragging(false)}
       onPointerCancel={() => setDragging(false)}
-      className="hidden sm:flex absolute right-1 top-0 bottom-0 z-40 flex-col items-end justify-between py-8 w-4 touch-none cursor-ns-resize select-none group"
+      className="hidden sm:flex fixed right-2 sm:right-3 top-24 bottom-32 z-30 flex-col items-end justify-between py-6 w-5 touch-none cursor-ns-resize select-none group pointer-events-auto"
       aria-label="Prompt navigator"
       role="slider"
       aria-valuemin={1}
@@ -634,7 +725,7 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef
       aria-valuenow={activeIdx + 1}
     >
       {/* Thin vertical rail line */}
-      <div className="absolute right-1.5 top-8 bottom-8 w-px bg-white/8 rounded-full" />
+      <div className="absolute right-2 top-6 bottom-6 w-px bg-white/10 rounded-full pointer-events-none" />
 
       {turnIndices.map((_, i) => {
         const isActive = i === activeIdx
@@ -642,15 +733,16 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef
           <div
             key={i}
             onClick={() => jumpTo(i)}
-            className="relative flex items-center justify-end w-full"
+            className="relative flex items-center justify-end w-full py-0.5"
           >
             {/* Horizontal tick line */}
             <span
-              className={`block rounded-full transition-all duration-200 ${
+              className={`block rounded-full transition-all duration-200 cursor-pointer ${
                 isActive
-                  ? 'w-3 h-[2px] bg-white/80'
-                  : 'w-2 h-px bg-white/25 group-hover:bg-white/40'
+                  ? 'w-3.5 h-[2px] bg-white/95 shadow-[0_0_6px_rgba(255,255,255,0.7)]'
+                  : 'w-2 h-px bg-white/25 group-hover:bg-white/50 hover:w-3 hover:bg-cyan-400'
               }`}
+              title={`Jump to turn ${i + 1}`}
             />
           </div>
         )
@@ -674,6 +766,52 @@ interface AgentFileChangesProps {
   onOpen: (file: AgentArtifactItem) => void
 }
 
+interface AgentFileNode {
+  name: string
+  path: string
+  isFolder: boolean
+  children?: AgentFileNode[]
+  file?: AgentArtifactItem
+}
+
+function buildAgentFileTree(items: AgentArtifactItem[]): AgentFileNode[] {
+  const roots: AgentFileNode[] = []
+  for (const item of items) {
+    const raw = (item.filename || '').replace(/\\/g, '/').replace(/^\/+/, '').trim()
+    if (!raw) continue
+    const parts = raw.split('/')
+    let current = roots
+    let acc = ''
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      acc = acc ? `${acc}/${part}` : part
+      const isLast = i === parts.length - 1
+      if (isLast) {
+        current.push({ name: part, path: acc, isFolder: false, file: item })
+      } else {
+        let folder = current.find((n) => n.isFolder && n.name === part)
+        if (!folder) {
+          folder = { name: part, path: acc, isFolder: true, children: [] }
+          current.push(folder)
+        }
+        current = folder.children!
+      }
+    }
+  }
+  function sortNodes(nodes: AgentFileNode[]): AgentFileNode[] {
+    nodes.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1
+      if (!a.isFolder && b.isFolder) return 1
+      return a.name.localeCompare(b.name)
+    })
+    for (const n of nodes) {
+      if (n.isFolder && n.children) sortNodes(n.children)
+    }
+    return nodes
+  }
+  return sortNodes(roots)
+}
+
 export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifacts, onOpen }) => {
   const [expanded, setExpanded] = useState(false)
 
@@ -687,44 +825,135 @@ export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifact
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
+  const tree = useMemo(() => buildAgentFileTree(files), [files])
+
+  const allFolderPaths = useMemo(() => {
+    const paths = new Set<string>()
+    const traverse = (nodes: AgentFileNode[]) => {
+      for (const n of nodes) {
+        if (n.isFolder) {
+          paths.add(n.path)
+          if (n.children) traverse(n.children)
+        }
+      }
+    }
+    traverse(tree)
+    return paths
+  }, [tree])
+
+  // Multi-folder open state: allows multiple folders to be open at once
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set(allFolderPaths))
+
+  // Update open folders when tree changes
+  useEffect(() => {
+    setOpenFolders(new Set(allFolderPaths))
+  }, [allFolderPaths])
+
+  const toggleFolder = (p: string) => {
+    setOpenFolders((prev) => {
+      const next = new Set(prev)
+      if (next.has(p)) next.delete(p)
+      else next.add(p)
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    if (openFolders.size === allFolderPaths.size) setOpenFolders(new Set())
+    else setOpenFolders(new Set(allFolderPaths))
+  }
+
+  const renderNode = (node: AgentFileNode, depth: number = 0) => {
+    if (node.isFolder) {
+      const isOpen = openFolders.has(node.path)
+      return (
+        <div key={node.path} className="flex flex-col">
+          <button
+            type="button"
+            onClick={() => toggleFolder(node.path)}
+            style={{ paddingLeft: `${depth * 14 + 8}px` }}
+            className="w-full flex items-center gap-1.5 py-1 pr-2 text-left rounded hover:bg-white/[0.04] transition group"
+          >
+            <span className="text-white/40 group-hover:text-white/70 transition">
+              {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            </span>
+            <span className="text-amber-400/90 shrink-0">
+              {isOpen ? <FolderOpen className="w-3.5 h-3.5" /> : <Folder className="w-3.5 h-3.5" />}
+            </span>
+            <span className="text-[11.5px] font-mono font-medium text-white/85 truncate flex-1">
+              {node.name}
+            </span>
+            <span className="text-[9.5px] font-mono text-white/30 shrink-0">
+              {node.children?.length || 0} items
+            </span>
+          </button>
+          {isOpen && node.children && (
+            <div className="flex flex-col">
+              {node.children.map((child) => renderNode(child, depth + 1))}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    const f = node.file!
+    return (
+      <button
+        key={node.path}
+        type="button"
+        style={{ paddingLeft: `${depth * 14 + 14}px` }}
+        onClick={() => f.download_url && onOpen(f)}
+        className={`w-full flex items-center justify-between gap-2 py-1 pr-2 rounded text-left ${
+          f.download_url ? 'hover:bg-white/[0.04] cursor-pointer' : 'cursor-default'
+        } transition`}
+      >
+        <span className="text-[11px] font-mono text-white/70 truncate">{node.name}</span>
+        <span className="text-[9.5px] font-mono text-white/35 shrink-0">{formatSize(f.size_bytes)}</span>
+      </button>
+    )
+  }
+
   return (
     <div className="w-full my-3 rounded-lg bg-brand-card border border-white/10 shadow-sm animate-fadeIn select-none">
-      <button
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
-        className="w-full px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] rounded-lg transition"
-      >
-        <div className="flex items-center gap-2.5 min-w-0">
+      <div className="w-full px-3.5 py-2.5 flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          className="flex items-center gap-2.5 min-w-0 flex-1 hover:opacity-85 text-left transition"
+        >
           <div className="w-6 h-6 rounded-md bg-white/[0.06] border border-white/10 flex items-center justify-center text-white/70 shrink-0">
             <FileText className="w-3 h-3" />
           </div>
-          <span className="text-[12.5px] font-medium text-white/85">
+          <span className="text-[12.5px] font-medium text-white/85 truncate">
             {files.length} {files.length === 1 ? 'file' : 'files'} changed
+            {allFolderPaths.size > 0 && ` (${allFolderPaths.size} folders)`}
           </span>
-        </div>
-        <span className="text-white/40 hover:text-white/70 shrink-0">
-          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-        </span>
-      </button>
+          <span className="text-white/40 hover:text-white/70 shrink-0 ml-auto">
+            {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </span>
+        </button>
+      </div>
 
       {expanded && (
-        <div className="px-3.5 pb-3 space-y-0.5">
-          {files.map((f, i) => (
-            <button
-              key={`${f.filename}-${i}`}
-              type="button"
-              onClick={() => f.download_url && onOpen(f)}
-              className={`w-full flex items-center justify-between gap-3 px-2 py-1.5 rounded-md text-left ${
-                f.download_url ? 'hover:bg-white/[0.04] cursor-pointer' : 'cursor-default'
-              } transition`}
-            >
-              <span className="text-[11.5px] font-mono text-white/70 truncate">{f.filename}</span>
-              <span className="text-[10px] font-mono text-white/35 shrink-0">{formatSize(f.size_bytes)}</span>
-            </button>
-          ))}
+        <div className="px-3.5 pb-3 border-t border-white/[0.04] pt-2 space-y-1">
+          {allFolderPaths.size > 1 && (
+            <div className="flex justify-end pb-1">
+              <button
+                type="button"
+                onClick={toggleAll}
+                className="text-[10px] text-white/40 hover:text-white/80 transition underline"
+              >
+                {openFolders.size === allFolderPaths.size ? 'Collapse Folders' : 'Expand All'}
+              </button>
+            </div>
+          )}
+          <div className="space-y-0.5 max-h-[300px] overflow-y-auto scrollbar-thin">
+            {tree.map((node: AgentFileNode) => renderNode(node, 0))}
+          </div>
         </div>
       )}
     </div>
   )
 }
+
 

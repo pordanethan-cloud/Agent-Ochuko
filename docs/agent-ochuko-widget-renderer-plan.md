@@ -1,12 +1,12 @@
 # Agent-Ochuko: Inline Widget Renderer — Implementation Plan
 
-> Replicating the `visualize:read_me` + `visualize:show_widget` system from claude.ai
+> Replicating the `visualize:read_me` + `visualize:show_widget` system from ochuko.ai
 
 ---
 
 ## 1. System Architecture Overview
 
-The claude.ai widget system has three distinct layers. You need all three.
+The ochuko.ai widget system has three distinct layers. You need all three.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -567,7 +567,7 @@ async def stream_with_widgets(conversation_id: str, messages: list, system: str)
         
         # Stream from Anthropic
         async with anthropic_client.messages.stream(
-            model="claude-sonnet-4-6",
+            model="ochuko-sonnet-4-6",
             max_tokens=4096,
             system=system,
             messages=messages,

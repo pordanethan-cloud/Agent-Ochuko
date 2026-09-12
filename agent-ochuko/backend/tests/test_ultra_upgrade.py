@@ -64,7 +64,7 @@ def _config_cache():
 
 
 @pytest.mark.asyncio
-async def test_ultra_budget_is_claude_grade(_config_cache):
+async def test_ultra_budget_is_enterprise_grade(_config_cache):
     _config_cache["MAX_OUTPUT_TOKENS_ULTRA"] = "32768"
     assert await get_max_output_tokens("ultra") == 32768
     # Phase 5: agent mode has its own dedicated MAX_OUTPUT_TOKENS_AGENT key
@@ -115,7 +115,7 @@ def test_file_creation_contract_in_code_skill():
 
 
 def test_base_identity_still_capped():
-    # Phase 5: cap relaxed 500 → 600 to carry the Claude-grade conduct contracts.
+    # Phase 5: cap relaxed 500 → 600 to carry the enterprise-grade conduct contracts.
     assert int(len(BASE_IDENTITY.split()) * 1.3) <= 600
 
 

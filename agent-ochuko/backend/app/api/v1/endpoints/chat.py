@@ -6,6 +6,8 @@ import re
 import uuid
 import base64
 import httpx
+import shutil
+import mimetypes
 from html.parser import HTMLParser
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlsplit
@@ -264,12 +266,15 @@ def _time_aware_query(query: str) -> str:
 
 
 def _search_time_header() -> str:
-    """Header prepended to every search context so the model knows 'now'."""
+    """Header prepended to every search context so the model knows 'now' and enforces temporal integrity."""
     from datetime import timedelta
     now = datetime.now(timezone(timedelta(hours=1)))
     return (
-        f"Search executed on {now.strftime('%A, %B %d, %Y at %I:%M %p')} (WAT). "
-        f"Current year: {now.year}. Prefer the freshest sources and state publication dates when available."
+        f"[TEMPORAL ANCHOR & RECENCY MANDATE]\n"
+        f"- Real-time timestamp: {now.strftime('%A, %B %d, %Y at %I:%M %p')} (WAT)\n"
+        f"- Current calendar year: {now.year}\n"
+        f"- TEMPORAL CONFLICT RULE: If sources conflict regarding dates, scores, rosters, prices, or status, strictly prioritize documents explicitly timestamped {now.year}. Disregard outdated historical articles from prior years.\n"
+        f"- FACTUAL DENSITY RULE: Focus on exact numbers, verified scores, dates, statistics, and discrete entities. Do NOT write conversational filler or generic introductory recaps."
     )
 
 
@@ -279,15 +284,28 @@ def _search_time_header() -> str:
 # official bodies. We stable-sort trusted domains to the front; relative order
 # of everything else is preserved (trusted results are promoted, never buried).
 
+# Dedicated live score platforms & official league data (Tier 0 — ranks ABOVE everything else)
+_SPORTS_PRIORITY_TIER_0: set = {
+    "livescore.com", "livescores.com", "flashscore.com", "flashscore.co.uk",
+    "sofascore.com", "fotmob.com", "whoscored.com", "premierleague.com",
+    "uefa.com", "fifa.com", "bundesliga.com", "laliga.com", "legaseriea.it",
+    "rfeb.es", "nba.com", "nfl.com", "mlb.com", "nhl.com", "olympics.com",
+}
+
+# Authoritative sports journalism & major broadcast desks (Tier 1)
+_SPORTS_PRIORITY_TIER_1: set = {
+    "skysports.com", "bbc.com", "bbc.co.uk", "espn.com", "espn.co.uk",
+    "theathletic.com", "tntsports.co.uk", "reuters.com", "apnews.com",
+}
+
+# General sports news, transfer portals, and TV network blogs (Tier 2 — ranks below dedicated live scores)
+_SPORTS_PRIORITY_TIER_2: set = {
+    "nbcsports.com", "cbssports.com", "foxsports.com", "transfermarkt.com",
+    "dazn.com", "goal.com", "eurosport.com", "sportsnet.ca", "bleacherreport.com",
+}
+
 _TRUSTED_SOURCE_DOMAINS: Dict[str, set] = {
-    "sports": {
-        "espn.com", "espn.co.uk", "skysports.com", "bbc.com", "bbc.co.uk",
-        "tntsports.co.uk", "theathletic.com", "transfermarkt.com",
-        "uefa.com", "fifa.com", "bundesliga.com", "premierleague.com",
-        "laliga.com", "legaseriea.it", "rfeb.es", "olympics.com", "nba.com",
-        "nfl.com", "mlb.com", "nhl.com", "flashscore.com", "reuters.com",
-        "apnews.com", "dazn.com",
-    },
+    "sports": _SPORTS_PRIORITY_TIER_0 | _SPORTS_PRIORITY_TIER_1 | _SPORTS_PRIORITY_TIER_2,
     "news": {
         "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "aljazeera.com",
         "cnn.com", "nytimes.com", "theguardian.com", "washingtonpost.com",
@@ -320,7 +338,13 @@ _SEARCH_CATEGORY_RES: Dict[str, "re.Pattern"] = {
         r"standings|fixtures?|league|cup|braces?|hat[\s-]?trick|highlights?|"
         r"transfer|transfers|lineup|line-ups?|injur\w+|nfl|nba|mlb|nhl|fifa|uefa|"
         r"premier\s+league|la\s+liga|bundesliga|serie\s+a|ligue\s+1|champions\s+league|"
-        r"europa\s+league|cricket|tennis|formula\s*1|f1|olympics?|world\s+cup)\b",
+        r"europa\s+league|cricket|tennis|formula\s*1|f1|olympics?|world\s+cup|"
+        r"liverpool|chelsea|arsenal|man\s+utd|man\s+city|manchester\s+united|manchester\s+city|"
+        r"tottenham|spurs|aston\s+villa|newcastle|everton|west\s+ham|fulham|brighton|"
+        r"wolves|wolverhampton|brentford|crystal\s+palace|nottingham\s+forest|bournemouth|"
+        r"leicester|ipswich|southampton|hull|hull\s+city|leeds|barcelona|barca|real\s+madrid|"
+        r"atletico|bayern|dortmund|psg|juventus|inter\s+milan|ac\s+milan|napoli|roma|"
+        r"lakers|celtics|warriors|bulls|heat|chiefs|eagles|cowboys|yankees|dodgers)\b",
         re.IGNORECASE,
     ),
     "business": re.compile(
@@ -331,7 +355,7 @@ _SEARCH_CATEGORY_RES: Dict[str, "re.Pattern"] = {
         re.IGNORECASE,
     ),
     "tech": re.compile(
-        r"\b(iphone|ipad|android|macbook|windows\s+11|llm|gpt|gemini|claude|"
+        r"\b(iphone|ipad|android|macbook|windows\s+11|llm|gpt|gemini|"
         r"openai|anthropic|startup|seed\s+round|series\s+[ab]|funding|gadget|"
         r"firmware|os\s+update|gpu|cpu|processor|developer|api|framework)\b",
         re.IGNORECASE,
@@ -381,21 +405,32 @@ def _domain_of(url: str) -> str:
 def rerank_results_by_trust(results: List[Dict[str, Any]], query: str, url_key: str = "url") -> List[Dict[str, Any]]:
     """
     Stable-sorts search results so trusted, on-topic domains come first.
-    Trusted-but-off-topic and untrusted results keep their original relative
-    order — promotion only, never demotion-below-relevance.
+    Dedicated live score providers (livescore.com, flashscore.com, official leagues) rank in Tier 0
+    for sports queries, strictly above broadcast/cable news portals like nbcsports.com (Tier 2).
     """
     if not results:
         return results
     cats = _search_categories(query)
 
-    trusted_domains: set = set(_TRUSTED_SOURCE_DOMAINS["general"])
-    for cat in cats:
-        trusted_domains |= _TRUSTED_SOURCE_DOMAINS.get(cat, set())
+    def _domain_tier(d: str) -> int:
+        if "sports" in cats:
+            if d in _SPORTS_PRIORITY_TIER_0:
+                return 0  # Dedicated live scores & official leagues (LiveScore, FlashScore)
+            if d in _SPORTS_PRIORITY_TIER_1:
+                return 1  # Sky Sports, BBC Sport, ESPN
+            if d in _SPORTS_PRIORITY_TIER_2:
+                return 2  # NBC Sports, CBS Sports, TV blogs
+        for cat in cats:
+            if d in _TRUSTED_SOURCE_DOMAINS.get(cat, set()):
+                return 3
+        if d in _TRUSTED_SOURCE_DOMAINS.get("general", set()):
+            return 4
+        return 5
 
     def _rank(idx_item):
         idx, item = idx_item
         d = _domain_of(item.get(url_key, "") or "")
-        return (0 if d in trusted_domains else 1, idx)
+        return (_domain_tier(d), idx)
 
     decorated = sorted(enumerate(results), key=_rank)
     return [item for _, item in decorated]
@@ -407,7 +442,7 @@ async def _perform_tavily_search(query: str) -> tuple:
 
     Unlike snippet-only metasearch, Tavily advanced returns page-level content
     extracts per result plus an optional synthesized answer — this is what
-    closes the quality gap vs Claude-style grounded search.
+    closes the quality gap vs enterprise-grade grounded search.
 
     Returns (google_context, sources) in the same shape as the Gemini grounding
     path. Raises RuntimeError when TAVILY_API_KEY is missing or the call fails,
@@ -457,19 +492,19 @@ async def _perform_tavily_search(query: str) -> tuple:
         chunk += f"\nContent: {content}"
         chunks.append(chunk)
 
-    context_parts = [_search_time_header()]
+    context_parts = [_search_time_header(), f"Search Query: {query}"]
     tavily_answer = (data.get("answer", "") or "").strip()
     if tavily_answer:
-        context_parts.append(f"Search Synthesis: {tavily_answer}")
+        context_parts.append(f"VERIFIED LIVE FACTS & EVIDENCE:\n{tavily_answer}")
     context_parts.append(
-        "Supporting Sources:\n" + ("\n\n".join(chunks) if chunks else "No live web results found.")
+        "GROUNDING SNIPPETS & SOURCES:\n" + ("\n\n".join(chunks) if chunks else "No live web results found.")
     )
     google_context = "\n\n".join(context_parts)
     return google_context, sources[:20]
 
 
 # ── fetch_url: full-page reader (free, no paid API) ───────────────────────────
-# Claude-style lever: after search_web surfaces a promising result, read the
+# High-fidelity lever: after search_web surfaces a promising result, read the
 # actual page content instead of synthesising from thin snippets.
 
 class _HTMLTextExtractor(HTMLParser):
@@ -524,6 +559,29 @@ async def _perform_fetch_url(url: str) -> str:
         return "fetch_url error: no URL provided."
     if not url.startswith(("http://", "https://")):
         return f"fetch_url error: '{url[:100]}' is not a valid http(s) URL."
+
+    # 1. Intercept YouTube URLs for rich transcript & timed speech extraction
+    try:
+        from app.services.youtube_intelligence import YouTubeIntelligence
+        if YouTubeIntelligence.contains_youtube_link(url):
+            yt_res = await YouTubeIntelligence.process_youtube_url(url)
+            if yt_res.get("success"):
+                return yt_res.get("formatted_context", "")
+            return f"fetch_url (YouTube): {yt_res.get('error', 'Could not retrieve video transcript')}"
+    except Exception as yt_err:
+        logger.warning(f"fetch_url YouTube interception error: {yt_err}")
+
+    # 2. Intercept LinkedIn / Facebook URLs to bypass login authwalls via Google Search Grounding
+    try:
+        if "linkedin.com/in/" in url or "facebook.com/" in url:
+            from app.services.handle_intelligence import HandleIntelligence
+            platform = "linkedin" if "linkedin.com" in url else "facebook"
+            prof_res = await HandleIntelligence.lookup_profile(url, platform=platform)
+            if prof_res.get("success"):
+                return prof_res.get("summary", "")
+            return f"fetch_url ({platform.capitalize()}): {prof_res.get('error', 'Could not resolve profile')}"
+    except Exception as prof_err:
+        logger.warning(f"fetch_url Profile interception error: {prof_err}")
 
     try:
         async with httpx.AsyncClient(
@@ -598,8 +656,7 @@ async def _perform_google_search(
         if not keys:
             raise RuntimeError("No Google/Gemini API keys configured in environment.")
 
-        # Contextualize query with conversation history so search is aware of previous turns (e.g. "who won")
-        gemini_query = query
+        history_context = ""
         if history:
             history_context = "Recent conversation context:\n"
             for msg in history[-5:]:
@@ -609,11 +666,26 @@ async def _perform_google_search(
                     parts = content.split("[Google Search Result for:")
                     content = parts[0].strip()
                 history_context += f"{role}: {content}\n"
-            gemini_query = (
-                f"{history_context}\n"
-                f"Current Query: {query}\n\n"
-                "Please search Google and answer the Current Query using the conversation context above."
+            history_context += "\n"
+
+        sports_instruction = ""
+        if "sports" in _search_categories(query):
+            sports_instruction = (
+                "\nSPORTS GROUNDING MANDATE:\n"
+                "- Search for live scores, match fixtures, and results on dedicated live score platforms (LiveScore, FlashScore, official league sites).\n"
+                "- CRITICAL FOR GOALLESS MATCHES: If a match is in progress or completed and reported as 'goalless', 'deadlocked', or '0-0', the exact score IS 0 - 0. Never say 'score is unavailable' when a game is goalless.\n"
+                "- Extract exact home and away team names, numeric score (e.g. 0-0, 2-1), match clock/status, and all goal/card events."
             )
+
+        gemini_query = (
+            f"{_search_time_header()}\n\n"
+            f"{history_context}"
+            f"Target Query: {query}\n\n"
+            "INSTRUCTION: Search Google for the target query, strictly resolving any ambiguous pronouns ('they', 'their', 'it') from the conversation context into concrete entity names. "
+            "Retrieve and extract dense, verified, factual details: exact scores, statistics, names, key events, and publication dates. "
+            f"{sports_instruction}\n"
+            "Do NOT write conversational filler, introductory pleasantries, or generic recaps."
+        )
 
         last_exc = None
         for idx, key in enumerate(keys):
@@ -657,16 +729,19 @@ async def _perform_google_search(
                     for s in sources[:6]:
                         search_chunks.append(f"Source: {s['title']}\nURL: {s['url']}")
 
-                google_context = "\n\n".join(search_chunks[:14]) if search_chunks else "No live web results found."
+                google_context_chunks = "\n\n".join(search_chunks[:14]) if search_chunks else ""
                 
-                # Include Gemini's synthesized answer so the agent in the loop has access to the full response
-                gemini_text = getattr(g_response, "text", "") or ""
+                # Format as grounded evidence blocks rather than a pre-chewed essay
+                gemini_text = (getattr(g_response, "text", "") or "").strip()
+                context_parts = [_search_time_header(), f"Search Query: {query}"]
                 if gemini_text:
-                    google_context = (
-                        f"Search Query: {query}\n"
-                        f"Search Synthesis: {gemini_text}\n\n"
-                        f"Supporting Grounding Context:\n{google_context}"
-                    )
+                    context_parts.append(f"VERIFIED LIVE FACTS & EVIDENCE:\n{gemini_text}")
+                if google_context_chunks:
+                    context_parts.append(f"GROUNDING SNIPPETS & SUPPORTS:\n{google_context_chunks}")
+                if not gemini_text and not google_context_chunks:
+                    context_parts.append("No live web results found.")
+
+                google_context = "\n\n".join(context_parts)
                 # Promote trusted sources to the front of the source list.
                 sources = rerank_results_by_trust(sources, query)
                 return google_context, sources[:20]  # Increased cap: frontend de-duplicates across iterations
@@ -713,12 +788,20 @@ async def _perform_google_search(
     )
 
     system_prompt = (
-        "You are an elite enterprise AI assistant. "
-        "Answer the user's question accurately using the real-time web context below, "
-        "retrieved directly from Google Search. Cite sources when referencing specific facts.\n\n"
-        "--- GOOGLE LIVE WEB CONTEXT ---\n"
+        "You are an elite real-time intelligence assistant. "
+        "Your task is to answer the user's question accurately using the live web grounding evidence below.\n\n"
+        "FACTUAL DENSITY & ANTI-FLUFF RULES:\n"
+        "1. Lead immediately with the direct answer, exact figures, scores, dates, status, and concrete facts. Do NOT write boilerplate introductory recaps or generic summaries.\n"
+        "2. If the user asks for a live score, match update, or team name (e.g. 'Liverpool', 'Chelsea'): state the exact current score, minute/status, and key events in the very first sentence.\n"
+        "   - LIVE STATUS ACCURACY: If a match is in progress, state the active clock or half (e.g. '45\\' + 3\\'', 'HT', 'LIVE — second half', '68\\''). NEVER report 'FT' (Full Time) for an ongoing match.\n"
+        "   - GOALLESS MATCHES: If a game is in progress or completed and reported as 'goalless' or 'no goals yet', the score IS 0 - 0. NEVER state 'live score is unavailable' when a game is goalless.\n"
+        "   - SPORTS SCOREBOARD CARD: Whenever a live match, completed game, or upcoming fixture is discussed, ALWAYS include a ```sports_card JSON block (or invoke render_sports_card) with home_team, away_team, home_score (use 0 if goalless), away_score (use 0 if goalless), status, competition, and the FULL events list (goals, yellow/red cards, substitutions).\n"
+        "3. Prioritize information timestamped with the current calendar year. Disregard outdated historical articles if they conflict with live data.\n"
+        "4. Use bullet points or concise data blocks for multi-item facts or statistics.\n"
+        "5. Cite every factual claim using [n](url) markers corresponding to the sources below.\n\n"
+        "--- LIVE WEB GROUNDING EVIDENCE ---\n"
         f"{google_context}\n"
-        "--- END CONTEXT ---"
+        "--- END LIVE WEB EVIDENCE ---"
     )
 
     try:
@@ -1198,6 +1281,8 @@ async def chat_stream_generator(
     compaction_summary: Optional[str] = None,
     reasoning_effort: Optional[str] = None,  # GPT-5.6 reasoning effort tier
     complexity: Optional[str] = None,        # Rule-classified complexity tier
+    workstation_access_enabled: bool = False,
+    review_policy: Optional[str] = None,
 ):
     """
     Streams a response from the Azure OpenAI Responses API (ADR-002).
@@ -1273,7 +1358,9 @@ async def chat_stream_generator(
             
         datetime_context = (
             f"\n\n[System Context: Current User Time is {local_now.strftime('%I:%M %p')}, "
-            f"Date is {local_now.strftime('%A, %B %d, %Y')} ({tz_label}).]"
+            f"Date is {local_now.strftime('%A, %B %d, %Y')} ({tz_label}).\n"
+            f"TEMPORAL CONFLICT MANDATE: The current calendar year is {local_now.year}. When evaluating web search results or real-time events, strictly prioritize documents timestamped {local_now.year} over historical data. Never confuse prior years or past seasons with current events.\n"
+            f"FACTUAL DENSITY MANDATE: When synthesizing web search results, lead directly with verified facts, exact scores, metrics, names, and dates. Avoid excessive introductory summaries and conversational padding.]"
         )
         full_system = system_prompt + datetime_context
         if routing_mode in ("think", "solve"):
@@ -1327,6 +1414,14 @@ async def chat_stream_generator(
             # Only spin up autonomous multi-step orchestrator for non-greeting tasks
             if not is_greeting:
                 agent_cfg = await get_agent_mode_config()
+                if review_policy:
+                    agent_cfg["review_policy"] = review_policy
+                    if review_policy == "always_ask":
+                        agent_cfg["auto_approve_level"] = "medium"
+                    elif review_policy == "always_proceed":
+                        agent_cfg["auto_approve_level"] = "high"
+                if workstation_access_enabled:
+                    agent_cfg["workstation_access_enabled"] = True
                 task = AgentTask(
                     conversation_id=conversation_id,
                     user_id=user_id,
@@ -1370,6 +1465,63 @@ async def chat_stream_generator(
                             )
                         break
             if last_user_msg:
+                # ── Auto-Detect YouTube URLs & Pre-fetch Transcript Context ──
+                try:
+                    from app.services.youtube_intelligence import YouTubeIntelligence
+                    if YouTubeIntelligence.contains_youtube_link(last_user_msg):
+                        yield (
+                            "data: "
+                            + json.dumps({
+                                "type": "search_activity",
+                                "status": "searching",
+                                "label": "Extracting YouTube video details & transcript...",
+                            })
+                            + "\n\n"
+                        )
+                        yt_res = await YouTubeIntelligence.process_youtube_url(last_user_msg)
+                        if yt_res.get("success"):
+                            full_system += f"\n\n[ATTACHED YOUTUBE VIDEO CONTEXT]:\n{yt_res.get('formatted_context', '')}\n"
+                            yield (
+                                "data: "
+                                + json.dumps({
+                                    "type": "search_activity",
+                                    "status": "done",
+                                    "label": f"Extracted transcript for '{yt_res.get('title', 'YouTube Video')}' ({yt_res.get('word_count', 0)} words)",
+                                })
+                                + "\n\n"
+                            )
+                except Exception as yt_err:
+                    logger.warning("Auto YouTube transcript pre-fetch skipped: %s", yt_err)
+
+                # ── Auto-Detect LinkedIn / Facebook Profile URLs ──
+                try:
+                    from app.services.handle_intelligence import HandleIntelligence
+                    if "linkedin.com/in/" in last_user_msg or "facebook.com/" in last_user_msg:
+                        platform = "linkedin" if "linkedin.com" in last_user_msg else "facebook"
+                        yield (
+                            "data: "
+                            + json.dumps({
+                                "type": "search_activity",
+                                "status": "searching",
+                                "label": f"Bypassing authwall & extracting {platform.capitalize()} profile...",
+                            })
+                            + "\n\n"
+                        )
+                        prof_res = await HandleIntelligence.lookup_profile(last_user_msg, platform=platform)
+                        if prof_res.get("success"):
+                            full_system += f"\n\n[VERIFIED {platform.upper()} PROFILE CONTEXT]:\n{prof_res.get('summary', '')}\n"
+                            yield (
+                                "data: "
+                                + json.dumps({
+                                    "type": "search_activity",
+                                    "status": "done",
+                                    "label": f"Extracted verified {platform.capitalize()} profile for {prof_res.get('name', 'User')}",
+                                })
+                                + "\n\n"
+                            )
+                except Exception as prof_err:
+                    logger.warning("Auto profile lookup pre-fetch skipped: %s", prof_err)
+
                 plan_text = await generate_plan(
                     user_message=last_user_msg,
                     conversation_history=messages[:-1] if len(messages) > 1 else None,
@@ -1724,6 +1876,7 @@ async def chat_stream_generator(
 
                 # Execute all tool calls in this turn
                 tool_outputs = []
+                paused_for_user_input = False
                 for tc in current_tool_calls:
                     t_name = tc["name"]
                     t_args_str = tc["arguments"]
@@ -1741,6 +1894,10 @@ async def chat_stream_generator(
                         elif t_name == "fetch_url":
                             u = args.get("url", "")
                             step_label = f"Reading page: {u[:60]}" if u else "Reading web page..."
+                        elif t_name == "youtube_transcript":
+                            step_label = "Extracting YouTube video transcript & details..."
+                        elif t_name == "lookup_handle":
+                            step_label = "Looking up profile via Google Search Grounding..."
                         elif t_name == "memory_save":
                             step_label = "Saving to conversation memory..."
                         elif t_name == "memory_recall":
@@ -1936,6 +2093,77 @@ async def chat_stream_generator(
                         except Exception as e:
                             logger.error(f"Agent fetch_url failed: {e}")
                             tool_outputs.append(f"fetch_url error: {str(e)}")
+
+                    elif t_name == "youtube_transcript":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            url_or_id = args.get("url_or_id") or args.get("url") or ""
+                            if url_or_id:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": "Extracting YouTube video details & transcript...",
+                                    })
+                                    + "\n\n"
+                                )
+                                from app.services.youtube_intelligence import YouTubeIntelligence
+                                yt_res = await YouTubeIntelligence.process_youtube_url(url_or_id)
+                                if yt_res.get("success"):
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "search_activity",
+                                            "status": "done",
+                                            "label": f"Extracted transcript for '{yt_res.get('title', 'YouTube Video')}' ({yt_res.get('word_count', 0)} words)",
+                                        })
+                                        + "\n\n"
+                                    )
+                                    tool_outputs.append(yt_res.get("formatted_context", ""))
+                                else:
+                                    tool_outputs.append(f"youtube_transcript error: {yt_res.get('error', 'Could not retrieve video transcript')}")
+                            else:
+                                tool_outputs.append("youtube_transcript error: url_or_id is required.")
+                        except Exception as e:
+                            logger.error(f"Agent youtube_transcript failed: {e}")
+                            tool_outputs.append(f"youtube_transcript error: {str(e)}")
+
+                    elif t_name == "lookup_handle":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            handle_or_url = args.get("handle_or_url") or args.get("handle") or ""
+                            plat = args.get("platform", "auto")
+                            if handle_or_url:
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "search_activity",
+                                        "status": "searching",
+                                        "label": f"Looking up profile for: {handle_or_url[:60]}",
+                                    })
+                                    + "\n\n"
+                                )
+                                from app.services.handle_intelligence import HandleIntelligence
+                                prof_res = await HandleIntelligence.lookup_profile(handle_or_url, platform=plat)
+                                if prof_res.get("success"):
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "search_activity",
+                                            "status": "done",
+                                            "label": f"Retrieved profile on {prof_res.get('platform', plat).capitalize()}",
+                                        })
+                                        + "\n\n"
+                                    )
+                                    tool_outputs.append(prof_res.get("summary", ""))
+                                else:
+                                    tool_outputs.append(f"lookup_handle error: {prof_res.get('error', 'Could not retrieve profile')}")
+                            else:
+                                tool_outputs.append("lookup_handle error: handle_or_url is required.")
+                        except Exception as e:
+                            logger.error(f"Agent lookup_handle failed: {e}")
+                            tool_outputs.append(f"lookup_handle error: {str(e)}")
 
                     elif t_name == "memory_save":
                         try:
@@ -2504,7 +2732,7 @@ async def chat_stream_generator(
 
                     elif t_name in (
                         "render_options_card", "render_step_flow", "render_itinerary",
-                        "render_map", "render_quiz", "render_translation",
+                        "render_map", "render_quiz", "render_translation", "render_sports_card",
                     ):
                         try:
                             args = json.loads(t_args_str or "{}")
@@ -2514,7 +2742,11 @@ async def chat_stream_generator(
                                 tool_outputs.append(f"{t_name} schema error: {card_err}")
                             else:
                                 # Emit SSE display_card event — frontend renders native UI component
-                                card_summary = args.get("summary") or args.get("title") or t_name
+                                card_summary = (
+                                    args.get("summary")
+                                    or args.get("title")
+                                    or (f"{args.get('home_team')} {args.get('home_score')} - {args.get('away_score')} {args.get('away_team')}" if t_name == "render_sports_card" else t_name)
+                                )
                                 yield (
                                     "data: "
                                     + json.dumps({
@@ -2539,7 +2771,114 @@ async def chat_stream_generator(
                             logger.error(f"Agent {t_name} failed: {e}")
                             tool_outputs.append(f"{t_name} error: {str(e)}")
 
+                    elif t_name == "present_deliverable":
+                        try:
+                            args = json.loads(t_args_str or "{}")
+                            p_name = args.get("project_name") or args.get("title") or "Project Deliverable"
+                            p_entry = args.get("entry_file") or "index.html"
+                            p_files = args.get("files") or []
+
+                            from app.services.code_sandbox import get_or_create_sandbox_workspace, _upload_generated_file
+                            from app.services.google_drive import upload_to_google_drive
+                            import zipfile
+
+                            workspace_root, src_dir, data_dir = get_or_create_sandbox_workspace(conversation_id)
+                            presented_items = []
+
+                            candidate_files = []
+                            if p_files and isinstance(p_files, list):
+                                for pf in p_files:
+                                    fname = pf if isinstance(pf, str) else (pf.get("filename", "") if isinstance(pf, dict) else "")
+                                    if fname:
+                                        candidate_files.append(fname.replace("\\", "/").strip("/"))
+                            elif os.path.exists(data_dir):
+                                for r, d, fs in os.walk(data_dir):
+                                    d[:] = [x for x in d if x not in (".git", "node_modules", ".venv", "__pycache__")]
+                                    for f in fs:
+                                        if f not in ("script.py", "script.js", "command.sh", "project.zip"):
+                                            candidate_files.append(os.path.relpath(os.path.join(r, f), data_dir).replace("\\", "/"))
+
+                            for rel_f in candidate_files:
+                                full_p = os.path.join(data_dir, rel_f)
+                                if os.path.exists(full_p) and os.path.isfile(full_p):
+                                    try:
+                                        with open(full_p, "rb") as f_in:
+                                            b_data = f_in.read()
+                                        mime_t, _ = mimetypes.guess_type(rel_f)
+                                        f_url = await _upload_generated_file(
+                                            file_bytes=b_data,
+                                            filename=rel_f,
+                                            mime_type=mime_t or "application/octet-stream",
+                                            conversation_id=conversation_id,
+                                            user_id=user_id,
+                                        )
+                                        presented_items.append({
+                                            "filename": rel_f,
+                                            "download_url": f_url,
+                                            "size_bytes": len(b_data),
+                                        })
+                                    except Exception as up_err:
+                                        logger.warning(f"Failed to upload {rel_f} for present_deliverable: {up_err}")
+
+                            # Build project.zip if multiple files exist
+                            if len(candidate_files) > 1 and os.path.exists(data_dir):
+                                try:
+                                    import io as _io
+                                    z_buf = _io.BytesIO()
+                                    with zipfile.ZipFile(z_buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                                        for root_z, dirs_z, files_z in os.walk(data_dir):
+                                            dirs_z[:] = [d for d in dirs_z if d not in (".git", "node_modules", ".venv", "__pycache__")]
+                                            for fz in files_z:
+                                                if fz in ("script.py", "script.js", "command.sh", "project.zip"):
+                                                    continue
+                                                fp_z = os.path.join(root_z, fz)
+                                                zf.write(fp_z, arcname=os.path.relpath(fp_z, data_dir))
+                                    z_bytes = z_buf.getvalue()
+                                    if z_bytes:
+                                        zip_p = os.path.join(data_dir, "project.zip")
+                                        with open(zip_p, "wb") as zf_out:
+                                            zf_out.write(z_bytes)
+                                        try:
+                                            await upload_to_google_drive(user_id, conversation_id, data_dir)
+                                        except Exception as gd_err:
+                                            logger.warning(f"Google Drive sync in present_deliverable: {gd_err}")
+                                        z_url = await _upload_generated_file(
+                                            file_bytes=z_bytes,
+                                            filename="project.zip",
+                                            mime_type="application/zip",
+                                            conversation_id=conversation_id,
+                                            user_id=user_id,
+                                        )
+                                        presented_items.append({
+                                            "filename": "project.zip",
+                                            "download_url": z_url,
+                                            "size_bytes": len(z_bytes),
+                                        })
+                                except Exception as z_err:
+                                    logger.warning(f"Error creating project.zip in present_deliverable: {z_err}")
+
+                            if presented_items:
+                                accumulated_files.extend(presented_items)
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "generated_files",
+                                        "files": presented_items,
+                                    })
+                                    + "\n\n"
+                                )
+                                tool_outputs.append(
+                                    f"Successfully presented deliverable '{p_name}' with {len(presented_items)} files. "
+                                    "The interactive preview and repository card are now displayed."
+                                )
+                            else:
+                                tool_outputs.append(f"present_deliverable notice: No files found in sandbox to present.")
+                        except Exception as e:
+                            logger.error(f"Agent present_deliverable failed: {e}")
+                            tool_outputs.append(f"present_deliverable error: {str(e)}")
+
                     elif t_name == "weather_fetch":
+
                         try:
                             from app.services.weather_service import fetch_weather
                             args = json.loads(t_args_str or "{}")
@@ -2561,6 +2900,17 @@ async def chat_stream_generator(
                             opts = args.get("options") or []
                             sel_type = args.get("select_type", "single_select")
                             if q and opts and isinstance(opts, list):
+                                # Emit both event types to ensure full frontend compatibility
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "type": "agent_ask_user_input",
+                                        "question": q,
+                                        "options": opts,
+                                        "select_type": sel_type,
+                                    })
+                                    + "\n\n"
+                                )
                                 yield (
                                     "data: "
                                     + json.dumps({
@@ -2571,11 +2921,22 @@ async def chat_stream_generator(
                                     })
                                     + "\n\n"
                                 )
+                                if not assistant_content.strip():
+                                    assistant_content = q
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "type": "content_block_delta",
+                                            "delta": {"type": "text_delta", "text": q},
+                                        })
+                                        + "\n\n"
+                                    )
                                 tool_outputs.append(
                                     f"Presented question with tappable options to user: '{q}' "
                                     f"Options: {', '.join(str(o) for o in opts)}. "
-                                    "Awaiting user selection on next turn."
+                                    "Paused for user selection."
                                 )
+                                paused_for_user_input = True
                             else:
                                 tool_outputs.append("ask_user_input error: 'question' and non-empty 'options' list required.")
                         except Exception as e:
@@ -2620,6 +2981,10 @@ async def chat_stream_generator(
                         "role": "system",
                         "content": f"[Tool Output for {tc['name']}]:\n{t_out}"
                     })
+
+                if paused_for_user_input:
+                    logger.info("Halting conversational OODA loop to await user interactive input.")
+                    break
 
                 iteration += 1
                 continue
@@ -2840,15 +3205,24 @@ async def chat_stream_generator(
 def is_code_or_text_file(filename: str, mime_type: str = "") -> bool:
     _, ext = os.path.splitext(filename.lower())
     code_extensions = {
-        ".txt", ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".java", 
-        ".py", ".c", ".cpp", ".h", ".cs", ".sh", ".json", ".md", 
-        ".yaml", ".yml", ".xml", ".sql", ".csv", ".rs", ".go", ".rb", 
-        ".php", ".kt", ".gradle", ".properties", ".ipynb", ".ini", ".cfg",
-        ".bat", ".cmd", ".ps1"
+        ".txt", ".html", ".htm", ".css", ".js", ".mjs", ".ts", ".tsx", ".jsx", 
+        ".vue", ".svelte", ".java", ".py", ".c", ".cpp", ".cc", ".h", ".hpp", 
+        ".cs", ".sh", ".bash", ".json", ".md", ".yaml", ".yml", ".xml", ".sql", 
+        ".csv", ".tsv", ".rs", ".go", ".rb", ".php", ".kt", ".swift", ".scala", 
+        ".r", ".lua", ".dart", ".zig", ".sol", ".wasm", ".gradle", ".properties", 
+        ".ipynb", ".ini", ".cfg", ".bat", ".cmd", ".ps1", ".toml", ".env", 
+        ".dockerfile", ".graphql", ".gql", ".proto", ".diff", ".patch", ".log", ".tex"
     }
     if ext in code_extensions:
         return True
-    if mime_type and (mime_type.startswith("text/") or mime_type == "application/json" or mime_type == "application/javascript"):
+    if mime_type and (
+        mime_type.startswith("text/") 
+        or mime_type in {
+            "application/json", "application/javascript", "application/xml", 
+            "application/x-yaml", "application/toml", "application/graphql", 
+            "application/x-sh", "application/dart"
+        }
+    ):
         return True
     return False
 
@@ -3050,12 +3424,29 @@ async def stream_chat(
             logger.warning(f"Non-fatal error resolving conversation {conversation_id}, continuing stream: {e}")
             nano_turn_count = 0
 
+    # Inspect attachments early to guide model routing and extraction
+    attachments = payload.get("attachments", [])
+    has_ocr_attachments = False
+    has_non_ocr_attachments = False
+    img_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".ico", ".tiff", ".tif", ".avif", ".heic", ".heif"}
+
+    for att in attachments:
+        fname = (att.get("filename") or "").lower()
+        mime = (att.get("mime_type") or "").lower()
+        _, aext = os.path.splitext(fname)
+        if aext in img_exts or (mime and mime.startswith("image/")):
+            has_ocr_attachments = True
+        elif fname:
+            has_non_ocr_attachments = True
+
     # 2. Route through the model router
     decision = await model_router.route(
         user_message=last_user_msg,
         mode=mode,
         conversation_id=conversation_id,
         nano_turn_count=nano_turn_count,
+        has_non_ocr_attachments=has_non_ocr_attachments,
+        has_ocr_attachments=has_ocr_attachments,
     )
 
     logger.info(
@@ -3067,7 +3458,6 @@ async def stream_chat(
     )
 
     # Process and place attachments into active conversation sandbox
-    attachments = payload.get("attachments", [])
     injected_code_prompts = []
     injected_binary_files = []
     injected_image_files = []
@@ -3090,6 +3480,14 @@ async def stream_chat(
         logger.debug(f"Non-fatal workspace hydration warning: {ws_err}")
 
     if attachments:
+        from app.services.document_processor import DocumentProcessor
+
+        archive_exts = {".zip", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz", ".7z", ".rar", ".zst", ".lzma", ".cab", ".iso", ".dmg"}
+        tabular_exts = {".xlsx", ".xls", ".xlsm", ".csv", ".tsv", ".ods", ".parquet"}
+        doc_exts = {".docx", ".pdf", ".doc", ".rtf", ".odt", ".odp", ".epub", ".tex"}
+        audio_exts = {".mp3", ".wav", ".m4a", ".ogg", ".opus", ".oga", ".amr", ".flac", ".aac"}
+        model_exts = {".pb", ".onnx"}
+
         for att in attachments:
             att_name = att.get("filename", "")
             att_url = att.get("url", "")
@@ -3098,55 +3496,121 @@ async def stream_chat(
             if att_name:
                 ext = os.path.splitext(att_name.lower())[1]
                 is_code = is_code_or_text_file(att_name, att_mime)
-                is_image = ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".ico", ".tiff", ".avif"}
-                is_binary = ext in {".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".zip", ".tar", ".gz", ".7z", ".mp3", ".wav", ".m4a"} or is_image
+                is_image = ext in img_exts or (att_mime and att_mime.startswith("image/"))
+                is_archive = ext in archive_exts
+                is_tabular = ext in tabular_exts
+                is_doc = ext in doc_exts
+                is_audio = ext in audio_exts or (att_mime and att_mime.startswith("audio/"))
+                is_model = ext in model_exts
                 
-                if is_code or is_binary:
-                    try:
-                        content_bytes = await _fetch_attachment_bytes(att)
-                        if content_bytes is not None:
-                            file_path = os.path.join(data_dir, att_name)
-                            with open(file_path, "wb") as f:
-                                f.write(content_bytes)
-                            src_file_path = os.path.join(src_dir, att_name)
-                            with open(src_file_path, "wb") as f:
-                                f.write(content_bytes)
-                                
-                            logger.info(f"Successfully downloaded and placed file {att_name} in sandbox: {file_path}")
+                try:
+                    content_bytes = await _fetch_attachment_bytes(att)
+                    if content_bytes is not None:
+                        file_path = os.path.join(data_dir, att_name)
+                        with open(file_path, "wb") as f:
+                            f.write(content_bytes)
+                        src_file_path = os.path.join(src_dir, att_name)
+                        with open(src_file_path, "wb") as f:
+                            f.write(content_bytes)
                             
-                            if is_code:
-                                try:
-                                    content_str = content_bytes.decode("utf-8", errors="replace")
-                                except Exception:
-                                    content_str = "[Binary or non-UTF-8 content]"
-                                    
-                                # Truncate content to avoid token limits (max 40k chars)
-                                if len(content_str) > 40000:
-                                    content_str = content_str[:40000] + "\n... [TRUNCATED] ..."
-                                    
+                        logger.info(f"Successfully downloaded and placed file {att_name} in sandbox: {file_path}")
+                        
+                        # 1. Compressed Archives (decompressed into sandbox, directory tree & preview generated)
+                        if is_archive:
+                            target_unpacked = os.path.join(data_dir, f"unpacked_{os.path.splitext(att_name)[0]}")
+                            arch_info = DocumentProcessor.extract_archive(file_path, target_unpacked)
+                            try:
+                                shutil.copytree(target_unpacked, os.path.join(src_dir, f"unpacked_{os.path.splitext(att_name)[0]}"), dirs_exist_ok=True)
+                            except Exception as cpy_err:
+                                logger.debug(f"Non-fatal mirror error for unpacked archive {att_name}: {cpy_err}")
+
+                            tree_str = arch_info.get("file_tree", "")
+                            num_files = arch_info.get("total_files", len(arch_info.get("extracted_files", [])))
+                            summary_lines = [
+                                f"--- ARCHIVE ARCHITECTURE: {att_name} ---",
+                                f"Extracted {num_files} files into sandbox workspace (`unpacked_{os.path.splitext(att_name)[0]}/`).",
+                                f"Directory Tree:\n{tree_str}"
+                            ]
+                            previews = arch_info.get("previews", {})
+                            if previews:
+                                summary_lines.append("\nKey File Previews:")
+                                for p_name, p_body in list(previews.items())[:5]:
+                                    summary_lines.append(f"File `{p_name}`:\n```\n{p_body[:1500]}\n```")
+                            summary_lines.append(f"--- END ARCHIVE: {att_name} ---")
+                            injected_code_prompts.append("\n".join(summary_lines))
+                            injected_binary_files.append(att_name)
+
+                        # 2. Tabular Data (spreadsheets & CSVs parsed to markdown tables)
+                        elif is_tabular:
+                            tabular_str = DocumentProcessor.extract_tabular_summary(file_path)
+                            if tabular_str:
                                 injected_code_prompts.append(
-                                    f"--- START FILE: {att_name} ---\n{content_str}\n--- END FILE: {att_name} ---"
+                                    f"--- TABULAR SUMMARY: {att_name} ---\n{tabular_str}\n--- END TABULAR SUMMARY: {att_name} ---"
                                 )
-                            elif is_image:
-                                b64_img = base64.b64encode(content_bytes).decode("ascii")
-                                mime = att_mime or "image/png"
-                                data_uri = f"data:{mime};base64,{b64_img}"
-                                vision_image_data_uris.append(data_uri)
-                                injected_image_files.append(f"- `{att_name}`")
-                                injected_binary_files.append(att_name)
-                            else:
-                                injected_binary_files.append(att_name)
-                    except Exception as e:
-                        logger.error(f"Failed to process attachment {att_name}: {e}")
+                            injected_binary_files.append(att_name)
+
+                        # 3. Documents (.docx, .pdf, .rtf native text extraction)
+                        elif is_doc:
+                            doc_text = DocumentProcessor.extract_document_text(file_path)
+                            if doc_text and doc_text.strip():
+                                injected_code_prompts.append(
+                                    f"--- EXTRACTED DOCUMENT TEXT: {att_name} ---\n{doc_text}\n--- END DOCUMENT TEXT: {att_name} ---"
+                                )
+                            injected_binary_files.append(att_name)
+
+                        # 4. Code & Text Files (decoded directly as UTF-8)
+                        elif is_code:
+                            try:
+                                content_str = content_bytes.decode("utf-8", errors="replace")
+                            except Exception:
+                                content_str = "[Binary or non-UTF-8 content]"
+                                
+                            # Truncate content to avoid token limits (max 40k chars)
+                            if len(content_str) > 40000:
+                                content_str = content_str[:40000] + "\n... [TRUNCATED] ..."
+                                
+                            injected_code_prompts.append(
+                                f"--- START FILE: {att_name} ---\n{content_str}\n--- END FILE: {att_name} ---"
+                            )
+
+                        # 5. Multimodal Images / OCR
+                        elif is_image:
+                            b64_img = base64.b64encode(content_bytes).decode("ascii")
+                            mime = att_mime or "image/png"
+                            data_uri = f"data:{mime};base64,{b64_img}"
+                            vision_image_data_uris.append(data_uri)
+                            injected_image_files.append(f"- `{att_name}`")
+                            injected_binary_files.append(att_name)
+
+                        # 6. Audio & WhatsApp Voice Notes
+                        elif is_audio:
+                            audio_tag = f"{att_name} (Audio format - can be inspected/converted using mutagen, pydub, scipy, ffmpeg in sandbox)"
+                            injected_binary_files.append(audio_tag)
+
+                        # 7. ML Models & Protobuf (.pb, .onnx)
+                        elif is_model:
+                            model_tag = f"{att_name} (Protobuf / ML model - can be inspected via google.protobuf or onnx in sandbox)"
+                            injected_binary_files.append(model_tag)
+
+                        # 8. Other Binaries
+                        else:
+                            injected_binary_files.append(att_name)
+
+                except Exception as e:
+                    logger.error(f"Failed to process attachment {att_name}: {e}")
                         
     # Check all files currently present in the sandbox data directory
     current_sandbox_files = []
     if os.path.exists(data_dir):
         try:
-            current_sandbox_files = [
-                f for f in os.listdir(data_dir)
-                if os.path.isfile(os.path.join(data_dir, f)) and not f.startswith(".")
-            ]
+            for root, dirs, files in os.walk(data_dir):
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                for f in files:
+                    if not f.startswith("."):
+                        rel_p = os.path.relpath(os.path.join(root, f), data_dir)
+                        current_sandbox_files.append(rel_p)
+                if len(current_sandbox_files) >= 100:
+                    break
         except Exception:
             current_sandbox_files = []
 
@@ -3188,11 +3652,20 @@ async def stream_chat(
             all_files_list = ", ".join(f"`{f}`" for f in current_sandbox_files)
             context_parts.append(
                 f"The following user files/images are currently available in your active sandbox workspace:\n"
-                f"[{all_files_list}]\n"
-                "You have full execution and modification access to inspect, analyze, edit, or package these files using "
-                "`sandbox_read`, `sandbox_edit`, `sandbox_write`, and `execute_code` "
-                "(e.g. `PIL.Image.open('filename')`, `fitz.open('filename')`, `openpyxl`, `docx`, `easyocr`, `cv2`, `zipfile`, etc.) "
-                "or describe them directly to answer the user's questions."
+                f"[{all_files_list}]\n\n"
+                "CRITICAL ZERO-EXCUSE FILE ACCESS MANDATE:\n"
+                "- NEVER state 'I cannot find your file', 'I don't have access to your file', or 'I cannot see its content', or ask the user to re-upload.\n"
+                "- All user files uploaded in this conversation are ALREADY saved in your sandbox workspace (`/workspace/data/` or `./`).\n"
+                "- If a file's content is not inlined above (e.g. audio, protobuf `.pb` models, complex binaries, or unscanned docs), you have full autonomous tools (`sandbox_read`, `sandbox_ls`, `execute_code`) to inspect, parse, or execute scripts on them.\n\n"
+                "AUDIO & WHATSAPP MEDIA PROCESSING:\n"
+                "- For audio files (including WhatsApp voice notes `.opus`, `.oga`, `.amr`, `.m4a`, `.aac`, `.mp3`, `.wav`, `.flac`):\n"
+                "  The sandbox environment has internet access. You can autonomously install any audio libraries on demand via `execute_code` (e.g. `pip install mutagen pydub soundfile librosa`). You can extract metadata (duration, sample rate, bit rate, channels), convert `.opus`/`.oga`/`.amr` to `.wav`, plot waveforms, or transcribe/analyze the audio directly.\n\n"
+                "MACHINE LEARNING & PROTOBUF (.pb):\n"
+                "- For `.pb` (Protobuf serialized models / TensorFlow graphs / protocol buffer binaries):\n"
+                "  You can autonomously inspect message descriptors or graph nodes via `execute_code` using `google.protobuf` or `pip install protobuf onnx`.\n\n"
+                "DOCUMENT & PDF EXTRACTION (AI-FIRST INTELLIGENCE):\n"
+                "- Initial text extracted by PyMuPDF or python-docx above is SECONDARY — YOU are the primary intelligence determining accuracy.\n"
+                "- If the extracted text appears noisy, incomplete, scrambled, or missing tables/images (scanned PDF), DO NOT conclude the file has no content. AUTONOMOUSLY inspect the raw file in the sandbox using `execute_code` (`pdfplumber`, `fitz.open()`, rendering pages as PNGs to inspect or OCR with `easyocr` / `pytesseract` / vision). Always deliver thorough and accurate answers."
             )
             
         code_context_str = (
@@ -3310,6 +3783,8 @@ async def stream_chat(
             compaction_summary=compaction_summary,
             reasoning_effort=decision.reasoning_effort,
             complexity=decision.complexity,
+            workstation_access_enabled=bool(payload.get("workstation_access_enabled", False)),
+            review_policy=payload.get("review_policy"),
         ),
         media_type="text/event-stream"
     )

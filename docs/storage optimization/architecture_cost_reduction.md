@@ -1,6 +1,6 @@
 # Cost Reduction & Storage Architecture Study
 
-This study analyzes the current infrastructure (Cloudflare & Azure) and proposes an architectural shift to utilize the user's personal Google Drive for file storage, reducing hosting costs to near zero while retaining a premium **Claude-like** user experience and robust **sandbox reliability**.
+This study analyzes the current infrastructure (Cloudflare & Azure) and proposes an architectural shift to utilize the user's personal Google Drive for file storage, reducing hosting costs to near zero while retaining a premium **Ochuko-like** user experience and robust **sandbox reliability**.
 
 ---
 
@@ -55,14 +55,14 @@ graph LR
 | :--- | :--- | :--- |
 | **Google Drive** | **Primary Storage Repository:** All conversation files, uploads, and sandbox outputs reside here under `/uploads` and `/sandbox_file`. | **$0** (Uses user's free 15 GB Drive quota) |
 | **Cloudflare** | **Edge Routing & Proxy:** Retained only for free CDN hosting of static frontend assets and domain DNS. | **$0** (Free Tier) |
-| **Azure OpenAI** | **Intelligence Engine:** Retained to provide the Claude-like experience (code generation, reasoning, and document parsing). | **Variable** (Optimized via routing) |
+| **Azure OpenAI** | **Intelligence Engine:** Retained to provide the Ochuko-like experience (code generation, reasoning, and document parsing). | **Variable** (Optimized via routing) |
 | **Azure VM/Sandbox** | **Execution Engine:** Local secure python/js sandbox runs scripts with high speed and reliability. | **Fixed Compute** (Unchanged) |
 
 ---
 
-## 3. Maintaining the Claude-like Experience & Sandbox Reliability
+## 3. Maintaining the Ochuko-like Experience & Sandbox Reliability
 
-### The "Claude-like" Experience
+### The "Ochuko-like" Experience
 A premium user experience requires fast UI rendering, immediate document previews, and high-fidelity file exports. 
 * **Seamless Previews:** When the agent generates a PDF/Docx or chart inside `/sandbox_file`, the backend uploads it to Google Drive and obtains a shareable preview/webContent link. The React frontend renders this natively in the chat.
 * **Smart Context Awareness:** The model will receive clean references to files in `/uploads` and output formats in `/sandbox_file`.
@@ -98,5 +98,10 @@ Google Drive Root
 
 ---
 
-## 5. Next Steps
-The setup instructions for the Google Cloud Console have been created in [google_console_setup.md](file:///C:/Users/T14%20GEN%205/.gemini/antigravity-ide/brain/5f120136-5a2d-4ee7-8582-22de6ab995a8/google_console_setup.md) to enable configuring the client credentials and the drive scopes.
+## 5. Implementation Status & Verification
+
+All core storage optimizations have been implemented and verified:
+1. **Google Drive Integration**: Active in `backend/app/services/google_drive.py` and `code_sandbox.py`. Covered by automated unit & integration tests (`test_google_drive_storage.py`).
+2. **Ephemeral Sandbox Auto-Pruning**: Workspaces inactive for > 2 hours are purged automatically (`prune_expired_sandboxes`), safeguarding the 1Gi Container Apps quota.
+3. **Workstation Zero-Blind Upload**: Local directory streaming uses paginated metadata with bloat directory blacklisting (`node_modules`, `.venv`, `.git`) and atomic writes back up to `~/.ochuko/pc_bak/`.
+4. **Unified Repository Deliverable Card**: AI utilizes `present_deliverable` to bundle repositories into `project.zip`, which is stored in Google Drive and Cloudflare R2, and presented in the React UI with live preview and one-click ZIP download.

@@ -8,6 +8,9 @@ import {
   Code2,
   Image as ImageIcon,
   Folder,
+  FolderPlus,
+  Terminal,
+  Copy,
   BookOpen,
   Cpu,
   RefreshCw,
@@ -47,6 +50,11 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
   const [isReviewDropdownOpen, setIsReviewDropdownOpen] = useState<boolean>(false)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'connectors' | 'policies'>('connectors')
+  const [bridgeOnline, setBridgeOnline] = useState<boolean | null>(null)
+  const [mountedFolderName, setMountedFolderName] = useState<string | null>(
+    localStorage.getItem('ochuko_mounted_folder_name')
+  )
+  const [copiedCmd, setCopiedCmd] = useState<boolean>(false)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -68,10 +76,26 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
         })
         if (res.ok) {
           const data = await res.json()
-          setConnectors(data.connectors || [])
-          if (data.connectors && data.connectors.length > 0) {
-            setReviewPolicy(data.connectors[0].review_policy || 'always_ask')
+          let fetched: ConnectorItem[] = data.connectors || []
+          const localWs = localStorage.getItem('ochuko_workstation_access_enabled') === 'true'
+          if (!fetched.some((c) => c.name === 'workstation_access')) {
+            fetched.push({
+              name: 'workstation_access',
+              title: 'Workstation Computer Access MCP',
+              description: 'Direct read, write, directory navigation, and terminal command execution on your workstation (Agent Mode only).',
+              type: 'mcp',
+              category: 'System',
+              icon: 'cpu',
+              is_connected: localWs,
+              permissions: ['read', 'write', 'execute'],
+              review_policy: (localStorage.getItem('ochuko_review_policy') as any) || 'always_ask',
+            })
+          } else {
+            fetched = fetched.map(c => c.name === 'workstation_access' ? { ...c, is_connected: localWs || c.is_connected } : c)
           }
+          setConnectors(fetched)
+          const savedPolicy = (localStorage.getItem('ochuko_review_policy') as any) || (fetched[0]?.review_policy || 'always_ask')
+          setReviewPolicy(savedPolicy)
         }
       } catch (err) {
         console.error('Failed to load connectors:', err)
@@ -80,8 +104,48 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
       }
     }
 
+    const checkBridge = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:3920/health', {
+          method: 'GET',
+          signal: AbortSignal.timeout(1500),
+        })
+        if (res.ok) {
+          setBridgeOnline(true)
+          return
+        }
+      } catch {}
+      setBridgeOnline(false)
+    }
+
     loadData()
+    checkBridge()
   }, [isOpen])
+
+  const handleMountFolder = async () => {
+    try {
+      if (!('showDirectoryPicker' in window)) {
+        alert(
+          'File System Access API is not supported in this browser. Please use Chrome, Edge, or Brave.'
+        )
+        return
+      }
+      const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' })
+      if (dirHandle) {
+        ;(window as any)._ochuko_dir_handle = dirHandle
+        const folderName = dirHandle.name
+        setMountedFolderName(folderName)
+        localStorage.setItem('ochuko_mounted_folder_name', folderName)
+        window.dispatchEvent(
+          new CustomEvent('ochuko_folder_mounted', { detail: { folderName, dirHandle } })
+        )
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('Failed to mount folder:', err)
+      }
+    }
+  }
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -130,6 +194,11 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
         })
       }
 
+      if (connector.name === 'workstation_access') {
+        localStorage.setItem('ochuko_workstation_access_enabled', newActiveState ? 'true' : 'false')
+        window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+      }
+
       setConnectors((prev) =>
         prev.map((c) =>
           c.name === connector.name ? { ...c, is_connected: newActiveState } : c
@@ -145,6 +214,7 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
   const handleUpdateReviewPolicy = async (policy: 'always_ask' | 'always_proceed') => {
     setReviewPolicy(policy)
     setIsReviewDropdownOpen(false)
+    localStorage.setItem('ochuko_review_policy', policy)
 
     try {
       const session = (await supabase.auth.getSession()).data.session
@@ -214,6 +284,8 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
         return <BookOpen className="w-4 h-4 text-emerald-400" />
       case 'filesystem':
         return <Folder className="w-4 h-4 text-amber-400" />
+      case 'workstation_access':
+        return <Cpu className="w-4 h-4 text-cyan-400" />
       default:
         return <Cpu className="w-4 h-4 text-white/70" />
     }
@@ -369,51 +441,146 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
                     return (
                       <div
                         key={c.name}
-                        className="p-3.5 sm:p-4 rounded-xl bg-[#13151d]/70 border border-white/[0.06] hover:border-white/[0.12] transition flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        className="p-3.5 sm:p-4 rounded-xl bg-[#13151d]/70 border border-white/[0.06] hover:border-white/[0.12] transition flex flex-col gap-3"
                       >
-                        <div className="flex items-start gap-3 min-w-0">
-                          <div className="p-2 rounded-lg bg-[#1a1d28] border border-white/[0.05] shrink-0 mt-0.5 sm:mt-0">
-                            {renderIcon(c.name)}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h4 className="text-[13px] font-medium text-white truncate">
-                                {c.title}
-                              </h4>
-                              {c.is_connected && (
-                                <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[9.5px] font-mono text-emerald-400">
-                                  Active
-                                </span>
-                              )}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <div className="p-2 rounded-lg bg-[#1a1d28] border border-white/[0.05] shrink-0 mt-0.5 sm:mt-0">
+                              {renderIcon(c.name)}
                             </div>
-                            <p className="text-[11.5px] text-[#8e95a2] leading-relaxed mt-0.5">
-                              {c.description}
-                            </p>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-[13px] font-medium text-white truncate">
+                                  {c.title}
+                                </h4>
+                                {c.is_connected && (
+                                  <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[9.5px] font-mono text-emerald-400">
+                                    Active
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11.5px] text-[#8e95a2] leading-relaxed mt-0.5">
+                                {c.description}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-white/[0.04]">
+                            <div className="text-[10.5px] font-mono text-[#8e95a2]/70 sm:hidden">
+                              {c.is_connected ? 'Enabled' : 'Disabled'}
+                            </div>
+
+                            {/* WhatsApp / iOS Style Sleek Toggle */}
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleToggleConnector(c)}
+                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                c.is_connected ? 'bg-blue-600' : 'bg-white/[0.12]'
+                              } ${isBusy ? 'opacity-50 cursor-wait' : ''}`}
+                              aria-label={`Toggle ${c.title}`}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                  c.is_connected ? 'translate-x-5' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-white/[0.04]">
-                          <div className="text-[10.5px] font-mono text-[#8e95a2]/70 sm:hidden">
-                            {c.is_connected ? 'Enabled' : 'Disabled'}
-                          </div>
+                        {/* Workstation Access Dual-Tier Details */}
+                        {c.name === 'workstation_access' && c.is_connected && (
+                          <div className="pt-3 border-t border-white/[0.06] space-y-2.5">
+                            {/* Tier 1: Browser Native Folder Mount */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-black/40 border border-white/[0.06]">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <Folder className="w-4 h-4 text-cyan-400 shrink-0" />
+                                  <span className="text-[12px] font-semibold text-white">Browser Folder Mount (Zero Install)</span>
+                                </div>
+                                <p className="text-[11.5px] text-[#8e95a2] mt-0.5">
+                                  {mountedFolderName
+                                    ? `Mounted: ${mountedFolderName}`
+                                    : 'Mount your Downloads, Desktop, or active workspace folder for direct browser read/write access.'}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleMountFolder}
+                                className="shrink-0 px-3.5 py-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[11.5px] font-medium transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <FolderPlus className="w-3.5 h-3.5" />
+                                <span>{mountedFolderName ? 'Change Folder' : 'Mount Local Folder'}</span>
+                              </button>
+                            </div>
 
-                          {/* WhatsApp / iOS Style Sleek Toggle */}
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => handleToggleConnector(c)}
-                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                              c.is_connected ? 'bg-blue-600' : 'bg-white/[0.12]'
-                            } ${isBusy ? 'opacity-50 cursor-wait' : ''}`}
-                            aria-label={`Toggle ${c.title}`}
-                          >
-                            <span
-                              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                                c.is_connected ? 'translate-x-5' : 'translate-x-0'
-                              }`}
-                            />
-                          </button>
-                        </div>
+                            {/* Tier 2: Workstation Companion Bridge */}
+                            <div className="p-3 rounded-xl bg-black/40 border border-white/[0.06] space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <Terminal className="w-4 h-4 text-indigo-400 shrink-0" />
+                                  <span className="text-[12px] font-semibold text-white">Workstation Companion Bridge</span>
+                                </div>
+                                {bridgeOnline === true ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono text-emerald-400">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                    Active (Port 3920)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-400">
+                                    Bridge Offline
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-[#8e95a2] leading-relaxed">
+                                For unconstrained host disk navigation and terminal shell execution on your machine, start the companion bridge:
+                              </p>
+                              {/* Silent Windows Background Daemon */}
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between text-[10px] text-[#8e95a2]">
+                                  <span>Windows (Silent Background - No Terminal):</span>
+                                </div>
+                                <div className="flex items-center gap-2 bg-[#090a0d] border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-cyan-300 overflow-x-auto">
+                                  <span className="flex-1 truncate select-all">run_workstation_bridge.bat background</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText('run_workstation_bridge.bat background')
+                                      setCopiedCmd(true)
+                                      setTimeout(() => setCopiedCmd(false), 2000)
+                                    }}
+                                    className="p-1 rounded text-[#8e95a2] hover:text-white hover:bg-white/[0.06] transition shrink-0 cursor-pointer"
+                                    title="Copy silent launch command"
+                                  >
+                                    {copiedCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                  </button>
+                                </div>
+                              </div>
+                              {/* Standard Python Command */}
+                              <div className="space-y-1.5 pt-1">
+                                <div className="flex items-center justify-between text-[10px] text-[#8e95a2]">
+                                  <span>Cross-Platform (Mac/Linux/Win terminal):</span>
+                                </div>
+                                <div className="flex items-center gap-2 bg-[#090a0d] border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-indigo-300 overflow-x-auto">
+                                  <span className="flex-1 truncate select-all">python -m app.connectors.workstation_bridge</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText('python -m app.connectors.workstation_bridge')
+                                      setCopiedCmd(true)
+                                      setTimeout(() => setCopiedCmd(false), 2000)
+                                    }}
+                                    className="p-1 rounded text-[#8e95a2] hover:text-white hover:bg-white/[0.06] transition shrink-0 cursor-pointer"
+                                    title="Copy command"
+                                  >
+                                    {copiedCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )
                   })}

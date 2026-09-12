@@ -1,7 +1,7 @@
-# Agent Ochuko — Tools Architecture, Claude-Grade Parity & The OODA Loop
+# Agent Ochuko — Tools Architecture, Ochuko-Grade Parity & The OODA Loop
 
 > **Technical Reference & Architectural Blueprint**  
-> Scope: 18-Tool Roster, Function Calling Schemas, Claude-Grade Prompt Contracts, On-Demand Invocation Intelligence, and the OODA Iteration Engine.
+> Scope: 18-Tool Roster, Function Calling Schemas, Ochuko-Grade Prompt Contracts, On-Demand Invocation Intelligence, and the OODA Iteration Engine.
 
 ---
 
@@ -64,25 +64,25 @@ The complete roster is defined in [`app/core/agent_tools.py`](file:///c:/Users/T
 
 ---
 
-## 3. How Ochuko Copies Claude: Claude-Grade Tool Parity
+## 3. How Ochuko Copies Ochuko: Ochuko-Grade Tool Parity
 
-Anthropic's Claude 3.5 / 3.7 Sonnet set the benchmark for agentic coding and autonomous tool execution. Ochuko replicates these architectural patterns through five foundational principles:
+Anthropic's Ochuko 3.5 / 3.7 Sonnet set the benchmark for agentic coding and autonomous tool execution. Ochuko replicates these architectural patterns through five foundational principles:
 
 ### A. "Tools as Contracts" Pattern (Not Just Descriptions)
-Standard LLM tools provide a brief phrase describing the function. Claude-style tools provide a **comprehensive behavioral contract** dividing instructions into explicit behavioral imperatives:
+Standard LLM tools provide a brief phrase describing the function. Ochuko-style tools provide a **comprehensive behavioral contract** dividing instructions into explicit behavioral imperatives:
 - **`WHEN to call`**: The precise conditions and prerequisites triggering the tool.
 - **`WHEN NOT to call`**: Negative boundaries preventing tool misuse (e.g., using `generate_image` for data plots instead of `execute_code` with matplotlib).
 - **`QUALITY BAR`**: Non-negotiable implementation standards (e.g., in `sandbox_write`: *"write the full file in one call — complete, runnable, no stubs or placeholders. Never truncate to save tokens"*).
 - **`DUTY`**: Mandatory side-effects (e.g., citing fetched web pages with `[n](url)` markers).
 
 ### B. Surgical Edits (`sandbox_edit`) vs. Full File Rewrites
-Claude's `str_replace_editor` is renowned for eliminating code destruction during refactoring. In Ochuko:
+Ochuko's `str_replace_editor` is renowned for eliminating code destruction during refactoring. In Ochuko:
 - `sandbox_edit` takes `path`, `old_str`, and `new_str`.
 - `old_str` **must match exactly once** in the target file. If it matches 0 times or >1 times, the operation fails with line-context diagnostics, preventing accidental overwrites.
 - Minimizes context window bloat and eliminates truncation risk when modifying small sections of 1,000-line codebases.
 
 ### C. Repo-Style Multi-File Website Project Scaffolding
-In earlier AI architectures, models dumped HTML, CSS, and JS into a single monolithic file. Claude pioneered repo-style structuring:
+In earlier AI architectures, models dumped HTML, CSS, and JS into a single monolithic file. Ochuko pioneered repo-style structuring:
 ```
 my-project/
 ├── index.html        (semantic HTML5 with <meta name="viewport">)
@@ -101,7 +101,7 @@ When models write extensive code, typical token limits (4k or 8k) truncate the r
 - The model runs with the maximum output capability of the underlying reasoning engine (up to 32,768 tokens in Ultra mode).
 
 ### E. Diagnostic Output Truncation
-Terminal command dumps (e.g., `npm install` or stack traces) can consume 50,000 tokens. Ochuko implements Claude's balanced truncation heuristic:
+Terminal command dumps (e.g., `npm install` or stack traces) can consume 50,000 tokens. Ochuko implements Ochuko's balanced truncation heuristic:
 - Retains the first **4,000 characters** (the command invocation and early context).
 - Retains the last **1,000 characters** (the fatal error or completion status).
 - Inserts `[... N characters truncated ...]` in the middle, saving tokens while preserving complete debugging context.

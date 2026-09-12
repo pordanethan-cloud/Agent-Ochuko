@@ -243,6 +243,50 @@ class VerificationGates:
 
             return True, None
 
+        elif tool_name == "render_sports_card":
+            if not payload.get("home_team") or not str(payload.get("home_team")).strip():
+                return False, "render_sports_card requires a non-empty 'home_team'."
+            if not payload.get("away_team") or not str(payload.get("away_team")).strip():
+                return False, "render_sports_card requires a non-empty 'away_team'."
+            if payload.get("home_score") is None or str(payload.get("home_score")).strip() == "":
+                return False, "render_sports_card requires 'home_score'."
+            if payload.get("away_score") is None or str(payload.get("away_score")).strip() == "":
+                return False, "render_sports_card requires 'away_score'."
+            if not payload.get("status") or not str(payload.get("status")).strip():
+                return False, "render_sports_card requires 'status' (e.g. '45\' + 3\'', 'FT', 'LIVE', etc.)."
+            if not payload.get("competition") or not str(payload.get("competition")).strip():
+                return False, "render_sports_card requires 'competition'."
+            events = payload.get("events")
+            if events is not None:
+                if not isinstance(events, list):
+                    return False, "render_sports_card 'events' must be a list."
+                for idx, ev in enumerate(events):
+                    if not isinstance(ev, dict):
+                        return False, f"Event #{idx + 1} must be an object."
+                    if not ev.get("team") or ev.get("team") not in ("home", "away"):
+                        return False, f"Event #{idx + 1} must have 'team' ('home' or 'away')."
+                    if not ev.get("player"):
+                        return False, f"Event #{idx + 1} must have a 'player' name."
+                    if not ev.get("minute"):
+                        return False, f"Event #{idx + 1} must have a 'minute' (e.g. '7\'')."
+
+            # Server-side sanitization: purge empty, zero-filled, or dummy stats objects
+            stats = payload.get("stats")
+            if isinstance(stats, dict):
+                has_meaningful_stats = False
+                for k, v in stats.items():
+                    if isinstance(v, (list, tuple)):
+                        if any(isinstance(x, (int, float)) and x > 0 for x in v):
+                            has_meaningful_stats = True
+                            break
+                    elif isinstance(v, (int, float)) and v > 0:
+                        has_meaningful_stats = True
+                        break
+                if not has_meaningful_stats:
+                    payload.pop("stats", None)
+
+            return True, None
+
         return False, f"Unknown render card tool: '{tool_name}'"
 
 

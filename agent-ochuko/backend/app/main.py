@@ -71,10 +71,31 @@ async def lifespan(app: FastAPI):
         except Exception as jwks_err:
             logger.warning(f"Lifespan: Failed to spawn JWKS pre-warming task: {jwks_err}")
 
+    # 3. Start background periodic cleanup for container ephemeral disk (/tmp/sandbox_*)
+    # Workspaces inactive for > 2 hours (7200s) are purged every 30 minutes to respect 1Gi limit.
+    sandbox_prune_task = None
+    async def periodic_sandbox_cleanup():
+        from app.services.code_sandbox import prune_expired_sandboxes
+        while True:
+            try:
+                await asyncio.sleep(1800)
+                loop = asyncio.get_running_loop()
+                count = await loop.run_in_executor(None, prune_expired_sandboxes, 7200)
+                if count > 0:
+                    logger.info(f"Ephemeral Disk Cleanup: Auto-pruned {count} stale sandbox workspaces.")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Ephemeral Disk Cleanup error: {e}")
+
+    sandbox_prune_task = asyncio.create_task(periodic_sandbox_cleanup())
+
     _app_ready = True
     start_config_polling(300)
     yield
     stop_config_polling()
+    if sandbox_prune_task and not sandbox_prune_task.done():
+        sandbox_prune_task.cancel()
     _app_ready = False
     logger.info("Shutting down application...")
 

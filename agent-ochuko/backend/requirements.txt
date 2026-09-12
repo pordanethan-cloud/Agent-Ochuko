@@ -29,3 +29,4 @@ google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
 tzdata>=2024.1
+youtube-transcript-api>=1.2.4

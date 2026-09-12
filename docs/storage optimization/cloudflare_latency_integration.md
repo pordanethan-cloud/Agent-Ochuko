@@ -5,7 +5,7 @@ This document outlines a hybrid approach to leverage **Cloudflare's low-latency 
 ---
 
 ## 1. The Core Performance Problem
-* **Google Drive API:** Direct downloads/uploads are slow (typically 1.5s to 3s per request) due to OAuth handshakes and Google's internal file system lookups. Using it raw for chat previews and uploads degrades the "Claude-like" premium experience.
+* **Google Drive API:** Direct downloads/uploads are slow (typically 1.5s to 3s per request) due to OAuth handshakes and Google's internal file system lookups. Using it raw for chat previews and uploads degrades the "Ochuko-like" premium experience.
 * **Cloudflare R2:** Incredibly fast, globally distributed, and low-latency. However, storing large datasets, PDFs, and historical sandbox files there permanently raises long-term storage costs.
 
 ---

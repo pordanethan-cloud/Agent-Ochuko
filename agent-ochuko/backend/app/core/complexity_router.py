@@ -103,7 +103,7 @@ _CODE_NOUNS_RE = re.compile(
 _DELIVERABLE_SCALE_RE = re.compile(
     r"\b(full|complete|production[\s-]?ready|from\s+scratch|end[\s-]?to[\s-]?end|"
     r"entire|whole|comprehensive|thorough|robust|scalable|enterprise[\s-]?grade|"
-    r"claude[\s-]?grade|polished)\b",
+    r"ultra[\s-]?grade|polished)\b",
     re.IGNORECASE,
 )
 

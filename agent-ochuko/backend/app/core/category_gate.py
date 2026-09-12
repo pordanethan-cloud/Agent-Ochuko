@@ -36,15 +36,15 @@ logger = logging.getLogger(__name__)
 _CATEGORY_TOOLS: Dict[str, set] = {
     "none": set(),          # purposely empty — no schemas injected
     "research": {
-        "search_web", "deep_research", "fetch_url",
+        "search_web", "deep_research", "fetch_url", "youtube_transcript", "lookup_handle",
     },
     "file_ops": {
         "sandbox_ls", "sandbox_read", "sandbox_write", "sandbox_edit",
-        "execute_code", "terminal",
+        "execute_code", "terminal", "present_deliverable",
     },
     "display": {
         "render_options_card", "render_step_flow", "render_itinerary",
-        "render_map", "render_quiz", "render_translation",
+        "render_map", "render_quiz", "render_translation", "render_sports_card", "present_deliverable",
         "visualize__read_me", "visualize__show_widget",
     },
     "memory": {
@@ -77,9 +77,12 @@ _NONE_RE = re.compile(
 _RESEARCH_KW = re.compile(
     r"\b(search|find|look up|look for|google|research|news|latest|recent|"
     r"current|update|how much|price of|buy|purchase|"
+    r"youtube|video|transcript|caption|speech|channel|"
+    r"linkedin|facebook|handle|profile|social\s+profile|"
     r"fetch\s+(?:this\s+|the\s+)?(?:https?://|url|link|page|site|web|data|html)|read this (?:url|link|page)|check this site|scrape|browse|"
     r"trending|breaking|announcement|according to|"
-    r"source|citation|reference|verify|fact.?check)\b",
+    r"source|citation|reference|verify|fact.?check)\b|"
+    r"(?:youtube\.com|youtu\.be|linkedin\.com|facebook\.com)",
     re.IGNORECASE,
 )
 
@@ -95,11 +98,12 @@ _FILE_OPS_KW = re.compile(
 
 _DISPLAY_KW = re.compile(
     r"\b(compare|comparison|versus|vs\.?|chart|graph|diagram|"
-    r"show me a (chart|table|card|map|quiz|recipe|steps|itinerary)|"
+    r"show me a (chart|table|card|map|quiz|recipe|steps|itinerary|match|score)|"
     r"visualize|render|display|draw|plot|table of|side.?by.?side|"
     r"options (card|list)|step.?by.?step|how.?to|recipe for|"
     r"plan (my |a |the )?trip|travel plan|itinerary|directions|route|"
-    r"quiz|flashcard|translate|translation|map (of|for|showing))\b",
+    r"quiz|flashcard|translate|translation|map (of|for|showing)|"
+    r"sports card|match card|score card|scoreboard|live score|match result)\b",
     re.IGNORECASE,
 )
 

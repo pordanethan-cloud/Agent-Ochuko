@@ -209,4 +209,37 @@ To build for scale and achieve stateless containers, files are synced directly t
 
 ---
 
-*Last updated: 2026-07-18 — Google Drive hybrid storage & fallback cache miss recovery implemented and fully covered by tests.*
+## 9. Comprehensive Storage Handling Protocol (Workstation, Ephemeral Sandbox, Cloudflare R2, Google Drive & Unified Deliverables)
+
+To achieve zero-leak container disk space, strict user privacy, and zero blind upload costs, Agent Ochuko enforces this unified storage pipeline:
+
+### 1. Workstation Local Storage (Desktop Bridge & MCP)
+* **Zero Blind Uploads**: When a user selects or mounts local directories (e.g. 10 GB in Downloads or Work folders), the system **never** uploads or mirrors the directory. Only lightweight file metadata (names, sizes, modification timestamps) is queried via `mcp_workstation_list` (strictly limited to 25 items per page with bloat filtering for `node_modules`, `.venv`, `.git`, etc.).
+* **On-Demand Single File Streaming**: Only when the AI planner explicitly invokes `mcp_workstation_read` for a specific file is that single file pulled into ephemeral memory.
+* **Centralized Timestamped Backups**: When the agent modifies or edits local files, all backups are created centrally under `~/.ochuko/pc_bak/` with ISO timestamps. Zero loose `.bak` files clutter user folders.
+* **Stream Compaction**: Listings and terminal executions exceeding 60 lines are compacted (20 head + 35 tail lines with omitted banner), cutting LLM context token consumption by up to 90%.
+
+### 2. Ephemeral Sandbox Storage (/tmp/sandbox_{conversation_id})
+* **1Gi Quota Protection**: Azure Container Apps consumption profiles enforce a strict 1Gi ephemeral disk limit.
+* **2-Hour Auto-Pruning TTL**: Every execution and background cleanup worker runs `prune_expired_sandboxes(max_age_seconds=7200)` to scan `/tmp` and purge stale sandbox workspaces older than 2 hours.
+* **Path Isolation**: User scripts run in `./src`, mounted inputs in `../data/`, preventing pollution.
+
+### 3. User Google Drive (Long-Term Zero-Cost Archival)
+* **Active Status**: Google Drive integration is active, operational, and covered by automated tests in `backend/tests/test_google_drive_storage.py`.
+* **Workspace Scoping**: Restricted to the `Ochuko Workspace/` folder on the user's personal Google Drive:
+  - `Ochuko Workspace/uploads/{conversation_id}/`: Permanent archive of files provided by the user.
+  - `Ochuko Workspace/sandbox_file/{conversation_id}/`: Long-term archive of generated charts, documents, and project repository ZIPs.
+* **Cold Storage Fallback**: Expired cache items evicted from Cloudflare R2 are seamlessly recovered from Google Drive on user demand.
+
+### 4. Cloudflare R2 & Supabase Storage (Fast Edge Previews)
+* **Short-Term High-Speed Cache**: Used for serving live web assets, iframe previews, and fast parallel downloads.
+* **Presigned URLs**: Client downloads and uploads route directly to R2, bypassing API container bandwidth bottlenecks.
+
+### 5. AI Deliverable Presentation & Multi-Folder Repository Card
+* **`present_deliverable` Tool**: Accessible directly by the AI model to formally deliver finished websites, applications, and repositories.
+* **Automatic `project.zip` Packaging**: Whenever a multi-file project is produced, it is packaged with full relative paths and uploaded to both R2 and Google Drive.
+* **Unified Deliverable Presentation (Claude-Style)**: The React frontend presents a single, cohesive repository deliverable card with Live Preview, 1-Click ZIP download, and an expandable multi-folder file tree explorer with full mobile responsiveness.
+
+---
+
+*Last updated: 2026-09-12 — Workstation zero-blind upload, ephemeral 2-hour TTL auto-pruning, Google Drive long-term sync, and unified repository deliverable card verified by full test suite.*

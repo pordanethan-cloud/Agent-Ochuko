@@ -221,7 +221,7 @@ async def get_max_completion_tokens(mode: str = "think", deployment: Optional[st
 
 
 # Mode → (App Config key, default output-token budget).
-# THINK keeps Claude-grade headroom; AGENT mode defaults to UNCAPPED ("0") so
+# THINK keeps enterprise-grade headroom; AGENT mode defaults to UNCAPPED ("0") so
 # generated multi-file websites and builds are never truncated — the
 # max_output_tokens parameter is simply omitted from the API call.
 # Everything is runtime-tunable via App Config.

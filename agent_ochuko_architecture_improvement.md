@@ -1,15 +1,15 @@
 # Agent Ochuko — Architecture Improvement Proposal
-### From 18 Tools to Claude-Grade Parity: Structured Output Layer, Router Efficiency & Memory Integrity
+### From 18 Tools to Ochuko-Grade Parity: Structured Output Layer, Router Efficiency & Memory Integrity
 
-> Companion to `06_tools_architecture_claude_parity_and_ooda_loop.md`. This doc identifies the concrete gap between Ochuko's current 18-tool roster and full Claude-grade parity, then specifies exactly what to build, in what order.
+> Companion to `06_tools_architecture_ochuko_parity_and_ooda_loop.md`. This doc identifies the concrete gap between Ochuko's current 18-tool roster and full Ochuko-grade parity, then specifies exactly what to build, in what order.
 
 ---
 
 ## 1. Where Ochuko Already Wins
 
 Worth stating plainly before the gap analysis — Ochuko's current architecture beats a lot of production agents on:
-- **Surgical edits** (`sandbox_edit`) — exact parity with Claude's `str_replace_editor`.
-- **Entity-novelty forced grounding** — this is *ahead* of documented Claude behavior; Claude decides to search from prompt instructions, Ochuko mechanically intercepts it.
+- **Surgical edits** (`sandbox_edit`) — exact parity with Ochuko's `str_replace_editor`.
+- **Entity-novelty forced grounding** — this is *ahead* of documented Ochuko behavior; Ochuko decides to search from prompt instructions, Ochuko mechanically intercepts it.
 - **Read-only perimeter + network allowlist** — stronger sandboxing than most agent frameworks bother with.
 - **Deadlock breaker** (`tool_choice="none"` on final iteration) — solves a real failure mode (infinite tool loops) that plenty of agentic systems still hit in production.
 - **Post-loop conduct guards as deterministic code, not model instructions** — cheaper and more reliable than prompting for tone.
@@ -20,7 +20,7 @@ The gap isn't reasoning architecture. It's **output surface area** — what the 
 
 ## 2. Gap Analysis: 18 Tools vs 42
 
-| Domain | Ochuko has | Claude has that Ochuko doesn't | Verdict |
+| Domain | Ochuko has | Ochuko has that Ochuko doesn't | Verdict |
 |---|---|---|---|
 | Research | `search_web`, `deep_research`, `fetch_url` | — | **Parity, arguably ahead** (deep_research auto-parallelizes) |
 | Memory | `memory_save`, `memory_recall` | Versioned edits (`memory_str_replace`, `memory_append`), file listing with previews, explicit delete-only-on-request | **Gap: no optimistic concurrency, no partial edits** |
@@ -34,7 +34,7 @@ The gap isn't reasoning architecture. It's **output surface area** — what the 
 | Meta/Extensibility | none | Skill/plugin/connector discovery-and-suggest tools | **Gap, but lowest priority — v2 concern** |
 | Safety | `end_conversation` | Same | **Parity** |
 
-**The headline finding:** Ochuko's *reasoning* and *execution* layers are Claude-grade or better. Its *presentation* layer is not — everything currently comes back as markdown prose or a single generic widget call. That's the highest-leverage gap to close, because it's the difference the user actually sees on every single turn, not just coding tasks.
+**The headline finding:** Ochuko's *reasoning* and *execution* layers are Ochuko-grade or better. Its *presentation* layer is not — everything currently comes back as markdown prose or a single generic widget call. That's the highest-leverage gap to close, because it's the difference the user actually sees on every single turn, not just coding tasks.
 
 ---
 
@@ -46,7 +46,7 @@ Rather than porting all 15 display tools 1:1, consolidate into **6 new tool cont
 
 | Tool Name | Operational Mechanism | Replaces / Covers |
 |---|---|---|
-| `render_options_card` | Structured N-option comparison/pick UI | Claude's comparison_card, featured_card, product_carousel, options_card — unified via an `options` array + `mode: "compare"\|"single_pick"\|"carousel"` |
+| `render_options_card` | Structured N-option comparison/pick UI | Ochuko's comparison_card, featured_card, product_carousel, options_card — unified via an `options` array + `mode: "compare"\|"single_pick"\|"carousel"` |
 | `render_step_flow` | Ordered stepper or checklist UI | step_card_display_v0, recipe_display_v0 (recipe becomes `mode: "recipe"` with ingredient scaling) |
 | `render_itinerary` | Day-tabbed schedule with stops | itinerary_display_v0 |
 | `render_map` | Location pins + optional route, backed by a places search | places_map_display_v0 + places_search combined into one contract (search, then auto-render) |
@@ -55,7 +55,7 @@ Rather than porting all 15 display tools 1:1, consolidate into **6 new tool cont
 
 **Why consolidate instead of porting all 15:** Ochuko already fights token budget via `_COMPACT_TOOLS`. Adding 15 new schemas raw would roughly double roster size. Consolidating to 6 parametrized tools keeps the roster at **24 tools total** — a 33% increase for near-total feature parity, instead of a 133% increase.
 
-### Tool Contract — `render_options_card` (flagship example, full Claude-grade contract)
+### Tool Contract — `render_options_card` (flagship example, full Ochuko-grade contract)
 
 ```
 WHEN to call:
@@ -202,12 +202,12 @@ Extend `verification_gates.py` to cover the new render_* tools — e.g. reject `
 ## 8. What NOT to Port
 
 Deliberately excluding from this proposal, with reasons:
-- **`suggest_connectors` / `search_mcp_registry` / plugin-catalog tools** — these exist in Claude because Claude.ai has a connector marketplace. Ochuko doesn't have that ecosystem yet; building the tools before the ecosystem is premature.
+- **`suggest_connectors` / `search_mcp_registry` / plugin-catalog tools** — these exist in Ochuko because Ochuko.ai has a connector marketplace. Ochuko doesn't have that ecosystem yet; building the tools before the ecosystem is premature.
 - **`fetch_sports_data`** — narrow vertical, low value-per-engineering-hour versus `weather_fetch`'s existing keyless API pattern. Add only if usage data shows demand.
-- **`show_recommendation_cards`** (Claude's own cross-sell tool) — not applicable; Ochuko is a single surface, not a multi-app suite.
+- **`show_recommendation_cards`** (Ochuko's own cross-sell tool) — not applicable; Ochuko is a single surface, not a multi-app suite.
 
 Keeping the roster tight is itself the point — this proposal aims for parity in *capability*, not roster size.
 
 ---
 
-*Companion to [[agent-ochuko]] architecture. Pairs with `agent_ochuko_tool_intelligence.md` and `claude_tools_reference_v2.md`.*
+*Companion to [[agent-ochuko]] architecture. Pairs with `agent_ochuko_tool_intelligence.md` and `ochuko_tools_reference_v2.md`.*

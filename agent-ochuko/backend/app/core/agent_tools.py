@@ -36,24 +36,25 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "Search the web for current, real-time information. "
             "Call this for a SINGLE, focused lookup. "
-            "For anything time-sensitive (news, prices, laws, releases, scores), "
-            "include the current year in the query — e.g. 'Nigeria tax reform 2026'. "
-            "AFTER searching: if a result looks central to the answer but the snippet "
-            "is thin, follow up with fetch_url on that result's URL to read the page. "
-            "TRUST PRIORITY: favour wire services and official bodies (Reuters, AP, "
-            "BBC, UEFA/league/club sites for sports, Bloomberg/FT for markets) that "
-            "appear in the results; for scores and breaking figures, confirm across "
-            "two trusted sources before stating them. "
-            "DUTY: cite web-sourced claims with [n](url) markers. "
-            "For comparing multiple subjects or researching multiple dimensions at once, "
-            "use deep_research instead."
+            "QUERY FORMULATION MANDATE (THE TRANSLATOR):\n"
+            "1. REWRITE CONVERSATIONAL PHRASES: Never pass conversational dialogue (e.g. 'how are they doing', 'tell me about their live game').\n"
+            "2. RESOLVE ALL PRONOUNS: Look back at the conversation history and replace all pronouns ('they', 'them', 'their', 'it', 'he') with the exact entity name (e.g. 'Hull City live match score September 12 2026').\n"
+            "3. TEMPORAL ANCHORING: For live games, transfers, breaking news, prices, or recent events, append the current calendar year (2026) and today's date.\n"
+            "4. KEYWORD DENSITY: Format queries as concise search engine keywords rather than conversational sentences.\n"
+            "FACTUAL DENSITY & ANTI-FLUFF:\n"
+            "- When presenting results, lead immediately with concrete facts, exact scores, figures, dates, and bulleted data points.\n"
+            "- Do NOT write vague, boilerplate introductory summaries or generic recaps.\n"
+            "- AFTER searching: if a result looks central to the answer but the snippet is thin, follow up with fetch_url on that result's URL to read the page.\n"
+            "- TRUST PRIORITY: favour wire services and official bodies (Reuters, AP, BBC, UEFA/league/club sites for sports, Bloomberg/FT for markets).\n"
+            "- DUTY: cite web-sourced claims with [n](url) markers.\n"
+            "For comparing multiple subjects or researching multiple dimensions at once, use deep_research instead."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The precise search query to submit to Google",
+                    "description": "The precise, keyword-dense search query with all pronouns resolved to exact entity names (e.g. 'Hull City vs Chelsea score September 12 2026')",
                 }
             },
             "required": ["query"],
@@ -65,11 +66,12 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "Run multiple parallel web searches simultaneously for complex comparative, "
             "multi-topic, or multi-dimensional queries. "
-            "Use this whenever the user asks to compare subjects (phones, products, policies, people), "
-            "requests info across multiple dimensions/aspects/ramifications, or needs a structured research report. "
-            "Pass a list of 2-6 specific, targeted search strings — one per subject or dimension. "
-            "For time-sensitive topics, include the current year in each query. "
-            "Results from all queries are merged and returned together. "
+            "QUERY FORMULATION MANDATE:\n"
+            "1. Pass a list of 2-6 specific, targeted keyword search strings — one per subject or dimension.\n"
+            "2. Resolve all pronouns ('they', 'it', 'them') to exact entity names in EVERY sub-query.\n"
+            "3. For time-sensitive topics, include the current year (2026) in each query.\n"
+            "4. Avoid conversational queries; use search-engine-optimized keyword phrases.\n"
+            "SYNTHESIS RULE: Deliver a structured comparison or dense factual breakdown with exact data points, numbers, and dates. Avoid generic essay summaries.\n"
             "PREFER this over calling search_web multiple times."
         ),
         "parameters": {
@@ -78,7 +80,7 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
                 "queries": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of 2-6 precise, targeted Google search strings",
+                    "description": "List of 2-6 precise, keyword-dense Google search strings with all pronouns resolved to explicit entity names",
                     "minItems": 2,
                     "maxItems": 6,
                 }
@@ -109,6 +111,49 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
                 }
             },
             "required": ["url"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "youtube_transcript",
+        "description": (
+            "Extract complete timed transcripts, spoken captions, and video metadata from a YouTube video URL or ID. "
+            "Use this whenever the user asks about a YouTube video, wants a video summarized, asks questions about spoken video content, "
+            "or provides a youtube.com or youtu.be link. Returns video title, author, duration, and timestamped speech segments."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url_or_id": {
+                    "type": "string",
+                    "description": "YouTube video URL (e.g., https://www.youtube.com/watch?v=... or https://youtu.be/...) or video ID",
+                }
+            },
+            "required": ["url_or_id"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "lookup_handle",
+        "description": (
+            "Look up social, professional, and developer profiles by handle or profile URL. "
+            "Supports LinkedIn, Facebook, GitHub, and Twitter/X. "
+            "Bypasses login walls using search grounding to extract public professional headlines, roles, and bio."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "handle_or_url": {
+                    "type": "string",
+                    "description": "The profile username, handle, or URL (e.g. 'https://www.linkedin.com/in/satyanadella' or 'yann.lecun' or '@torvalds')",
+                },
+                "platform": {
+                    "type": "string",
+                    "enum": ["auto", "linkedin", "facebook", "github", "twitter"],
+                    "description": "Target platform or 'auto' to detect from handle/url.",
+                },
+            },
+            "required": ["handle_or_url"],
         },
     },
     {
@@ -796,4 +841,160 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
             "required": ["source_language", "target_language", "source_text", "translated_text"],
         },
     },
+    {
+        "type": "function",
+        "name": "render_sports_card",
+        "description": (
+            "WHEN to call: the user asks about live scores, completed match results, upcoming fixtures, "
+            "game details, or head-to-head match events for football (soccer), basketball (NBA), or other sports. "
+            "Renders a sleek, live sports match scoreboard card with team crests, large scores, match status/clock, "
+            "competition name, and detailed event breakdown (goals with minute and player, yellow/red cards, subs). "
+            "WHEN NOT to call: general non-match discussions without specific teams/scores; general trivia questions. "
+            "GOLDEN RULE: always state the final or live score in the first sentence of prose, then let the sports card "
+            "provide the visual breakdown."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "home_team": {
+                    "type": "string",
+                    "description": "Full or common name of the home team (e.g. 'Chelsea', 'Arsenal', 'Lakers').",
+                },
+                "away_team": {
+                    "type": "string",
+                    "description": "Full or common name of the away team (e.g. 'Hull City', 'Aston Villa', 'Warriors').",
+                },
+                "home_score": {
+                    "type": "string",
+                    "description": "Home team score (e.g. '1', '108', '0'). Use '-' if match hasn't started.",
+                },
+                "away_score": {
+                    "type": "string",
+                    "description": "Away team score (e.g. '2', '102', '0'). Use '-' if match hasn't started.",
+                },
+                "status": {
+                    "type": "string",
+                    "description": (
+                        "Match status or clock. "
+                        "If the match is currently underway or live, state the exact minute or phase (e.g. '45\\' + 3\\'', 'HT', 'LIVE 68\\'', 'LIVE — second half'). "
+                        "NEVER output 'FT' (Full Time) or 'Final' for an ongoing match. Only use 'FT' when the final whistle has blown and the match has concluded."
+                    ),
+                },
+                "competition": {
+                    "type": "string",
+                    "description": "League or competition name (e.g. 'Premier League', 'UEFA Champions League', 'NBA', 'La Liga').",
+                },
+                "home_team_logo": {
+                    "type": "string",
+                    "description": "Optional image URL for home team badge/crest.",
+                },
+                "away_team_logo": {
+                    "type": "string",
+                    "description": "Optional image URL for away team badge/crest.",
+                },
+                "events": {
+                    "type": "array",
+                    "description": (
+                        "Comprehensive list of all key match events in chronological order: goals (with player and minute), "
+                        "yellow cards, red cards, and substitutions. "
+                        "CRITICAL: Never drop disciplinary cards (yellow/red cards) or substitutions. "
+                        "Include all events so the scoreboard timeline is complete."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "team": {
+                                "type": "string",
+                                "enum": ["home", "away"],
+                                "description": "Which team the event belongs to.",
+                            },
+                            "player": {
+                                "type": "string",
+                                "description": "Player name involved (e.g. 'M. Rogers', 'M. Belloumi').",
+                            },
+                            "minute": {
+                                "type": "string",
+                                "description": "Minute of event (e.g. '7\'', '28\', 34\'', '45+2\'', '89\'').",
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": ["goal", "yellow_card", "red_card", "substitution", "penalty", "own_goal"],
+                                "description": "Event type.",
+                            },
+                            "detail": {
+                                "type": "string",
+                                "description": "Optional detail (e.g. 'Assist: C. Palmer', 'Foul').",
+                            },
+                        },
+                        "required": ["team", "player", "minute", "type"],
+                    },
+                },
+                "stats": {
+                    "type": "object",
+                    "description": "Optional match statistics comparison [home, away]. ONLY include when verified non-zero statistics (possession %, shots, corners) are explicitly present. If stats are missing, unknown, or not available in source, OMIT this object entirely. NEVER output dummy [0, 0] or zeros.",
+                    "properties": {
+                        "possession": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Possession percentages e.g. [58, 42].",
+                        },
+                        "shots": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Total shots [home, away].",
+                        },
+                        "shots_on_target": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Shots on target [home, away].",
+                        },
+                        "corners": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Corner kicks [home, away].",
+                        },
+                    },
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Brief takeaway summary (< 25 words).",
+                },
+            },
+            "required": ["home_team", "away_team", "home_score", "away_score", "status", "competition"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "present_deliverable",
+        "description": (
+            "Presents the completed project repository, website, or generated deliverables to the user as an interactive "
+            "repository deliverable card in the chat UI. Displays a live interactive preview button, a single-click download ZIP button, "
+            "and an expandable repository tree explorer with multi-folder navigation. "
+            "Call this whenever you finish generating or editing a website, software application, or multi-file project."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "project_name": {
+                    "type": "string",
+                    "description": "Clean human-readable name of the project or website (e.g. 'Range Process Web App').",
+                },
+                "entry_file": {
+                    "type": "string",
+                    "description": "Primary preview file relative path (e.g. 'index.html' or 'README.md').",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Short 1-sentence summary of what was built or updated.",
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of relative file paths included in this deliverable (e.g. ['index.html', 'css/styles.css', 'js/main.js']).",
+                },
+            },
+            "required": ["project_name", "entry_file"],
+        },
+    },
 ]
+

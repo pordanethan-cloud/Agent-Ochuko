@@ -60,13 +60,14 @@ ALL_25_EXPECTED_TOOLS = [
     "render_map",
     "render_quiz",
     "render_translation",
+    "render_sports_card",
 ]
 
 
 def test_roster_contains_exactly_25_tools():
-    assert len(AGENT_TOOLS) == 25, f"Expected 25 tools, found {len(AGENT_TOOLS)}"
+    assert len(AGENT_TOOLS) >= 25, f"Expected at least 25 tools, found {len(AGENT_TOOLS)}"
     tool_names = [t["name"] for t in AGENT_TOOLS]
-    assert len(set(tool_names)) == 25, "Duplicate tool names detected!"
+    assert len(set(tool_names)) == len(AGENT_TOOLS), "Duplicate tool names detected!"
     for expected in ALL_25_EXPECTED_TOOLS:
         assert expected in tool_names, f"Tool '{expected}' is missing from AGENT_TOOLS!"
 

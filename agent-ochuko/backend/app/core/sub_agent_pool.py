@@ -145,11 +145,21 @@ class SubAgentPool:
             raw_context = search_data.get("google_context", "") or ""
             sources = search_data.get("sources", []) or []
 
-            # Fast-path: if search context already contains a grounded synthesis, use it directly (0ms)
-            if "Search Synthesis:" in raw_context:
+            # Fast-path: if search context contains verified live facts or grounded evidence, extract it directly
+            if "VERIFIED LIVE FACTS & EVIDENCE:" in raw_context:
+                parts = raw_context.split("VERIFIED LIVE FACTS & EVIDENCE:", 1)[1]
+                if "GROUNDING SNIPPETS" in parts:
+                    compressed_summary = parts.split("GROUNDING SNIPPETS", 1)[0].strip()
+                elif "Supporting Sources:" in parts:
+                    compressed_summary = parts.split("Supporting Sources:", 1)[0].strip()
+                else:
+                    compressed_summary = parts.strip()
+            elif "Search Synthesis:" in raw_context:
                 parts = raw_context.split("Search Synthesis:", 1)[1]
                 if "Supporting Grounding Context:" in parts:
                     compressed_summary = parts.split("Supporting Grounding Context:", 1)[0].strip()
+                elif "Supporting Sources:" in parts:
+                    compressed_summary = parts.split("Supporting Sources:", 1)[0].strip()
                 else:
                     compressed_summary = parts.strip()
             elif len(raw_context) <= 800:
@@ -157,8 +167,8 @@ class SubAgentPool:
             else:
                 compressed_summary = await self.compress_text(
                     raw_context,
-                    instruction=f"Extract the specific answer and facts for the search query: '{query}'. Include numbers, names, and key metrics.",
-                    max_tokens=200,
+                    instruction=f"Extract the specific answer and facts for the search query: '{query}'. Include exact numbers, scores, names, and key metrics. Do not write generic conversational summaries.",
+                    max_tokens=220,
                 )
 
             # Estimated token spend for sub-agent operation
@@ -288,6 +298,38 @@ class SubAgentPool:
         except Exception as e:
             logger.error(f"SubAgent handle lookup failed: {e}")
             return SubAgentResult(success=False, summary=f"Handle lookup error: {str(e)[:120]}", error=str(e))
+
+    async def delegate_youtube_transcript(self, url_or_id: str) -> SubAgentResult:
+        """Extracts metadata and transcript from a YouTube video URL or ID."""
+        try:
+            from app.services.youtube_intelligence import YouTubeIntelligence
+            res = await YouTubeIntelligence.process_youtube_url(url_or_id)
+            if res.get("success"):
+                summary = res.get("summary") or res.get("formatted_context", "YouTube transcript retrieved.")
+                word_count = res.get("word_count", 0)
+                return SubAgentResult(
+                    success=True,
+                    summary=summary,
+                    artifacts=[{
+                        "type": "youtube_video",
+                        "title": res.get("title", ""),
+                        "url": res.get("url", ""),
+                        "author_name": res.get("author_name", ""),
+                        "word_count": word_count,
+                    }],
+                    token_spend=min(word_count, 1500),
+                    raw_length=len(res.get("transcript_text", "")),
+                )
+            else:
+                err_msg = res.get("error") or "Failed to retrieve YouTube transcript."
+                return SubAgentResult(
+                    success=False,
+                    summary=f"YouTube transcript failed: {err_msg}",
+                    error=err_msg,
+                )
+        except Exception as e:
+            logger.error(f"SubAgent youtube transcript failed: {e}")
+            return SubAgentResult(success=False, summary=f"YouTube transcript error: {str(e)[:120]}", error=str(e))
 
     async def delegate_site_deployment(
         self,

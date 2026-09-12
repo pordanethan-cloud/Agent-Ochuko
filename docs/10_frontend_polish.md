@@ -171,5 +171,5 @@ The `conversations.agent_memory` column is written by the backend service role (
   - Replaced bulky diamond glyphs with minimalist circular bullets (`•`) at `space-y-1` and `leading-[1.6]`.
   - Compacted user message bubble padding to `px-3.5 py-2.5 rounded-2xl rounded-tr-sm bg-[#23272d]`.
 - [x] **Ultra-Minimalist Loading State**:
-  - Streamlined response loading indicator to a quiet, elegant pulsing dot (`w-2 h-2 rounded-full bg-white/40 animate-pulse`), matching Claude / ChatGPT aesthetics.
+  - Streamlined response loading indicator to a quiet, elegant pulsing dot (`w-2 h-2 rounded-full bg-white/40 animate-pulse`), matching Ochuko / ChatGPT aesthetics.
   - Live blinking caret (`▋`) attached to active token streaming.

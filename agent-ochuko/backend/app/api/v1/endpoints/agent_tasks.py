@@ -37,8 +37,10 @@ class CreateTaskRequest(BaseModel):
 
 
 class ApproveStepRequest(BaseModel):
-    action: str = Field("approve", description="'approve' | 'skip' | 'cancel'")
+    action: str = Field("approve", description="'approve' | 'skip' | 'cancel' | 'respond'")
     step_index: Optional[int] = None
+    user_response: Optional[str] = None
+
 
 
 class EditPlanRequest(BaseModel):
@@ -182,7 +184,7 @@ async def approve_agent_task(
                 s.status = StepStatus.SKIPPED
                 s.result_summary = "Skipped by user."
         task.state = TaskState.EXECUTING
-    elif action == "approve":
+    elif action in ("approve", "respond"):
         if task.state == TaskState.AWAITING_APPROVAL:
             task.state = TaskState.EXECUTING
             task.started_at = task.started_at or datetime.utcnow()
@@ -193,11 +195,21 @@ async def approve_agent_task(
                     s.status = StepStatus.RUNNING
                     break
         elif task.state == TaskState.PAUSED_FOR_HITL:
-            # Mark step approved and running
             step_idx = payload.step_index or task.current_step
             for s in task.plan:
                 if s.index == step_idx:
-                    s.status = StepStatus.RUNNING
+                    if payload.user_response:
+                        s.status = StepStatus.COMPLETED
+                        s.result_summary = f"User responded: {payload.user_response}"
+                        task.step_results.append({
+                            "step_index": s.index,
+                            "description": s.description,
+                            "summary": f"User responded: {payload.user_response}",
+                            "artifacts": [],
+                            "duration_ms": 0,
+                        })
+                    else:
+                        s.status = StepStatus.RUNNING
             task.state = TaskState.EXECUTING
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action '{action}'.")

@@ -127,7 +127,7 @@ Hermetic, mirroring `test_ultra_upgrade.py` conventions (`_config_cache` fixture
 
 ## G. Agent Ochuko — Complete Tool Reference
 
-> This section is the living specification of every tool registered in Agent Ochuko's chat/agent-mode tool roster. It follows the same format used for Claude's 42 built-ins: purpose, when/when-not to call, JSON schema, and behavioral notes. Kept here (not just embedded in `chat.py` descriptions) so design decisions are visible in one auditable place.
+> This section is the living specification of every tool registered in Agent Ochuko's chat/agent-mode tool roster. It follows the same format used for Ochuko's 42 built-ins: purpose, when/when-not to call, JSON schema, and behavioral notes. Kept here (not just embedded in `chat.py` descriptions) so design decisions are visible in one auditable place.
 >
 > **Identity cap note**: `BASE_IDENTITY` budget relaxed from <=500 to **<=600** estimated tokens (word-count proxy x1.3). Test guards in `test_phase5_upgrade.py` now enforce <=600. Current approximate word count: ~492.
 
@@ -456,7 +456,7 @@ Hermetic, mirroring `test_ultra_upgrade.py` conventions (`_config_cache` fixture
 
 ### 11. `sandbox_edit`
 
-**Purpose**: Surgical str_replace — replaces `old_str` with `new_str` inside an existing sandbox file. Mirrors Claude's `str_replace` tool.
+**Purpose**: Surgical str_replace — replaces `old_str` with `new_str` inside an existing sandbox file. Mirrors Ochuko's `str_replace` tool.
 
 **When to call**: When changing part of an existing sandbox file. Always `sandbox_read` first to get the exact text (whitespace matters).
 
@@ -668,7 +668,7 @@ Hermetic, mirroring `test_ultra_upgrade.py` conventions (`_config_cache` fixture
 
 ### 17. `ask_user_input`
 
-**Purpose**: Presents tappable multiple-choice options to the user before acting — mobile-friendly alternative to a free-text clarifying question. Mirrors Claude's `ask_user_input_v0`.
+**Purpose**: Presents tappable multiple-choice options to the user before acting — mobile-friendly alternative to a free-text clarifying question. Mirrors Ochuko's `ask_user_input_v0`.
 
 **When to call**: Genuine ambiguity that changes the output meaningfully — tone (formal / conversational / technical), output format (PDF / Markdown / DOCX), scope. Max once per turn; 1 question, 2-5 options.
 
@@ -734,11 +734,11 @@ Hermetic, mirroring `test_ultra_upgrade.py` conventions (`_config_cache` fixture
 
 ---
 
-## H. Claude-Parity Roster Audit (phase 5 state)
+## H. Ochuko-Parity Roster Audit (phase 5 state)
 
-Tracks where Ochuko stands against Claude's 42 built-ins post-Phase 5.
+Tracks where Ochuko stands against Ochuko's 42 built-ins post-Phase 5.
 
-| Claude tool | Ochuko tool | Status |
+| Ochuko tool | Ochuko tool | Status |
 |---|---|---|
 | `web_search` | `search_web` + `deep_research` | HAVE |
 | `web_fetch` | `fetch_url` | HAVE |

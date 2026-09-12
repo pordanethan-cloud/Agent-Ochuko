@@ -16,6 +16,10 @@
   body {
     @apply bg-brand-bg text-brand-text font-sans antialiased selection:bg-brand-accent/30 selection:text-white;
   }
+  button, input, textarea, select, a {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
 }
 
 @layer utilities {
@@ -25,7 +29,7 @@
   }
 }
 
-/* Artifact panel slide-in (Claude-style right dock) */
+/* Artifact panel slide-in (Ochuko right dock) */
 @keyframes slideInRight {
   from { transform: translateX(24px); opacity: 0; }
   to   { transform: translateX(0); opacity: 1; }
@@ -99,7 +103,7 @@ div[aria-live="polite"] > div {
   animation: toast-slide-in 0.2s ease-out forwards;
 }
 
-/* ── Claude-like horizontal text underlapping fade mask ──────────────────── */
+/* ── Horizontal text underlapping fade mask ──────────────────── */
 .input-masked-fade {
   /* Left fade: covers the mic icon area (left-3 = 12px + icon 16px + gap = ~36px) */
   --mask-left-start: 4px;

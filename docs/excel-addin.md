@@ -266,14 +266,14 @@ To ship the add-in in production:
 ---
 
 # Phase 2 — Excel Interop Upgrade
-**Goal: Make Agent Ochuko function like Claude in Excel**
+**Goal: Make Agent Ochuko function like Ochuko in Excel**
 *Status: PLANNED*
 
 ---
 
-## What Claude in Excel Does (Benchmark)
+## What Ochuko in Excel Does (Benchmark)
 
-| Capability | Claude in Excel | Ochuko Phase 1 | Ochuko Phase 2 Target |
+| Capability | Ochuko in Excel | Ochuko Phase 1 | Ochuko Phase 2 Target |
 |---|---|---|---|
 | Chat / Q&A | Yes | Yes | Yes |
 | Web search | No | Yes (toggle) | Yes |
@@ -296,7 +296,7 @@ To ship the add-in in production:
 
 ### 1. Excel Interop Layer
 
-The core gap. Everything that makes Claude in Excel useful is its bidirectional connection to the spreadsheet. All Office.js Excel interop runs inside `Excel.run(async (ctx) => { ... })`.
+The core gap. Everything that makes Ochuko in Excel useful is its bidirectional connection to the spreadsheet. All Office.js Excel interop runs inside `Excel.run(async (ctx) => { ... })`.
 
 #### 1a. Read Selection as Context
 
@@ -512,9 +512,9 @@ Standalone lightweight markdown renderer (~100 lines). No external deps. Handles
 
 ---
 
-## Answer: Can it function like Claude in Excel?
+## Answer: Can it function like Ochuko in Excel?
 
-**Yes — and it can go further.** Claude in Excel has no web search; Ochuko already has that. The gap is purely in the Office.js Excel interop layer: reading selections, writing back, and rendering responses richly.
+**Yes — and it can go further.** Ochuko in Excel has no web search; Ochuko already has that. The gap is purely in the Office.js Excel interop layer: reading selections, writing back, and rendering responses richly.
 
 The Phase 2 features above close that gap completely. Once shipped:
 

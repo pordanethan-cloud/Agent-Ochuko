@@ -50,7 +50,7 @@
 
 ## Milestone
 
-Full voice loop working. User speaks → text appears incrementally in input bar, grammar-corrected → user sends → assistant responds → user clicks play → hears the response in a South African English neural voice. Claude-style dictation experience.
+Full voice loop working. User speaks → text appears incrementally in input bar, grammar-corrected → user sends → assistant responds → user clicks play → hears the response in a South African English neural voice. Ochuko-style dictation experience.
 
 ---
 
