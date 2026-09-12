@@ -1,5 +1,5 @@
 // src/pages/Users.tsx
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
 import { Search, ShieldOff, Pause, Play, ChevronLeft, ChevronRight, Users as UsersIcon } from "lucide-react";
 import { adminGet, adminPatch } from "../utils/api";
 import { ConfirmModal } from "../components/ConfirmModal";
@@ -35,6 +35,97 @@ interface SettingsResponse {
 }
 
 const VALID_ROLES = ["guest", "user", "power_user", "admin", "superadmin"];
+
+/** Mobile user card (below md) — replaces the 8-column table on phones. */
+function UserCard({
+  u,
+  renderLastSeen,
+  onRoleChange,
+  onSuspend,
+  onActivate,
+  onBlock,
+}: {
+  u: UserRow;
+  renderLastSeen: (s: string | null) => ReactNode;
+  onRoleChange: (u: UserRow, role: string) => void;
+  onSuspend: (u: UserRow) => void;
+  onActivate: (u: UserRow) => void;
+  onBlock: (u: UserRow) => void;
+}) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+      {/* Name / status */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-medium text-slate-200 truncate">{u.full_name || "—"}</div>
+          <div className="text-slate-500 text-xs truncate">{u.email}</div>
+        </div>
+        <span className={`shrink-0 text-xs font-semibold px-2 py-1 rounded-full ${
+          u.is_active ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"
+        }`}>
+          {u.is_active ? "Active" : "Inactive"}
+        </span>
+      </div>
+
+      {/* Role + last seen */}
+      <div className="flex items-center justify-between gap-3">
+        <select
+          aria-label={`Change role for ${u.full_name || u.email}`}
+          value={u.role}
+          onChange={e => onRoleChange(u, e.target.value)}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 min-h-[44px] text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+        >
+          {VALID_ROLES.map(r => (
+            <option key={r} value={r} className="bg-slate-800">{r}</option>
+          ))}
+        </select>
+        {renderLastSeen(u.last_seen)}
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-slate-800/60 rounded-lg px-3 py-2">
+          <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-0.5">Total Tokens</div>
+          <div className="text-slate-200 font-medium text-sm">{(u.total_tokens_used ?? 0).toLocaleString()}</div>
+        </div>
+        <div className="bg-slate-800/60 rounded-lg px-3 py-2">
+          <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-0.5">Agent Calls</div>
+          <div className="text-slate-200 font-medium text-sm">{(u.agent_calls_this_month ?? 0).toLocaleString()}</div>
+        </div>
+      </div>
+      <div className="text-slate-500 text-xs">
+        {u.token_budgets
+          ? `Today: ${u.token_budgets.tokens_used.toLocaleString()} / ${u.token_budgets.budget_limit.toLocaleString()}`
+          : "Today: —"}
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-2 pt-2 border-t border-slate-800">
+        {u.is_active ? (
+          <button
+            onClick={() => onSuspend(u)}
+            className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm font-medium transition-colors active:scale-95"
+          >
+            <Pause size={14} /> Suspend
+          </button>
+        ) : (
+          <button
+            onClick={() => onActivate(u)}
+            className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-sm font-medium transition-colors active:scale-95"
+          >
+            <Play size={14} /> Activate
+          </button>
+        )}
+        <button
+          onClick={() => onBlock(u)}
+          className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-medium transition-colors active:scale-95"
+        >
+          <ShieldOff size={14} /> Block
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function Users() {
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -175,7 +266,7 @@ export function Users() {
   return (
     <div className="p-6">
       {/* Header row */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white mb-1">Users</h1>
           <p className="text-slate-400 text-sm">Manage registered accounts, roles, and access.</p>
@@ -211,15 +302,15 @@ export function Users() {
       <div className="relative mb-4 max-w-sm">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
         <input
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-4 py-2.5 min-h-[44px] text-base sm:text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
           placeholder="Search by name or email…"
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
       </div>
 
-      {/* Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+      {/* Table (md and up) */}
+      <div className="hidden md:block bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -296,7 +387,7 @@ export function Users() {
                           <button
                             onClick={() => promptSuspend(u)}
                             title="Suspend"
-                            className="p-1.5 rounded-lg hover:bg-amber-500/10 text-amber-400 transition-colors"
+                            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-amber-500/10 text-amber-400 transition-colors"
                           >
                             <Pause size={14} />
                           </button>
@@ -304,7 +395,7 @@ export function Users() {
                           <button
                             onClick={() => handleActivate(u)}
                             title="Activate"
-                            className="p-1.5 rounded-lg hover:bg-green-500/10 text-green-400 transition-colors"
+                            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-green-500/10 text-green-400 transition-colors"
                           >
                             <Play size={14} />
                           </button>
@@ -312,7 +403,14 @@ export function Users() {
                         <button
                           onClick={() => promptBlock(u)}
                           title="Block permanently"
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400 transition-colors"
+                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-red-500/10 text-red-400 transition-colors"
+                        >
+                          <ShieldOff size={14} />
+                        </button>
+                        <button
+                          onClick={() => promptBlock(u)}
+                          title="Block permanently"
+                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-red-500/10 text-red-400 transition-colors"
                         >
                           <ShieldOff size={14} />
                         </button>
@@ -325,27 +423,49 @@ export function Users() {
           </table>
         </div>
 
-        {/* Pagination */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
-          <span className="text-xs text-slate-500">Page {page}</span>
-          <div className="flex gap-2">
-            <button
-              aria-label="Previous page"
-              disabled={page === 1}
-              onClick={() => setPage(p => p - 1)}
-              className="p-1.5 rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <button
-              aria-label="Next page"
-              disabled={!hasMore}
-              onClick={() => setPage(p => p + 1)}
-              className="p-1.5 rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
+      </div>
+
+      {/* Mobile card list (below md) */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="p-8 text-center text-slate-500 text-sm bg-slate-900 border border-slate-800 rounded-xl">Loading…</div>
+        ) : filteredUsers.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-sm bg-slate-900 border border-slate-800 rounded-xl">No users found.</div>
+        ) : (
+          filteredUsers.map(u => (
+            <UserCard
+              key={u.id}
+              u={u}
+              renderLastSeen={renderLastSeen}
+              onRoleChange={handleRoleChange}
+              onSuspend={promptSuspend}
+              onActivate={handleActivate}
+              onBlock={promptBlock}
+            />
+          ))
+        )}
+      </div>
+
+      {/* Pagination (shared, mobile + desktop) */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border border-slate-800 rounded-xl mt-4">
+        <span className="text-xs text-slate-500">Page {page}</span>
+        <div className="flex gap-2">
+          <button
+            aria-label="Previous page"
+            disabled={page === 1}
+            onClick={() => setPage(p => p - 1)}
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <button
+            aria-label="Next page"
+            disabled={!hasMore}
+            onClick={() => setPage(p => p + 1)}
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
+          >
+            <ChevronRight size={16} />
+          </button>
         </div>
       </div>
 

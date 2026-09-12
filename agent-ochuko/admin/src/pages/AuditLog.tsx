@@ -96,7 +96,7 @@ export function AuditLog() {
 
   return (
     <div className="p-6">
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white mb-1">Audit Log</h1>
           <p className="text-slate-400 text-sm">Complete record of admin actions and policy decisions.</p>
@@ -240,7 +240,7 @@ export function AuditLog() {
               aria-label="Previous page"
               disabled={page === 1}
               onClick={() => setPage(p => p - 1)}
-              className="p-1.5 rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
             >
               <ChevronLeft size={16} />
             </button>
@@ -248,7 +248,7 @@ export function AuditLog() {
               aria-label="Next page"
               disabled={!hasMore}
               onClick={() => setPage(p => p + 1)}
-              className="p-1.5 rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-slate-700 disabled:opacity-30 text-slate-400 transition-colors"
             >
               <ChevRight size={16} />
             </button>
@@ -259,4 +259,4 @@ export function AuditLog() {
   );
 }
 
-const filterInput = "bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500";
+const filterInput = "bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 min-h-[44px]";

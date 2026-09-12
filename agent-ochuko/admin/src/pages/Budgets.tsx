@@ -116,6 +116,7 @@ export function Budgets() {
         <div className="px-5 py-4 border-b border-slate-800">
           <h2 className="text-sm font-semibold text-slate-300">Per-User Budget Overrides</h2>
         </div>
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-800">
@@ -179,12 +180,13 @@ export function Budgets() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Agent quota limits */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
         <h2 className="text-sm font-semibold text-slate-300 mb-4">Agent Quota Limits</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
           {settings
             .filter(s => ["max_file_size_mb","max_ocr_pages_per_user","max_vision_calls","max_speech_seconds","max_image_gen"].includes(s.key))
             .map(s => (

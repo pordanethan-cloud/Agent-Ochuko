@@ -22,7 +22,8 @@ export function Toast({ message, type, onDismiss }: ToastProps) {
 
   return (
     <div
-      className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-sm font-medium
+      className={`fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-auto z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-sm font-medium
+        pb-[max(1rem,env(safe-area-inset-bottom))]
         ${isSuccess
           ? "bg-green-900/80 border-green-700 text-green-200"
           : "bg-red-900/80 border-red-700 text-red-200"

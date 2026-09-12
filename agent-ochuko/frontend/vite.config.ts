@@ -7,10 +7,9 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    // Pin HMR to the same host the browser uses (localhost), so the dev
-    // websocket stops probing 127.0.0.1 and failing to reconnect.
+    // HMR follows the host the page is opened from (localhost on PC,
+    // LAN IP on phone) so hot reload works for both.
     hmr: {
-      host: 'localhost',
       protocol: 'ws',
     },
   },

@@ -249,4 +249,4 @@ function SaveBtn({ onClick, loading, label = "Save" }: { onClick: () => void; lo
   );
 }
 
-const inputCls = "bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 w-52";
+const inputCls = "bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm text-slate-200 focus:outline-none focus:border-indigo-500 w-full sm:w-52";

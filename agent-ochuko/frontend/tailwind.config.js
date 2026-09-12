@@ -1,4 +1,6 @@
 /** @type {import('tailwindcss').Config} */
+import plugin from 'tailwindcss/plugin'
+
 export default {
   content: [
     "./index.html",
@@ -6,6 +8,14 @@ export default {
   ],
   darkMode: 'class',
   theme: {
+    screens: {
+      xs: '400px',
+      sm: '640px',
+      md: '768px',
+      lg: '1024px',
+      xl: '1280px',
+      '2xl': '1536px',
+    },
     extend: {
       colors: {
         // Warm charcoal theme — soft, layered, low-contrast (Verdent-style).
@@ -27,5 +37,13 @@ export default {
       }
     },
   },
-  plugins: [],
+  plugins: [
+    // ── `touch:` variant — applies on coarse-pointer (touchscreen) devices ──
+    // Registered AFTER core variants, so `touch:h-11` wins over `sm:h-7.5`.
+    // This keeps the desktop look pixel-identical (pointer: fine) while phones
+    // in LANDSCAPE (width ≥ 640px) still get 44px touch targets.
+    plugin(({ addVariant }) => {
+      addVariant('touch', '@media (pointer: coarse)')
+    }),
+  ],
 }

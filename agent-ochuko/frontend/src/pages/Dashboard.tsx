@@ -3904,19 +3904,12 @@ export const Dashboard: React.FC = () => {
   const [viewportHeight, setViewportHeight] = useState<number | null>(() => {
     return typeof window !== 'undefined' && window.visualViewport ? window.visualViewport.height : null
   })
-  // iOS Safari does not resize the page when the keyboard opens — it shrinks the
-  // visual viewport and scrolls the window (visualViewport.offsetTop > 0). Without
-  // compensating for that offset, the whole app (and the input bar docked at its
-  // bottom) gets pushed up "to the roof" out of the visible viewport.
-  const [viewportOffsetTop, setViewportOffsetTop] = useState(0)
-
   useEffect(() => {
     if (typeof window === 'undefined' || !window.visualViewport) return
 
     const handleViewportResize = () => {
       if (window.visualViewport) {
         setViewportHeight(window.visualViewport.height)
-        setViewportOffsetTop(window.visualViewport.offsetTop)
       }
     }
 
@@ -7466,7 +7459,7 @@ export const Dashboard: React.FC = () => {
                         if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
                         setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
                       }}
-                      className="absolute top-1 right-1 min-w-[28px] min-h-[28px] flex items-center justify-center rounded-full bg-black/70 hover:bg-red-500 active:bg-red-600 text-white/80 hover:text-white transition shadow z-10 touch-manipulation"
+                      className="absolute top-1 right-1 min-w-[28px] min-h-[28px] touch:min-w-[36px] touch:min-h-[36px] flex items-center justify-center rounded-full bg-black/70 hover:bg-red-500 active:bg-red-600 text-white/80 hover:text-white transition shadow z-10 touch-manipulation"
                       title="Remove image"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -7505,7 +7498,7 @@ export const Dashboard: React.FC = () => {
                       if (file.localObjectUrl) URL.revokeObjectURL(file.localObjectUrl)
                       setAttachedFiles(prev => prev.filter((_, i) => i !== idx))
                     }}
-                    className="min-w-[28px] min-h-[28px] flex items-center justify-center p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 active:bg-white/20 transition shrink-0 touch-manipulation"
+                    className="min-w-[28px] min-h-[28px] touch:min-w-[36px] touch:min-h-[36px] flex items-center justify-center p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 active:bg-white/20 transition shrink-0 touch-manipulation"
                     title="Remove file"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -7538,7 +7531,7 @@ export const Dashboard: React.FC = () => {
                     e.stopPropagation()
                     setPastedSnippets(prev => prev.filter(s => s.id !== snippet.id))
                   }}
-                  className="min-w-[28px] min-h-[28px] flex items-center justify-center p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 active:bg-white/20 transition shrink-0 touch-manipulation"
+                  className="min-w-[28px] min-h-[28px] touch:min-w-[36px] touch:min-h-[36px] flex items-center justify-center p-1 rounded-full text-white/40 hover:text-red-400 hover:bg-white/10 active:bg-white/20 transition shrink-0 touch-manipulation"
                   title="Remove pasted text"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -7574,7 +7567,7 @@ export const Dashboard: React.FC = () => {
               pastedSnippets.length > 0 ? (pastedSnippets.length > 1 ? `Add prompt details for ${pastedSnippets.length} pasted snippets...` : 'Add prompt details for the pasted text...') :
               "Let's talk"
             }
-            className={`w-full bg-transparent text-base sm:text-sm leading-snug text-brand-text placeholder-brand-muted/40 placeholder:text-base sm:placeholder:text-sm focus:outline-none resize-none max-h-36 overflow-y-auto py-0 ${
+            className={`w-full bg-transparent text-base sm:text-sm leading-snug text-brand-text placeholder-brand-muted/40 placeholder:text-base sm:placeholder:text-sm focus:outline-none resize-none max-h-36 touch:max-h-[30dvh] overflow-y-auto py-0 ${
               isCentered ? 'min-h-[38px] sm:min-h-[34px]' : 'h-[24px] min-h-[22px] sm:h-[20px] sm:min-h-[18px]'
             }`}
           />
@@ -7589,11 +7582,11 @@ export const Dashboard: React.FC = () => {
               type="button"
               onClick={handleTriggerUpload}
               disabled={uploading}
-              className="h-8 w-8 sm:h-7.5 sm:w-7.5 p-1 text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10 rounded-md flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20 shrink-0 cursor-pointer touch-manipulation"
+              className="h-8 w-8 sm:h-7.5 sm:w-7.5 touch:h-11 touch:w-11 p-1 touch:p-1.5 text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10 rounded-md flex items-center justify-center transition duration-150 active:scale-95 disabled:opacity-20 shrink-0 cursor-pointer touch-manipulation"
               title="Attach document or image"
               aria-label="Attach file"
             >
-              <Paperclip className="w-3.5 h-3.5" />
+              <Paperclip className="w-3.5 h-3.5 touch:w-5 touch:h-5" />
             </button>
 
             {/* Voice mic button */}
@@ -7603,7 +7596,7 @@ export const Dashboard: React.FC = () => {
                 type="button"
                 onClick={toggleVoice}
                 disabled={isStreaming}
-                className={`h-8 w-8 sm:h-7.5 sm:w-7.5 p-1 transition-all duration-150 active:scale-95 rounded-md flex items-center justify-center disabled:opacity-20 shrink-0 cursor-pointer touch-manipulation ${
+                className={`h-8 w-8 sm:h-7.5 sm:w-7.5 touch:h-11 touch:w-11 p-1 touch:p-1.5 transition-all duration-150 active:scale-95 rounded-md flex items-center justify-center disabled:opacity-20 shrink-0 cursor-pointer touch-manipulation ${
                   voice.isRecording
                     ? 'text-[#ffffff] voice-pulse-ring'
                     : 'text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10'
@@ -7611,7 +7604,7 @@ export const Dashboard: React.FC = () => {
                 title={voice.isRecording ? 'Stop recording' : 'Voice input'}
                 aria-label="Voice input"
               >
-                <Mic className="w-3.5 h-3.5" />
+                <Mic className="w-3.5 h-3.5 touch:w-5 touch:h-5" />
               </button>
             )}
 
@@ -7619,7 +7612,7 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsModeSheetOpen(true)}
-              className={`lg:hidden h-8 sm:h-7.5 px-2 py-0.5 rounded-md border text-[10.5px] font-semibold flex items-center gap-1 transition duration-150 active:scale-95 select-none shrink-0 cursor-pointer touch-manipulation ${
+              className={`lg:hidden h-8 sm:h-7.5 touch:h-11 px-2 touch:px-3 py-0.5 rounded-md border text-[10.5px] touch:text-xs font-semibold flex items-center gap-1 transition duration-150 active:scale-95 select-none shrink-0 cursor-pointer touch-manipulation ${
                 mode === 'agent'
                   ? 'bg-brand-accent/20 border-brand-accent/40 text-brand-accent shadow-sm shadow-brand-accent/20'
                   : mode === 'think'
@@ -7632,15 +7625,15 @@ export const Dashboard: React.FC = () => {
               title="Change interaction mode"
             >
               {mode === 'agent' ? (
-                <Bot className="w-3 h-3 text-brand-accent shrink-0" />
+                <Bot className="w-3 h-3 touch:w-4 touch:h-4 text-brand-accent shrink-0" />
               ) : mode === 'think' ? (
-                <Brain className="w-3 h-3 text-purple-400 shrink-0" />
+                <Brain className="w-3 h-3 touch:w-4 touch:h-4 text-purple-400 shrink-0" />
               ) : mode === 'solve' ? (
-                <Cpu className="w-3 h-3 text-blue-400 shrink-0" />
+                <Cpu className="w-3 h-3 touch:w-4 touch:h-4 text-blue-400 shrink-0" />
               ) : (
-                <MessageSquare className="w-3 h-3 text-emerald-400 shrink-0" />
+                <MessageSquare className="w-3 h-3 touch:w-4 touch:h-4 text-emerald-400 shrink-0" />
               )}
-              <span className="capitalize font-medium text-[10px] tracking-wide hidden xs:inline">
+              <span className="capitalize font-medium text-[10px] touch:text-[11px] tracking-wide hidden xs:inline touch:inline">
                 {mode}
               </span>
               <ChevronDown className="w-2.5 h-2.5 text-[#8e95a2] shrink-0" />
@@ -7681,28 +7674,28 @@ export const Dashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={handleStop}
-                className="h-8 w-8 sm:h-7.5 sm:w-7.5 bg-brand-surface border border-brand-border text-red-400 rounded-md flex items-center justify-center hover:bg-red-950/15 active:bg-red-950/30 transition active:scale-95 shadow shrink-0 cursor-pointer touch-manipulation"
+                className="h-8 w-8 sm:h-7.5 sm:w-7.5 touch:h-11 touch:w-11 bg-brand-surface border border-brand-border text-red-400 rounded-md flex items-center justify-center hover:bg-red-950/15 active:bg-red-950/30 transition active:scale-95 shadow shrink-0 cursor-pointer touch-manipulation"
                 aria-label="Stop generation"
               >
-                <Square className="w-3 h-3 fill-red-400" />
+                <Square className="w-3 h-3 touch:w-4 touch:h-4 fill-red-400" />
               </button>
             )}
 
             <button
               type="submit"
               disabled={uploading || (!input.trim() && attachedFiles.length === 0 && pastedSnippets.length === 0)}
-              className="h-8 sm:h-7.5 px-2.5 xs:px-3 py-1 bg-brand-text text-brand-bg text-[11px] font-bold rounded-md flex items-center justify-center gap-1 hover:opacity-90 active:opacity-80 transition disabled:opacity-20 active:scale-95 shadow shrink-0 cursor-pointer touch-manipulation"
+              className="h-8 sm:h-7.5 touch:h-11 px-2.5 xs:px-3 touch:px-4 py-1 bg-brand-text text-brand-bg text-[11px] touch:text-xs font-bold rounded-md flex items-center justify-center gap-1 hover:opacity-90 active:opacity-80 transition disabled:opacity-20 active:scale-95 shadow shrink-0 cursor-pointer touch-manipulation"
               aria-label="Send message"
             >
               {uploading ? (
                 <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                  <span className="text-[10px] hidden xs:inline">Uploading...</span>
+                  <Loader2 className="w-3.5 h-3.5 touch:w-4 touch:h-4 animate-spin shrink-0" />
+                  <span className="text-[10px] hidden xs:inline touch:inline">Uploading...</span>
                 </>
               ) : (
                 <>
-                  <span className="hidden xs:inline">Send</span>
-                  <Send className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden xs:inline touch:inline">Send</span>
+                  <Send className="w-3.5 h-3.5 touch:w-4 touch:h-4 shrink-0" />
                 </>
               )}
             </button>
@@ -7723,7 +7716,7 @@ export const Dashboard: React.FC = () => {
       </form>
 
       {/* Mysterious One-Line Micro-Footer - Hidden on mobile */}
-      <div className="hidden sm:block pt-1 pb-0.5 text-center select-none pointer-events-none">
+      <div className="hide-short-vh hidden sm:block pt-1 pb-0.5 text-center select-none pointer-events-none">
         <p className="text-[10px] font-mono text-brand-muted/30 tracking-[0.2em] uppercase transition-colors duration-300">
           Beyond the prompt lies the pattern.
         </p>
@@ -7734,7 +7727,7 @@ export const Dashboard: React.FC = () => {
   return (
 
     <div
-      style={viewportHeight ? { height: `${viewportHeight}px`, maxHeight: `${viewportHeight}px`, transform: `translateY(${viewportOffsetTop}px)` } : undefined}
+      style={viewportHeight ? { height: `${viewportHeight}px`, maxHeight: `${viewportHeight}px` } : undefined}
       className="flex h-screen h-[100dvh] max-h-[100dvh] bg-brand-bg text-brand-text font-sans antialiased overflow-hidden relative selection:bg-brand-accent/20"
     >
 
@@ -7785,7 +7778,7 @@ export const Dashboard: React.FC = () => {
           maxWidth: isDesktop ? undefined : '320px',
         }}
 
-        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] sm:top-3 sm:left-3 sm:h-[calc(100dvh-24px)] bg-[#0d0f11]/98 border-r sm:border border-[#1e2025] rounded-none sm:rounded-lg z-40 flex flex-col justify-between px-4 sm:px-5 py-4 sm:py-6 pb-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] backdrop-blur-xl shadow-2xl shadow-black/80 ${
+        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] sm:top-3 sm:left-3 sm:h-[calc(100dvh-24px)] bg-[#0d0f11]/98 border-r sm:border border-[#1e2025] rounded-none sm:rounded-lg z-40 flex flex-col justify-between px-4 sm:px-5 pt-[max(1rem,env(safe-area-inset-top,1rem))] pb-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] sm:py-6 backdrop-blur-xl shadow-2xl shadow-black/80 ${
           isDraggingSidebar ? 'transition-none' : 'transition-all duration-300 ease-out'
         } overflow-y-auto overflow-x-hidden custom-scrollbar ${
           isSidebarOpen || isSidebarHovered ? 'translate-x-0 opacity-100 pointer-events-auto' : '-translate-x-[calc(100%+24px)] opacity-0 pointer-events-none'
@@ -7874,7 +7867,7 @@ export const Dashboard: React.FC = () => {
 
               placeholder="Search chats (Ctrl+K)..."
 
-              className="w-full h-11 min-h-[44px] bg-white/[0.03] focus:bg-white/[0.05] border border-white/[0.08] focus:border-white/20 rounded-lg pl-9 pr-9 text-xs text-[#f3f4f6] placeholder-[#8e95a2]/50 focus:outline-none transition"
+              className="w-full h-11 min-h-[44px] bg-white/[0.03] focus:bg-white/[0.05] border border-white/[0.08] focus:border-white/20 rounded-lg pl-9 pr-9 text-base sm:text-xs text-[#f3f4f6] placeholder-[#8e95a2]/50 focus:outline-none transition"
 
             />
 
@@ -8397,7 +8390,7 @@ export const Dashboard: React.FC = () => {
 
         {/* Floating Top Navigation - Seamless, borderless, and optimized for mobile touch */}
 
-        <header className="relative z-30 h-13 sm:h-14 bg-transparent flex items-center justify-between px-2 sm:px-4 shrink-0 select-none">
+        <header className="relative z-30 h-[calc(3.25rem+env(safe-area-inset-top,0px))] sm:h-14 bg-transparent flex items-center justify-between px-2 sm:px-4 pt-[env(safe-area-inset-top,0px)] shrink-0 select-none">
 
           <div className="flex items-center gap-1 sm:gap-2 min-w-0">
             {/* Floating Menu Icon Button */}
@@ -8549,7 +8542,7 @@ export const Dashboard: React.FC = () => {
             <div
               ref={scrollContainerRef}
               onScroll={handleScroll}
-              className="flex-1 overflow-y-auto overflow-x-hidden pt-3 sm:pt-6 pb-4 px-2.5 sm:px-5 md:px-8 relative z-10"
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain overflow-x-hidden pt-3 sm:pt-6 pb-4 px-2.5 sm:px-5 md:px-8 relative z-10"
             >
 
           {isFetchingHistory && messages.length === 0 ? (
@@ -8560,9 +8553,9 @@ export const Dashboard: React.FC = () => {
 
             <div className="min-h-full flex flex-col items-center justify-center max-w-2xl mx-auto px-2 sm:px-4 w-full py-4 sm:py-10 my-auto">
 
-              <div className="flex flex-col items-center text-center space-y-3 sm:space-y-4 mb-4 sm:mb-8">
+              <div className="flex flex-col items-center text-center space-y-3 sm:space-y-4 mb-4 sm:mb-8 short-tight">
 
-                <div className="w-12 h-12 sm:w-16 sm:h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
+                <div className="hide-short-vh w-12 h-12 sm:w-16 sm:h-16 bg-brand-surface border border-[#1e2025] rounded-2xl overflow-hidden shadow-xl relative group">
 
                   <div className="absolute inset-0 bg-[#ffffff]/4 opacity-0 group-hover:opacity-100 transition duration-500" />
 
@@ -8583,7 +8576,7 @@ export const Dashboard: React.FC = () => {
                 <div className="space-y-1.5 sm:space-y-2">
 
                   <div className="flex items-center gap-2 justify-center">
-                    <h2 className="text-xl sm:text-3xl font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
+                    <h2 className="text-xl sm:text-3xl short-shrink-greeting font-bold tracking-tight text-brand-text">{dynamicGreeting}</h2>
                   </div>
 
                   {isEditingNickname && (
@@ -9401,7 +9394,7 @@ export const Dashboard: React.FC = () => {
 
                             title={msg.role === 'user' ? "Copy prompt" : "Copy response"}
 
-                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase"
+                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase min-h-[36px] touch:min-h-[40px] px-1.5 -mx-1.5 py-1"
 
                           >
 
@@ -9449,7 +9442,7 @@ export const Dashboard: React.FC = () => {
 
                             title="Edit prompt"
 
-                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase disabled:opacity-30 disabled:cursor-not-allowed"
+                            className="flex items-center gap-1.5 text-[11px] font-bold text-brand-muted hover:text-brand-accent transition duration-150 tracking-wider uppercase disabled:opacity-30 disabled:cursor-not-allowed min-h-[36px] touch:min-h-[40px] px-1.5 -mx-1.5 py-1"
 
                           >
 
@@ -9494,7 +9487,7 @@ export const Dashboard: React.FC = () => {
         {/* Pinned Input Area — only displayed when conversation has active messages or history is loading for existing chat */}
         {(messages.length > 0 || (isFetchingHistory && activeConversationId !== '00000000-0000-0000-0000-000000000000')) && (
           <div
-            style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0.5rem))' }}
+            style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))' }}
             className="shrink-0 w-full px-2 sm:px-4 md:px-6 pt-1 sm:pt-1.5 z-20"
           >
             {renderInputConsole(false)}
@@ -9700,7 +9693,7 @@ export const Dashboard: React.FC = () => {
 
       {/* Floating Capabilities Popup at Bottom Left (White background, Black text, Minimalist) */}
       {showCapabilitiesNote && (
-        <div className="fixed bottom-3 left-6 w-80 p-4 rounded-lg border border-black/10 bg-white shadow-2xl flex flex-col gap-2.5 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 pointer-events-auto select-none">
+        <div className="fixed bottom-3 left-3 right-3 w-auto sm:left-6 sm:right-auto sm:w-80 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] rounded-lg border border-black/10 bg-white shadow-2xl flex flex-col gap-2.5 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 pointer-events-auto select-none">
           <div className="flex items-start justify-between">
             <span className="text-[10px] uppercase tracking-widest text-black/50 font-bold">
               System Notice
