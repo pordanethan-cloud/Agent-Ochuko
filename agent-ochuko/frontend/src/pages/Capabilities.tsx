@@ -37,17 +37,17 @@ interface CapabilityCard {
 
 const CAPABILITY_SECTIONS: CapabilityCard[] = [
   {
-    id: 'workstation-access',
-    title: 'Workstation Computer Access & Local Machine Collaboration',
+    id: 'interactive-deliverables',
+    title: 'Full-Stack Web Apps, Live Previews & Project Deliverables',
     icon: Monitor,
-    tools: ['mcp_workstation_read', 'mcp_workstation_list', 'mcp_workstation_write', 'mcp_workstation_exec'],
+    tools: ['sandbox_write', 'deploy_site', 'present_deliverable'],
     recommendedMode: 'agent',
     description:
-      'Directly navigates, reads, and writes to files on your local workstation (Downloads, Desktop, active project repositories) and executes terminal commands via a dual-tier zero-install browser folder mount and high-speed local companion daemon.',
+      'Autonomously builds, verifies, and packages full-stack web applications, interactive tools, and multi-file projects. Provides instant live browser sandboxing, in-chat iframe previews, and single-click ZIP repository downloads.',
     prompt:
-      'Inspect my local Downloads folder, find the latest downloaded file, analyze its contents, and generate an executive summary with key metrics.',
+      'Build a modern, responsive Range Manual trading desk application with real-time risk calculators, interactive candlestick charts, and an exportable strategy playbook. Present the full interactive project deliverable.',
     expectedOutcome:
-      'Ochuko scans your local Downloads directory using reverse-mtime discovery, reads the latest file directly without uploading your entire drive, and provides full analysis.',
+      'Ochuko writes the complete frontend and backend files, validates code syntax, builds the ZIP archive, and presents the interactive deliverable card with live device preview.',
   },
   {
     id: 'universal-ingestion',

@@ -17,17 +17,15 @@ LOW_RISK_TOOLS = {
     "sandbox_ls", "sandbox_read",
     "gmail_search", "gmail_read", "calendar_list_events", "calendar_check_availability",
     "photos_search", "photos_list", "photos_get",
-    "fetch_stock_image", "ask_user_input",
-    "mcp_workstation_read", "mcp_workstation_list", "workstation_read", "workstation_list",
+    "fetch_stock_image", "ask_user_input", "present_deliverable",
 }
 MEDIUM_RISK_TOOLS = {
     "visualize__show_widget", "terminal",
-    "mcp_workstation_write", "workstation_write", "sandbox_write", "sandbox_edit",
+    "sandbox_write", "sandbox_edit",
 }
 HIGH_RISK_TOOLS = {
     "generate_image", "browse_web", "deploy_site",
     "gmail_send", "calendar_create_event", "photos_upload",
-    "mcp_workstation_exec", "workstation_exec", "workstation_terminal",
 }
 
 _CODE_FILE_WRITE_PATTERNS = re.compile(

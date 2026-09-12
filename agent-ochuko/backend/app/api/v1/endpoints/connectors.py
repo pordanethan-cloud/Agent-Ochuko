@@ -60,42 +60,6 @@ CONNECTOR_CATALOG = [
         "icon": "image",
         "default_permissions": ["read", "write"],
     },
-    {
-        "name": "github",
-        "title": "GitHub MCP",
-        "description": "Inspect repositories, read code, view issues, and open pull requests.",
-        "type": "mcp",
-        "category": "Development",
-        "icon": "github",
-        "default_permissions": ["read", "write"],
-    },
-    {
-        "name": "notion",
-        "title": "Notion MCP",
-        "description": "Search workspace pages, read databases, and update documents.",
-        "type": "mcp",
-        "category": "Knowledge",
-        "icon": "book-open",
-        "default_permissions": ["read", "write"],
-    },
-    {
-        "name": "filesystem",
-        "title": "Local Sandbox Filesystem MCP",
-        "description": "Secure workspace storage access for project files and codebases.",
-        "type": "mcp",
-        "category": "System",
-        "icon": "folder",
-        "default_permissions": ["read", "write"],
-    },
-    {
-        "name": "workstation_access",
-        "title": "Workstation Computer Access MCP",
-        "description": "Direct read, write, directory navigation, and terminal command execution on your workstation (Agent Mode only).",
-        "type": "mcp",
-        "category": "System",
-        "icon": "cpu",
-        "default_permissions": ["read", "write", "execute"],
-    },
 ]
 
 

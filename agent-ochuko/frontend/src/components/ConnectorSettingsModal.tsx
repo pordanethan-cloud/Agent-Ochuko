@@ -5,14 +5,7 @@ import {
   ChevronDown,
   Mail,
   Calendar,
-  Code2,
   Image as ImageIcon,
-  Folder,
-  FolderPlus,
-  Terminal,
-  Copy,
-  BookOpen,
-  Cpu,
   RefreshCw,
   Shield,
   Sliders,
@@ -40,6 +33,9 @@ interface ConnectorSettingsModalProps {
   onClose: () => void
 }
 
+// Approved first-party integrations only
+const ALLOWED_CONNECTOR_NAMES = new Set(['gmail', 'google_calendar', 'google_photos'])
+
 export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
   isOpen,
   onClose,
@@ -50,11 +46,6 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
   const [isReviewDropdownOpen, setIsReviewDropdownOpen] = useState<boolean>(false)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'connectors' | 'policies'>('connectors')
-  const [bridgeOnline, setBridgeOnline] = useState<boolean | null>(null)
-  const [mountedFolderName, setMountedFolderName] = useState<string | null>(
-    localStorage.getItem('ochuko_mounted_folder_name')
-  )
-  const [copiedCmd, setCopiedCmd] = useState<boolean>(false)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -76,25 +67,13 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
         })
         if (res.ok) {
           const data = await res.json()
-          let fetched: ConnectorItem[] = data.connectors || []
-          const localWs = localStorage.getItem('ochuko_workstation_access_enabled') === 'true'
-          if (!fetched.some((c) => c.name === 'workstation_access')) {
-            fetched.push({
-              name: 'workstation_access',
-              title: 'Workstation Computer Access MCP',
-              description: 'Direct read, write, directory navigation, and terminal command execution on your workstation (Agent Mode only).',
-              type: 'mcp',
-              category: 'System',
-              icon: 'cpu',
-              is_connected: localWs,
-              permissions: ['read', 'write', 'execute'],
-              review_policy: (localStorage.getItem('ochuko_review_policy') as any) || 'always_ask',
-            })
-          } else {
-            fetched = fetched.map(c => c.name === 'workstation_access' ? { ...c, is_connected: localWs || c.is_connected } : c)
-          }
+          const fetched: ConnectorItem[] = (data.connectors || []).filter((c: ConnectorItem) =>
+            ALLOWED_CONNECTOR_NAMES.has(c.name)
+          )
           setConnectors(fetched)
-          const savedPolicy = (localStorage.getItem('ochuko_review_policy') as any) || (fetched[0]?.review_policy || 'always_ask')
+          const savedPolicy =
+            (localStorage.getItem('ochuko_review_policy') as any) ||
+            (fetched[0]?.review_policy || 'always_ask')
           setReviewPolicy(savedPolicy)
         }
       } catch (err) {
@@ -104,48 +83,8 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
       }
     }
 
-    const checkBridge = async () => {
-      try {
-        const res = await fetch('http://127.0.0.1:3920/health', {
-          method: 'GET',
-          signal: AbortSignal.timeout(1500),
-        })
-        if (res.ok) {
-          setBridgeOnline(true)
-          return
-        }
-      } catch {}
-      setBridgeOnline(false)
-    }
-
     loadData()
-    checkBridge()
   }, [isOpen])
-
-  const handleMountFolder = async () => {
-    try {
-      if (!('showDirectoryPicker' in window)) {
-        alert(
-          'File System Access API is not supported in this browser. Please use Chrome, Edge, or Brave.'
-        )
-        return
-      }
-      const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' })
-      if (dirHandle) {
-        ;(window as any)._ochuko_dir_handle = dirHandle
-        const folderName = dirHandle.name
-        setMountedFolderName(folderName)
-        localStorage.setItem('ochuko_mounted_folder_name', folderName)
-        window.dispatchEvent(
-          new CustomEvent('ochuko_folder_mounted', { detail: { folderName, dirHandle } })
-        )
-      }
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        console.error('Failed to mount folder:', err)
-      }
-    }
-  }
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -192,11 +131,6 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
             Authorization: `Bearer ${token}`,
           },
         })
-      }
-
-      if (connector.name === 'workstation_access') {
-        localStorage.setItem('ochuko_workstation_access_enabled', newActiveState ? 'true' : 'false')
-        window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
       }
 
       setConnectors((prev) =>
@@ -247,26 +181,11 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-        }
+        },
       })
       if (error) throw error
     } catch (err: any) {
       console.error('Google OAuth connection error:', err)
-    }
-  }
-
-  const handleConnectGitHub = async () => {
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'github',
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-          scopes: 'repo read:user user:email'
-        }
-      })
-      if (error) throw error
-    } catch (err: any) {
-      console.error('GitHub OAuth connection error:', err)
     }
   }
 
@@ -278,64 +197,47 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
         return <Calendar className="w-4 h-4 text-blue-400" />
       case 'google_photos':
         return <ImageIcon className="w-4 h-4 text-amber-400" />
-      case 'github':
-        return <Code2 className="w-4 h-4 text-purple-400" />
-      case 'notion':
-        return <BookOpen className="w-4 h-4 text-emerald-400" />
-      case 'filesystem':
-        return <Folder className="w-4 h-4 text-amber-400" />
-      case 'workstation_access':
-        return <Cpu className="w-4 h-4 text-cyan-400" />
       default:
-        return <Cpu className="w-4 h-4 text-white/70" />
+        return <Shield className="w-4 h-4 text-white/70" />
     }
   }
 
   const isGoogleConnected = connectors.some(
-    (c) => (c.name === 'gmail' || c.name === 'google_calendar' || c.name === 'google_photos') && c.is_connected
-  )
-
-  const isGithubConnected = connectors.some(
-    (c) => c.name === 'github' && c.is_connected
+    (c) =>
+      (c.name === 'gmail' || c.name === 'google_calendar' || c.name === 'google_photos') &&
+      c.is_connected
   )
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm animate-fadeIn select-none">
-      <div
-        className="w-full max-w-2xl max-h-[90vh] bg-[#0c0d11] border border-white/[0.08] rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all text-brand-text"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06] bg-[#12141a]/60">
-          <div className="flex items-center gap-2.5">
-            <div className="p-1.5 rounded-lg bg-white/[0.06] border border-white/[0.06] text-white">
-              <Sliders className="w-4 h-4" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="w-full max-w-xl bg-[#0d0f14] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-white/[0.06]">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
+              <Sliders className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-[14px] font-semibold text-white tracking-wide">
-                Agent Settings
-              </h2>
-              <p className="text-[11.5px] text-[#8e95a2]">
-                Configure autonomous execution policies and external tools
+              <h3 className="text-[15px] font-semibold text-white">Agent Settings</h3>
+              <p className="text-[12px] text-[#8e95a2]">
+                Configure autonomous execution policies and Google Workspace integrations
               </p>
             </div>
           </div>
           <button
-            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/[0.06] transition"
-            aria-label="Close"
+            className="p-2 rounded-lg text-[#8e95a2] hover:text-white hover:bg-white/5 transition"
+            aria-label="Close modal"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 px-5 pt-3 border-b border-white/[0.04] bg-[#0f1015]/40 text-[12px]">
+        {/* Tabs */}
+        <div className="flex items-center px-4 sm:px-5 border-b border-white/[0.06] bg-[#090b0e]/50">
           <button
-            type="button"
             onClick={() => setActiveTab('connectors')}
-            className={`pb-2.5 px-1 font-medium transition-colors border-b-2 ${
+            className={`py-3 px-3 text-[12.5px] font-medium border-b-2 transition ${
               activeTab === 'connectors'
                 ? 'border-white text-white'
                 : 'border-transparent text-[#8e95a2] hover:text-brand-text'
@@ -344,9 +246,8 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
             Connected Apps & Tools
           </button>
           <button
-            type="button"
             onClick={() => setActiveTab('policies')}
-            className={`pb-2.5 px-1 font-medium transition-colors border-b-2 ${
+            className={`py-3 px-3 text-[12.5px] font-medium border-b-2 transition ${
               activeTab === 'policies'
                 ? 'border-white text-white'
                 : 'border-transparent text-[#8e95a2] hover:text-brand-text'
@@ -389,7 +290,7 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
                   <button
                     type="button"
                     onClick={handleConnectGoogle}
-                    className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-white hover:bg-white/90 text-black font-semibold text-[12px] transition shadow-sm"
+                    className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-white hover:bg-white/90 text-black font-semibold text-[12px] transition shadow-sm cursor-pointer"
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24">
                       <path
@@ -410,16 +311,6 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
                       />
                     </svg>
                     <span>{isGoogleConnected ? 'Re-auth Google' : 'Connect via Google'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleConnectGitHub}
-                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[#24292e] hover:bg-[#2f363d] border border-white/10 text-white font-semibold text-[12px] transition shadow-sm"
-                    title="Connect GitHub Repositories"
-                  >
-                    <Code2 className="w-4 h-4 text-purple-400" />
-                    <span>{isGithubConnected ? 'Re-auth GitHub' : 'Connect GitHub'}</span>
                   </button>
                 </div>
               </div>
@@ -470,7 +361,7 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
                               {c.is_connected ? 'Enabled' : 'Disabled'}
                             </div>
 
-                            {/* WhatsApp / iOS Style Sleek Toggle */}
+                            {/* Sleek Toggle */}
                             <button
                               type="button"
                               disabled={isBusy}
@@ -488,99 +379,6 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
                             </button>
                           </div>
                         </div>
-
-                        {/* Workstation Access Dual-Tier Details */}
-                        {c.name === 'workstation_access' && c.is_connected && (
-                          <div className="pt-3 border-t border-white/[0.06] space-y-2.5">
-                            {/* Tier 1: Browser Native Folder Mount */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-black/40 border border-white/[0.06]">
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <Folder className="w-4 h-4 text-cyan-400 shrink-0" />
-                                  <span className="text-[12px] font-semibold text-white">Browser Folder Mount (Zero Install)</span>
-                                </div>
-                                <p className="text-[11.5px] text-[#8e95a2] mt-0.5">
-                                  {mountedFolderName
-                                    ? `Mounted: ${mountedFolderName}`
-                                    : 'Mount your Downloads, Desktop, or active workspace folder for direct browser read/write access.'}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={handleMountFolder}
-                                className="shrink-0 px-3.5 py-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[11.5px] font-medium transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <FolderPlus className="w-3.5 h-3.5" />
-                                <span>{mountedFolderName ? 'Change Folder' : 'Mount Local Folder'}</span>
-                              </button>
-                            </div>
-
-                            {/* Tier 2: Workstation Companion Bridge */}
-                            <div className="p-3 rounded-xl bg-black/40 border border-white/[0.06] space-y-2">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <Terminal className="w-4 h-4 text-indigo-400 shrink-0" />
-                                  <span className="text-[12px] font-semibold text-white">Workstation Companion Bridge</span>
-                                </div>
-                                {bridgeOnline === true ? (
-                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono text-emerald-400">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                    Active (Port 3920)
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono text-amber-400">
-                                    Bridge Offline
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[11px] text-[#8e95a2] leading-relaxed">
-                                For unconstrained host disk navigation and terminal shell execution on your machine, start the companion bridge:
-                              </p>
-                              {/* Silent Windows Background Daemon */}
-                              <div className="space-y-1.5">
-                                <div className="flex items-center justify-between text-[10px] text-[#8e95a2]">
-                                  <span>Windows (Silent Background - No Terminal):</span>
-                                </div>
-                                <div className="flex items-center gap-2 bg-[#090a0d] border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-cyan-300 overflow-x-auto">
-                                  <span className="flex-1 truncate select-all">run_workstation_bridge.bat background</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText('run_workstation_bridge.bat background')
-                                      setCopiedCmd(true)
-                                      setTimeout(() => setCopiedCmd(false), 2000)
-                                    }}
-                                    className="p-1 rounded text-[#8e95a2] hover:text-white hover:bg-white/[0.06] transition shrink-0 cursor-pointer"
-                                    title="Copy silent launch command"
-                                  >
-                                    {copiedCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                                  </button>
-                                </div>
-                              </div>
-                              {/* Standard Python Command */}
-                              <div className="space-y-1.5 pt-1">
-                                <div className="flex items-center justify-between text-[10px] text-[#8e95a2]">
-                                  <span>Cross-Platform (Mac/Linux/Win terminal):</span>
-                                </div>
-                                <div className="flex items-center gap-2 bg-[#090a0d] border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-indigo-300 overflow-x-auto">
-                                  <span className="flex-1 truncate select-all">python -m app.connectors.workstation_bridge</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText('python -m app.connectors.workstation_bridge')
-                                      setCopiedCmd(true)
-                                      setTimeout(() => setCopiedCmd(false), 2000)
-                                    }}
-                                    className="p-1 rounded text-[#8e95a2] hover:text-white hover:bg-white/[0.06] transition shrink-0 cursor-pointer"
-                                    title="Copy command"
-                                  >
-                                    {copiedCmd ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     )
                   })}
@@ -588,135 +386,87 @@ export const ConnectorSettingsModal: React.FC<ConnectorSettingsModalProps> = ({
               </div>
             </>
           ) : (
-            <>
-              {/* Policies & Autonomy Section (Exactly matching screenshot styling) */}
-              <div className="space-y-4">
-                <div>
-                  <span className="text-[11px] font-mono font-medium tracking-wider text-[#8e95a2] uppercase">
-                    Planning & Human-In-The-Loop
-                  </span>
-                </div>
-
-                {/* Review Policy Card with Exact Dropdown */}
-                <div className="p-4 sm:p-4.5 rounded-xl bg-[#13151d]/70 border border-white/[0.06] space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="space-y-1 max-w-md">
-                      <h4 className="text-[13px] font-medium text-white">Review Policy</h4>
-                      <p className="text-[11.5px] text-[#8e95a2] leading-relaxed">
-                        Specifies Agent's behavior when asking for review on artifacts, which are
-                        documents it creates to enable a risk-free execution.
-                      </p>
-                    </div>
-
-                    {/* Dropdown Container */}
-                    <div className="relative shrink-0" ref={dropdownRef}>
-                      <button
-                        type="button"
-                        onClick={() => setIsReviewDropdownOpen((prev) => !prev)}
-                        className="w-full sm:w-auto inline-flex items-center justify-between gap-2 px-3.5 py-1.5 rounded-lg bg-[#1c1f2b] hover:bg-[#232737] border border-white/[0.08] text-[12px] font-medium text-white transition"
-                      >
-                        <span>
-                          {reviewPolicy === 'always_proceed' ? 'Always Proceed' : 'Always Ask'}
-                        </span>
-                        <ChevronDown className="w-3.5 h-3.5 text-[#8e95a2]" />
-                      </button>
-
-                      {/* Dropdown Popover matching screenshot */}
-                      {isReviewDropdownOpen && (
-                        <div className="absolute right-0 mt-1.5 w-72 sm:w-80 rounded-xl bg-[#141620] border border-white/[0.1] shadow-2xl p-1.5 z-50 animate-fadeIn">
-                          {/* Option 1: Always Proceed */}
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateReviewPolicy('always_proceed')}
-                            className={`w-full text-left p-3 rounded-lg transition ${
-                              reviewPolicy === 'always_proceed'
-                                ? 'bg-white/[0.08]'
-                                : 'hover:bg-white/[0.04]'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-[12.5px] font-semibold text-white">
-                                Always Proceed
-                              </span>
-                              {reviewPolicy === 'always_proceed' && (
-                                <Check className="w-3.5 h-3.5 text-blue-400" />
-                              )}
-                            </div>
-                            <p className="text-[11px] text-[#8e95a2] leading-relaxed mt-1">
-                              Agent never asks for review. This maximizes the autonomy of the
-                              Agent, but also has the highest risk of the Agent operating over
-                              unsafe or injected Artifact content.
-                            </p>
-                          </button>
-
-                          {/* Option 2: Always Ask */}
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateReviewPolicy('always_ask')}
-                            className={`w-full text-left p-3 rounded-lg transition mt-1 ${
-                              reviewPolicy === 'always_ask'
-                                ? 'bg-white/[0.08]'
-                                : 'hover:bg-white/[0.04]'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-[12.5px] font-semibold text-white">
-                                Always Ask
-                              </span>
-                              {reviewPolicy === 'always_ask' && (
-                                <Check className="w-3.5 h-3.5 text-blue-400" />
-                              )}
-                            </div>
-                            <p className="text-[11px] text-[#8e95a2] leading-relaxed mt-1">
-                              Agent always asks for review on high-risk operations and deliverables.
-                            </p>
-                          </button>
-                        </div>
-                      )}
-                    </div>
+            /* Tab 2: Safety & Execution Policies */
+            <div className="space-y-5">
+              <div className="p-4 rounded-xl bg-[#13151d]/70 border border-white/[0.06] space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shrink-0">
+                    <Shield className="w-4 h-4" />
                   </div>
-                </div>
-
-                {/* Automation Section */}
-                <div className="pt-2">
-                  <span className="text-[11px] font-mono font-medium tracking-wider text-[#8e95a2] uppercase">
-                    Automation & Sandbox Safety
-                  </span>
-                </div>
-
-                {/* Card 2: Auto-Fix */}
-                <div className="p-4 sm:p-4.5 rounded-xl bg-[#13151d]/70 border border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-1 max-w-md">
-                    <h4 className="text-[13px] font-medium text-white">Agent Auto-Reflexion</h4>
-                    <p className="text-[11.5px] text-[#8e95a2] leading-relaxed">
-                      When enabled, Agent automatically reflects and self-corrects failed code or tool steps without explicit user prompting.
+                  <div>
+                    <h4 className="text-[13px] font-medium text-white">Review & Approval Policy</h4>
+                    <p className="text-[11.5px] text-[#8e95a2] leading-relaxed mt-0.5">
+                      Determine whether Ochuko must explicitly ask for your approval before writing external changes (e.g. sending emails or creating calendar events).
                     </p>
                   </div>
+                </div>
 
-                  <div className="flex items-center justify-between sm:justify-end pt-2 sm:pt-0 border-t sm:border-t-0 border-white/[0.04]">
-                    <button
-                      type="button"
-                      className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-blue-600 transition-colors duration-200 ease-in-out focus:outline-none"
-                    >
-                      <span className="pointer-events-none inline-block h-5 w-5 translate-x-5 transform rounded-full bg-white shadow-md transition duration-200 ease-in-out" />
-                    </button>
-                  </div>
+                <div className="relative pt-2" ref={dropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsReviewDropdownOpen(!isReviewDropdownOpen)}
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-[#1a1d28] border border-white/[0.08] hover:border-white/[0.16] text-[12px] text-white transition cursor-pointer"
+                  >
+                    <span>
+                      {reviewPolicy === 'always_ask'
+                        ? 'Always ask before writing external changes'
+                        : 'Proceed autonomously without asking'}
+                    </span>
+                    <ChevronDown className="w-4 h-4 text-[#8e95a2]" />
+                  </button>
+
+                  {isReviewDropdownOpen && (
+                    <div className="absolute top-full left-0 right-0 mt-1.5 py-1 bg-[#1a1d28] border border-white/10 rounded-xl shadow-2xl z-20 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateReviewPolicy('always_ask')}
+                        className="w-full px-3.5 py-2.5 text-left text-[12px] hover:bg-white/5 flex items-center justify-between text-white transition cursor-pointer"
+                      >
+                        <div className="space-y-0.5">
+                          <p className="font-medium">Always ask before writing external changes</p>
+                          <p className="text-[11px] text-[#8e95a2]">
+                            Requires confirmation before sending emails or updating schedules.
+                          </p>
+                        </div>
+                        {reviewPolicy === 'always_ask' && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateReviewPolicy('always_proceed')}
+                        className="w-full px-3.5 py-2.5 text-left text-[12px] hover:bg-white/5 flex items-center justify-between text-white transition cursor-pointer border-t border-white/[0.04]"
+                      >
+                        <div className="space-y-0.5">
+                          <p className="font-medium">Proceed autonomously without asking</p>
+                          <p className="text-[11px] text-[#8e95a2]">
+                            High speed autonomous execution without confirmation cards.
+                          </p>
+                        </div>
+                        {reviewPolicy === 'always_proceed' && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
-            </>
+
+              <div className="p-4 rounded-xl bg-blue-950/20 border border-blue-500/10 space-y-2">
+                <h5 className="text-[12px] font-semibold text-blue-300">Security Architecture</h5>
+                <p className="text-[11px] text-[#8e95a2] leading-relaxed">
+                  Agent Ochuko uses short-lived tokens and Azure Key Vault encryption for external connections. Tool permissions are strictly scoped to the active session.
+                </p>
+              </div>
+            </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3.5 border-t border-white/[0.06] bg-[#0e0f14] flex items-center justify-between text-[11.5px] text-[#8e95a2]">
-          <div className="flex items-center gap-1.5">
-            <Shield className="w-3.5 h-3.5 text-emerald-400" />
+        <div className="p-4 sm:p-5 border-t border-white/[0.06] bg-[#090b0e] flex items-center justify-between">
+          <div className="flex items-center gap-2 text-[11px] text-[#8e95a2]">
+            <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             <span>Azure-encrypted credentials & RLS protected</span>
           </div>
           <button
-            type="button"
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] text-white font-medium text-[12px] transition"
+            className="px-4 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] text-[12px] font-medium text-white transition cursor-pointer"
           >
             Done
           </button>
