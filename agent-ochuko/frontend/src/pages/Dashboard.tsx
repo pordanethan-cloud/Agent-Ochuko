@@ -23,6 +23,7 @@ import { ArtifactPanel } from '../components/ArtifactPanel'
 import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
 import { RepositoryDeliverableCard } from '../components/RepositoryDeliverableCard'
 import { SportsMatchCard } from '../components/SportsMatchCard'
+import { OptionsCard } from '../components/OptionsCard'
 import { ZipAppPreviewer } from '../components/ZipAppPreviewer'
 
 
@@ -4883,6 +4884,7 @@ export const Dashboard: React.FC = () => {
               widgetLoading: false,
 
             })) : undefined,
+            displayCards: m.content_parts?.display_cards || undefined,
 
           }
 
@@ -9310,6 +9312,8 @@ export const Dashboard: React.FC = () => {
                               {msg.displayCards.map((card, cIdx) => {
                                 if (card.card_type === 'render_sports_card') {
                                   return <SportsMatchCard key={cIdx} {...card.payload} />
+                                } else if (card.card_type === 'render_options_card') {
+                                  return <OptionsCard key={cIdx} {...card.payload} />
                                 }
                                 return null
                               })}
