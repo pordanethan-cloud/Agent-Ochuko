@@ -802,7 +802,7 @@ class AgentTaskManager:
                 # Direct analytical reasoning / greeting step
                 greeting_match = bool(re.match(r"^\s*(hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|who\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you|help|thanks|thank\s+you|sup|yo)\b[!?.]*\s*$", self.task.goal.strip(), re.IGNORECASE))
                 if greeting_match:
-                    summary = "Hello! I am Agent Ochuko in Autonomous Agent Mode. I can plan and execute multi-step research, data analysis, document generation, and autonomous tasks for you. What would you like to build or explore?"
+                    summary = "Hello! I can plan and execute multi-step research, data analysis, document generation, and autonomous tasks for you. What would you like to build or explore?"
                 else:
                     step_prompt = AgentContextCompressor.build_step_payload(self.task, step.index)
                     summary = await self.sub_agents.compress_text(

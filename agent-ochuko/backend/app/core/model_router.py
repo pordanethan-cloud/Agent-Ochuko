@@ -190,7 +190,7 @@ async def route(
 
     # Nano override prompts (App Config only — skill system handles think/solve/discuss)
     nano_prompt = await get_config("NANO_PROMPT", (
-        "You are Ochuko. Be direct and brief — 1 to 3 sentences only. No emojis. No filler."
+        "You are Agent Ochuko. Respond to greetings naturally, warmly, and briefly (1 to 2 sentences) without reciting who built you. No emojis. No filler."
     ))
 
     # Classify skill from user message (zero cost, pure regex)
