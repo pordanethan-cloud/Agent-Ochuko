@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   Folder, FolderOpen, ChevronRight, ChevronDown, Download, Eye, Globe,
   Search, Loader2
@@ -144,6 +144,7 @@ export const RepositoryDeliverableCard: React.FC<RepositoryDeliverableCardProps>
   const [treeExpanded, setTreeExpanded] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [zipping, setZipping] = useState(false)
+  const [unpackedFiles, setUnpackedFiles] = useState<DeliverableFile[] | null>(null)
 
   // Separate any existing zip file from individual content files
   const { zipFile, contentFiles } = useMemo(() => {
@@ -168,41 +169,88 @@ export const RepositoryDeliverableCard: React.FC<RepositoryDeliverableCardProps>
     return { zipFile: zip, contentFiles: regular }
   }, [files])
 
+  // Automatically unpack zip contents in-memory to populate the file tree and app title
+  useEffect(() => {
+    let isCancelled = false
+    const regular = files.filter((f) => !f.filename.toLowerCase().endsWith('.zip'))
+    const zip = files.find((f) => f.filename.toLowerCase().endsWith('.zip'))
+
+    if (regular.length === 0 && zip && zip.download_url && !zip.download_url.startsWith('sandbox:')) {
+      fetch(zip.download_url)
+        .then((r) => r.blob())
+        .then((blob) => JSZip.loadAsync(blob))
+        .then((unzipped) => {
+          if (isCancelled) return
+          const extracted: DeliverableFile[] = []
+          for (const [path, entry] of Object.entries(unzipped.files)) {
+            if (entry.dir) continue
+            const clean = path.replace(/\\/g, '/').replace(/^\/+/, '')
+            extracted.push({
+              filename: clean,
+              download_url: zip.download_url,
+              size_bytes: (entry as any)._data?.uncompressedSize || 0,
+            })
+          }
+          if (extracted.length > 0 && !isCancelled) {
+            setUnpackedFiles(extracted)
+          }
+        })
+        .catch((err) => {
+          console.warn('RepositoryDeliverableCard: could not unpack zip archive:', err)
+        })
+    }
+    return () => {
+      isCancelled = true
+    }
+  }, [files])
+
+  const effectiveContentFiles = useMemo(() => {
+    if (unpackedFiles && unpackedFiles.length > 0) {
+      return unpackedFiles
+    }
+    return contentFiles
+  }, [unpackedFiles, contentFiles])
+
   // Derive project title
   const derivedTitle = useMemo(() => {
     if (projectName) return projectName
     // Try finding index.html or first entry
-    const entry = contentFiles.find((f) => f.filename.toLowerCase().endsWith('index.html'))
+    const entry = effectiveContentFiles.find((f) => f.filename.toLowerCase().endsWith('index.html'))
     if (entry) {
       const parts = normalizePath(entry.filename).split('/')
       if (parts.length > 1) return `${parts[0]} Application`
     }
-    const md = contentFiles.find((f) => f.filename.toLowerCase().endsWith('.md'))
+    const md = effectiveContentFiles.find((f) => f.filename.toLowerCase().endsWith('.md'))
     if (md) {
       const base = md.filename.replace(/\.md$/i, '').replace(/[-_]/g, ' ')
       return base.charAt(0).toUpperCase() + base.slice(1)
     }
+    if (zipFile && zipFile.filename) {
+      const base = zipFile.filename.replace(/\.zip$/i, '').replace(/[-_]/g, ' ')
+      return base.charAt(0).toUpperCase() + base.slice(1)
+    }
     return 'Repository Deliverable'
-  }, [projectName, contentFiles])
+  }, [projectName, effectiveContentFiles, zipFile])
 
-  // Determine primary preview file (index.html, or app.html, or first html, or first file)
+  // Determine primary preview file (index.html, or app.html, or first html, or zip)
   const primaryEntry = useMemo(() => {
-    const htmlIndex = contentFiles.find((f) => /index\.html?$/i.test(f.filename))
+    const htmlIndex = effectiveContentFiles.find((f) => /index\.html?$/i.test(f.filename))
     if (htmlIndex) return htmlIndex
-    const anyHtml = contentFiles.find((f) => /\.html?$/i.test(f.filename))
+    const anyHtml = effectiveContentFiles.find((f) => /\.html?$/i.test(f.filename))
     if (anyHtml) return anyHtml
-    const readme = contentFiles.find((f) => /readme\.md$/i.test(f.filename))
+    const readme = effectiveContentFiles.find((f) => /readme\.md$/i.test(f.filename))
     if (readme) return readme
-    return contentFiles[0] || files[0]
-  }, [contentFiles, files])
+    if (zipFile) return zipFile
+    return effectiveContentFiles[0] || files[0]
+  }, [effectiveContentFiles, files, zipFile])
 
   // Total size calculation
   const totalSizeBytes = useMemo(() => {
-    return contentFiles.reduce((acc, f) => acc + (f.size_bytes || 0), 0)
-  }, [contentFiles])
+    return effectiveContentFiles.reduce((acc, f) => acc + (f.size_bytes || 0), 0)
+  }, [effectiveContentFiles])
 
   // Build tree
-  const treeNodes = useMemo(() => buildTree(contentFiles), [contentFiles])
+  const treeNodes = useMemo(() => buildTree(effectiveContentFiles), [effectiveContentFiles])
 
   // Collect all folder paths for multi-folder expand
   const allFolderPaths = useMemo(() => {
@@ -438,7 +486,7 @@ export const RepositoryDeliverableCard: React.FC<RepositoryDeliverableCardProps>
                 </span>
               </div>
               <p className="text-[11px] text-white/50 flex items-center gap-2 mt-0.5">
-                <span>{contentFiles.length} files</span>
+                <span>{effectiveContentFiles.length} files</span>
                 {totalSizeBytes > 0 && (
                   <>
                     <span>•</span>
@@ -460,9 +508,15 @@ export const RepositoryDeliverableCard: React.FC<RepositoryDeliverableCardProps>
             {primaryEntry && (
               <button
                 type="button"
-                onClick={() => onPreview(primaryEntry, contentFiles)}
-                className="flex-1 sm:flex-initial min-h-[38px] px-3.5 py-1.5 rounded-lg text-[12px] font-semibold bg-white text-black hover:bg-white/90 active:scale-[0.98] flex items-center justify-center gap-1.5 shadow-md hover:shadow-lg transition duration-150"
-                title="Open live preview in Artifact Panel"
+                onClick={() => {
+                  if (zipFile) {
+                    onPreview(zipFile, effectiveContentFiles)
+                  } else {
+                    onPreview(primaryEntry, effectiveContentFiles)
+                  }
+                }}
+                className="flex-1 sm:flex-initial min-h-[38px] px-3.5 py-1.5 rounded-lg text-[12px] font-semibold bg-white text-black hover:bg-white/90 active:scale-[0.98] flex items-center justify-center gap-1.5 shadow-md hover:shadow-lg transition duration-150 cursor-pointer"
+                title="Open live website preview"
               >
                 <Eye className="w-3.5 h-3.5 text-black shrink-0" />
                 <span>View App</span>

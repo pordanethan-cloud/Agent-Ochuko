@@ -22,6 +22,7 @@ import { ArtifactPanel } from '../components/ArtifactPanel'
 import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
 import { RepositoryDeliverableCard } from '../components/RepositoryDeliverableCard'
 import { SportsMatchCard } from '../components/SportsMatchCard'
+import { ZipAppPreviewer } from '../components/ZipAppPreviewer'
 
 
 
@@ -7702,8 +7703,16 @@ export const Dashboard: React.FC = () => {
       {/* Slide-out Sidebar Drawer */}
 
       <aside
-
-        onMouseLeave={() => setIsSidebarHovered(false)}
+        onClick={() => {
+          // Promote sidebar to pinned open when user interacts inside it
+          setIsSidebarOpen(true)
+        }}
+        onMouseLeave={() => {
+          // Keep sidebar open if search input is focused or query is typed
+          if (searchInputRef.current && document.activeElement === searchInputRef.current) return
+          if (searchQuery && searchQuery.trim().length > 0) return
+          setIsSidebarHovered(false)
+        }}
 
         style={{
           width: (isSidebarOpen || isSidebarHovered)
@@ -7788,7 +7797,14 @@ export const Dashboard: React.FC = () => {
 
               value={searchQuery}
 
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => {
+                setIsSidebarOpen(true)
+              }}
+
+              onChange={(e) => {
+                setIsSidebarOpen(true)
+                setSearchQuery(e.target.value)
+              }}
 
               placeholder="Search chats (Ctrl+K)..."
 
@@ -8320,8 +8336,10 @@ export const Dashboard: React.FC = () => {
           <div className="flex items-center gap-1 sm:gap-2 min-w-0">
             {/* Floating Menu Icon Button */}
             <button
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              onMouseEnter={() => setIsSidebarHovered(true)}
+              onClick={() => {
+                setIsSidebarOpen((prev) => !prev)
+                setIsSidebarHovered(false)
+              }}
               className="min-h-[44px] min-w-[44px] w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl text-white/75 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] transition duration-150 active:scale-95 cursor-pointer shrink-0 touch-manipulation"
               aria-label="Toggle Sidebar"
             >
@@ -9790,6 +9808,18 @@ export const Dashboard: React.FC = () => {
       {/* Unified File/Text Preview — Ochuko dock for text artifacts, modal for media */}
       {previewingFile && (() => {
         const pn = previewingFile.name.toLowerCase()
+        if (pn.endsWith('.zip')) {
+          return (
+            <ZipAppPreviewer
+              file={previewingFile}
+              onClose={() => setPreviewingFile(null)}
+              onDownload={() => {
+                const u = previewingFile.localObjectUrl || previewingFile.url
+                if (u) triggerDirectDownload(u, previewingFile.name)
+              }}
+            />
+          )
+        }
         const hasRepoContext = Boolean(
           previewingFile.siteSlug ||
           (previewingFile.siblingFiles && previewingFile.siblingFiles.length > 1) ||
@@ -9798,7 +9828,7 @@ export const Dashboard: React.FC = () => {
         )
         const pIsImg = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(pn)
         const pIsPdf = previewingFile.type === 'application/pdf' || pn.endsWith('.pdf')
-        const pIsBin = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(pn)
+        const pIsBin = /\.(docx?|xlsx?|pptx?|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(pn)
         if (!pIsPdf && (!pIsBin || hasRepoContext) && (!pIsImg || hasRepoContext || pn.endsWith('.svg'))) {
           return (
             <>
@@ -9988,8 +10018,21 @@ export const Dashboard: React.FC = () => {
               const isImg = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
               const isHtml = previewingFile.type === 'text/html' || previewingFile.type === 'html' || nameLower.endsWith('.html')
               const isPdf = previewingFile.type === 'application/pdf' || nameLower.endsWith('.pdf')
-              const isBinary = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(nameLower)
+              const isBinary = /\.(docx?|xlsx?|pptx?|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(nameLower)
               const fileUrl = previewingFile.localObjectUrl || previewingFile.url
+
+              if (nameLower.endsWith('.zip')) {
+                return (
+                  <ZipAppPreviewer
+                    file={previewingFile}
+                    onClose={() => setPreviewingFile(null)}
+                    onDownload={() => {
+                      const u = previewingFile.localObjectUrl || previewingFile.url
+                      if (u) triggerDirectDownload(u, previewingFile.name)
+                    }}
+                  />
+                )
+              }
 
               if (isImg) {
                 return (
