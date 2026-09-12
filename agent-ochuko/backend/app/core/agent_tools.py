@@ -38,8 +38,8 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
             "Call this for a SINGLE, focused lookup. "
             "QUERY FORMULATION MANDATE (THE TRANSLATOR):\n"
             "1. REWRITE CONVERSATIONAL PHRASES: Never pass conversational dialogue (e.g. 'how are they doing', 'tell me about their live game').\n"
-            "2. RESOLVE ALL PRONOUNS: Look back at the conversation history and replace all pronouns ('they', 'them', 'their', 'it', 'he') with the exact entity name (e.g. 'Hull City live match score September 12 2026').\n"
-            "3. TEMPORAL ANCHORING: For live games, transfers, breaking news, prices, or recent events, append the current calendar year (2026) and today's date.\n"
+            "2. RESOLVE ALL PRONOUNS: Look back at the conversation history and replace all pronouns ('they', 'them', 'their', 'it', 'he') with the exact entity name (e.g. 'Liverpool vs Arsenal live score').\n"
+            "3. TEMPORAL ANCHORING: For live games, transfers, breaking news, prices, or recent events, append the current calendar year and today's date.\n"
             "4. KEYWORD DENSITY: Format queries as concise search engine keywords rather than conversational sentences.\n"
             "FACTUAL DENSITY & ANTI-FLUFF:\n"
             "- When presenting results, lead immediately with concrete facts, exact scores, figures, dates, and bulleted data points.\n"
@@ -54,7 +54,7 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The precise, keyword-dense search query with all pronouns resolved to exact entity names (e.g. 'Hull City vs Chelsea score September 12 2026')",
+                    "description": "The precise, keyword-dense search query with all pronouns resolved to exact entity names (e.g. 'Premier League today fixtures and live scores')",
                 }
             },
             "required": ["query"],
@@ -69,7 +69,7 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
             "QUERY FORMULATION MANDATE:\n"
             "1. Pass a list of 2-6 specific, targeted keyword search strings — one per subject or dimension.\n"
             "2. Resolve all pronouns ('they', 'it', 'them') to exact entity names in EVERY sub-query.\n"
-            "3. For time-sensitive topics, include the current year (2026) in each query.\n"
+            "3. For time-sensitive topics, include the current calendar year in each query.\n"
             "4. Avoid conversational queries; use search-engine-optimized keyword phrases.\n"
             "SYNTHESIS RULE: Deliver a structured comparison or dense factual breakdown with exact data points, numbers, and dates. Avoid generic essay summaries.\n"
             "PREFER this over calling search_web multiple times."

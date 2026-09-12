@@ -87,138 +87,31 @@ def get_openai_client() -> AsyncAzureOpenAI:
         )
     return _openai_client
 
-async def _perform_open_websearch_fallback(query: str) -> tuple:
-    """
-    Fallback search using local open-websearch daemon/CLI.
-    Queries the open-websearch daemon on http://127.0.0.1:3210.
-    If the daemon is not running, attempts to start it in the background using `open-websearch serve`.
-    """
-    import subprocess
-    import json
-    import shutil
-    import httpx
 
-    daemon_url = "http://127.0.0.1:3210"
-    daemon_running = False
-    
-    # 1. Check if daemon is running by querying /health
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            res = await client.get(f"{daemon_url}/health")
-            if res.status_code == 200:
-                daemon_running = True
-    except Exception:
-        pass
-
-    if not daemon_running:
-        logger.info("open-websearch daemon is not running. Starting it in background...")
-        npx_path = shutil.which("npx")
-        if npx_path:
-            try:
-                cmd = [npx_path, "open-websearch", "serve"]
-                if os.name == 'nt':
-                    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW, shell=True)
-                else:
-                    subprocess.Popen(cmd, start_new_session=True)
-                
-                # Wait up to 3 seconds for boot
-                for _ in range(6):
-                    await asyncio.sleep(0.5)
-                    try:
-                        async with httpx.AsyncClient(timeout=0.5) as client:
-                            res = await client.get(f"{daemon_url}/health")
-                            if res.status_code == 200:
-                                daemon_running = True
-                                logger.info("open-websearch daemon successfully started and ready")
-                                break
-                    except Exception:
-                        pass
-            except Exception as start_err:
-                logger.error("Failed to start open-websearch daemon: %s", start_err)
-
-    # 2. Perform the search query
-    # If the daemon is running, query it via HTTP (POST /search).
-    if daemon_running:
-        try:
-            logger.info("Querying open-websearch daemon: POST %s/search", daemon_url)
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(
-                    f"{daemon_url}/search",
-                    json={"query": query, "limit": 6, "engines": ["duckduckgo", "brave", "bing"]}
-                )
-                if res.status_code == 200:
-                    json_data = res.json()
-                    results = json_data.get("results", []) or json_data.get("data", {}).get("results", [])
-                    if results:
-                        search_chunks = []
-                        sources = []
-                        seen_urls = set()
-                        for r in results:
-                            title = r.get("title", "") or r.get("url", "")
-                            url = r.get("url", "")
-                            desc = r.get("description", "")
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                sources.append({"title": title, "url": url})
-                                search_chunks.append(f"Source: {title}\nURL: {url}\nContent: {desc}")
-                        google_context = "\n\n".join(search_chunks)
-                        return google_context, sources
-        except Exception as http_err:
-            logger.warning("HTTP query to open-websearch daemon failed: %s. Falling back to CLI...", http_err)
-
-    # CLI fallback (using npx)
-    logger.info("Executing open-websearch via CLI subprocess...")
-    npx_path = shutil.which("npx")
-    if not npx_path:
-        raise RuntimeError("npx not found in path")
-
-    def _run_cli():
-        cmd = [
-            npx_path, "open-websearch", "search", query,
-            "--limit", "6",
-            "--engines", "duckduckgo,brave,bing",
-            "--json"
-        ]
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=25,
-            shell=True if os.name == 'nt' else False
-        )
-        if proc.returncode == 0:
-            stdout_text = proc.stdout or ""
-            start_idx = stdout_text.find('{')
-            if start_idx != -1:
-                json_data = json.loads(stdout_text[start_idx:])
-                results = json_data.get("data", {}).get("results", []) or json_data.get("results", [])
-                if results:
-                    search_chunks = []
-                    sources = []
-                    seen_urls = set()
-                    for r in results:
-                        title = r.get("title", "") or r.get("url", "")
-                        url = r.get("url", "")
-                        desc = r.get("description", "")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            sources.append({"title": title, "url": url})
-                            search_chunks.append(f"Source: {title}\nURL: {url}\nContent: {desc}")
-                    google_context = "\n\n".join(search_chunks)
-                    return google_context, sources
-        raise RuntimeError(f"CLI search failed with status {proc.returncode}")
-
-    try:
-        return await asyncio.to_thread(_run_cli)
-    except Exception as e:
-        logger.error("All open-websearch search methods failed: %s", e)
-        raise e
+# ── Time-aware search helpers & Query Normalization ───────────────────────────
+# Common typos in user queries that degrade search engine indexing
+_QUERY_TYPO_MAP = [
+    (re.compile(r"\btodya\b", re.IGNORECASE), "today"),
+    (re.compile(r"\btodday\b", re.IGNORECASE), "today"),
+    (re.compile(r"\btoda\b", re.IGNORECASE), "today"),
+    (re.compile(r"\btonite\b", re.IGNORECASE), "tonight"),
+    (re.compile(r"\byesteday\b", re.IGNORECASE), "yesterday"),
+    (re.compile(r"\btmrw\b", re.IGNORECASE), "tomorrow"),
+    (re.compile(r"\btommorow\b", re.IGNORECASE), "tomorrow"),
+    (re.compile(r"\bscores?\s+todya\b", re.IGNORECASE), "scores today"),
+    (re.compile(r"\bpl\s+games\b", re.IGNORECASE), "premier league games"),
+    (re.compile(r"\bucl\s+games\b", re.IGNORECASE), "champions league games"),
+    (re.compile(r"\bepl\s+games\b", re.IGNORECASE), "premier league games"),
+]
 
 
-# ── Time-aware search helpers ─────────────────────────────────────────────────
-# Queries mentioning live/current data get the current year appended so search
-# engines return fresh results, and every search context carries the execution
-# date so the synthesising model can reason about recency.
+def _normalize_search_query(query: str) -> str:
+    """Corrects common typos and normalizes shorthand phrases in user queries."""
+    q = (query or "").strip()
+    for rx, repl in _QUERY_TYPO_MAP:
+        q = rx.sub(repl, q)
+    return q
+
 
 _TIME_SENSITIVE_RE = re.compile(
     r"\b(latest|current|today|now|recent|this\s+(?:year|month|week)|"
@@ -227,8 +120,7 @@ _TIME_SENSITIVE_RE = re.compile(
 )
 
 # Relative date phrases that must resolve to explicit calendar dates before
-# hitting a search engine — "yesterday night game" is useless to an index,
-# "Champions League results September 9 2026" is not.
+# hitting a search engine — "yesterday night game" is useless to an index.
 _RELATIVE_DATE_RE = re.compile(
     r"\b(yesterday(?:'s)?|last night|last evening|tonight|this morning|this afternoon|this evening)\b",
     re.IGNORECASE,
@@ -238,7 +130,7 @@ _RELATIVE_DATE_RE = re.compile(
 def _resolve_relative_dates(query: str) -> str:
     """Rewrites relative date phrases into explicit calendar dates (WAT)."""
     from datetime import timedelta
-    q = (query or "").strip()
+    q = _normalize_search_query(query)
     if not _RELATIVE_DATE_RE.search(q):
         return q
 
@@ -278,12 +170,27 @@ def _search_time_header() -> str:
     )
 
 
-# ── Trusted-source ranking ────────────────────────────────────────────────────
-# The engine (Gemini grounding / Tavily) returns results in its own order with
-# no source-quality weighting, so thin aggregator pages outrank wires and
-# official bodies. We stable-sort trusted domains to the front; relative order
-# of everything else is preserved (trusted results are promoted, never buried).
+# ── Blocked / Low-Quality Source Filter ────────────────────────────────────────
+# Scraper content mills, SEO tabloids, and clickbait speculation blogs that
+# degrade factual accuracy or hallucinate fictional matchups.
+_BLOCKED_SOURCE_DOMAINS: set = {
+    "thebiglead.com",
+    "sundayguardianlive.com",
+    "sportsmole.co.uk",
+    "caughtoffside.com",
+    "hitc.com",
+    "tribalfootball.com",
+    "givemesport.com",
+    "footballtransfers.com",
+    "yardbarker.com",
+    "essentiallysports.com",
+    "fanbuzz.com",
+    "bolavip.com",
+    "clutchpoints.com",
+}
 
+
+# ── Trusted-source ranking ────────────────────────────────────────────────────
 # Dedicated live score platforms & official league data (Tier 0 — ranks ABOVE everything else)
 _SPORTS_PRIORITY_TIER_0: set = {
     "livescore.com", "livescores.com", "flashscore.com", "flashscore.co.uk",
@@ -378,7 +285,7 @@ _MULTIPART_TLDS = {
 def _search_categories(query: str) -> set:
     """Detects query categories (sports/business/tech/stats) via regex — <0.1ms."""
     cats = set()
-    q = query or ""
+    q = _normalize_search_query(query)
     for cat, rx in _SEARCH_CATEGORY_RES.items():
         if rx.search(q):
             cats.add(cat)
@@ -404,15 +311,28 @@ def _domain_of(url: str) -> str:
 
 def rerank_results_by_trust(results: List[Dict[str, Any]], query: str, url_key: str = "url") -> List[Dict[str, Any]]:
     """
-    Stable-sorts search results so trusted, on-topic domains come first.
+    Stable-sorts search results so trusted, on-topic domains come first,
+    while strictly pruning blocked/tabloid clickbait domains.
     Dedicated live score providers (livescore.com, flashscore.com, official leagues) rank in Tier 0
     for sports queries, strictly above broadcast/cable news portals like nbcsports.com (Tier 2).
     """
     if not results:
         return results
-    cats = _search_categories(query)
+
+    clean_query = _normalize_search_query(query)
+    cats = _search_categories(clean_query)
+
+    # 1. Prune blocked/clickbait domains
+    valid_items = [
+        item for item in results
+        if _domain_of(item.get(url_key, "") or "") not in _BLOCKED_SOURCE_DOMAINS
+    ]
+    if not valid_items:
+        valid_items = results
 
     def _domain_tier(d: str) -> int:
+        if d in _BLOCKED_SOURCE_DOMAINS:
+            return 99
         if "sports" in cats:
             if d in _SPORTS_PRIORITY_TIER_0:
                 return 0  # Dedicated live scores & official leagues (LiveScore, FlashScore)
@@ -432,37 +352,59 @@ def rerank_results_by_trust(results: List[Dict[str, Any]], query: str, url_key: 
         d = _domain_of(item.get(url_key, "") or "")
         return (_domain_tier(d), idx)
 
-    decorated = sorted(enumerate(results), key=_rank)
-    return [item for _, item in decorated]
+    decorated = sorted(enumerate(valid_items), key=_rank)
+    sorted_items = [item for _, item in decorated]
+
+    # For sports queries: if we have Tier 0 or Tier 1 authoritative sources,
+    # strictly prioritize them at the front and demote Tier 2
+    if "sports" in cats:
+        tier_0_or_1 = [
+            it for it in sorted_items
+            if _domain_of(it.get(url_key, "")) in (_SPORTS_PRIORITY_TIER_0 | _SPORTS_PRIORITY_TIER_1)
+        ]
+        tier_2 = [
+            it for it in sorted_items
+            if _domain_of(it.get(url_key, "")) in _SPORTS_PRIORITY_TIER_2
+        ]
+        others = [
+            it for it in sorted_items
+            if it not in tier_0_or_1 and it not in tier_2
+        ]
+        if tier_0_or_1:
+            sorted_items = tier_0_or_1 + others + tier_2
+
+    return sorted_items
 
 
 async def _perform_tavily_search(query: str) -> tuple:
     """
     Primary retrieval via the Tavily Search API (advanced depth).
-
-    Unlike snippet-only metasearch, Tavily advanced returns page-level content
-    extracts per result plus an optional synthesized answer — this is what
-    closes the quality gap vs enterprise-grade grounded search.
-
-    Returns (google_context, sources) in the same shape as the Gemini grounding
-    path. Raises RuntimeError when TAVILY_API_KEY is missing or the call fails,
-    so callers can cascade to the Gemini/open-websearch fallbacks.
+    Filters blocked clickbait domains, injects dedicated sports platforms,
+    and returns verified live facts and sources.
     """
     api_key = os.getenv("TAVILY_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("TAVILY_API_KEY is not configured.")
 
+    clean_query = _normalize_search_query(query)
+    cats = _search_categories(clean_query)
+
     payload: Dict[str, Any] = {
         "api_key": api_key,
-        "query": _time_aware_query(query),
+        "query": _time_aware_query(clean_query),
         "search_depth": "advanced",
         "include_answer": True,
         "include_raw_content": False,
-        "max_results": 8,
+        "max_results": 10,
+        "exclude_domains": list(_BLOCKED_SOURCE_DOMAINS),
     }
-    # News-class queries get recency filtering (last 30 days). Sports queries
-    # are inherently current-events (scores, transfers) — include them.
-    if _TIME_SENSITIVE_RE.search(query) or _search_categories(query):
+    if "sports" in cats:
+        payload["include_domains"] = [
+            "livescore.com", "livescores.com", "flashscore.com", "flashscore.co.uk",
+            "sofascore.com", "fotmob.com", "premierleague.com", "skysports.com",
+            "bbc.com", "espn.com", "uefa.com",
+        ]
+    if _TIME_SENSITIVE_RE.search(clean_query) or cats:
         payload["topic"] = "news"
         payload["days"] = 30
 
@@ -471,15 +413,15 @@ async def _perform_tavily_search(query: str) -> tuple:
         res.raise_for_status()
         data = res.json()
 
-    results = data.get("results", []) or []
-    # Promote trusted, on-topic sources (wires, official bodies) to the front.
-    results = rerank_results_by_trust(results, query)
+    raw_results = data.get("results", []) or []
+    results = rerank_results_by_trust(raw_results, clean_query)
     sources: List[Dict[str, str]] = []
     chunks: List[str] = []
     seen_urls: set = set()
     for r in results:
         url = r.get("url", "")
-        if not url or url in seen_urls:
+        dom = _domain_of(url)
+        if not url or url in seen_urls or dom in _BLOCKED_SOURCE_DOMAINS:
             continue
         seen_urls.add(url)
         title = r.get("title", "") or url
@@ -492,7 +434,7 @@ async def _perform_tavily_search(query: str) -> tuple:
         chunk += f"\nContent: {content}"
         chunks.append(chunk)
 
-    context_parts = [_search_time_header(), f"Search Query: {query}"]
+    context_parts = [_search_time_header(), f"Search Query: {clean_query}"]
     tavily_answer = (data.get("answer", "") or "").strip()
     if tavily_answer:
         context_parts.append(f"VERIFIED LIVE FACTS & EVIDENCE:\n{tavily_answer}")
@@ -501,6 +443,143 @@ async def _perform_tavily_search(query: str) -> tuple:
     )
     google_context = "\n\n".join(context_parts)
     return google_context, sources[:20]
+
+
+async def _perform_open_websearch_fallback(query: str) -> tuple:
+    """
+    Fallback search using local open-websearch daemon/CLI (DuckDuckGo, Brave, Bing).
+    Augments sports queries with live score provider steering, filters blocked
+    clickbait domains, and applies trust reranking.
+    """
+    import subprocess
+    import json
+    import shutil
+    import httpx
+
+    daemon_url = "http://127.0.0.1:3210"
+    daemon_running = False
+
+    clean_query = _normalize_search_query(query)
+    cats = _search_categories(clean_query)
+
+    # Steer sports queries to pull dedicated live score engines rather than tabloid blogs
+    search_q = clean_query
+    if "sports" in cats and not any(k in clean_query.lower() for k in ["livescore", "flashscore", "sofascore", "premierleague"]):
+        search_q = f"{clean_query} livescore flashscore premier league"
+
+    # 1. Check if daemon is running by querying /health
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            res = await client.get(f"{daemon_url}/health")
+            if res.status_code == 200:
+                daemon_running = True
+    except Exception:
+        pass
+
+    if not daemon_running:
+        logger.info("open-websearch daemon is not running. Starting it in background...")
+        npx_path = shutil.which("npx")
+        if npx_path:
+            try:
+                cmd = [npx_path, "open-websearch", "serve"]
+                if os.name == 'nt':
+                    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW, shell=True)
+                else:
+                    subprocess.Popen(cmd, start_new_session=True)
+
+                # Wait up to 3 seconds for boot
+                for _ in range(6):
+                    await asyncio.sleep(0.5)
+                    try:
+                        async with httpx.AsyncClient(timeout=0.5) as client:
+                            res = await client.get(f"{daemon_url}/health")
+                            if res.status_code == 200:
+                                daemon_running = True
+                                logger.info("open-websearch daemon successfully started and ready")
+                                break
+                    except Exception:
+                        pass
+            except Exception as start_err:
+                logger.error("Failed to start open-websearch daemon: %s", start_err)
+
+    def _process_results(results_list: List[Dict[str, Any]]) -> tuple:
+        filtered = [
+            r for r in results_list
+            if _domain_of(r.get("url", "") or "") not in _BLOCKED_SOURCE_DOMAINS
+        ]
+        reranked = rerank_results_by_trust(filtered or results_list, clean_query)
+        search_chunks = []
+        sources = []
+        seen_urls = set()
+        for r in reranked:
+            title = r.get("title", "") or r.get("url", "")
+            url = r.get("url", "")
+            desc = r.get("description", "")
+            dom = _domain_of(url)
+            if url and url not in seen_urls and dom not in _BLOCKED_SOURCE_DOMAINS:
+                seen_urls.add(url)
+                sources.append({"title": title, "url": url})
+                search_chunks.append(f"Source: {title}\nURL: {url}\nContent: {desc}")
+        sources = rerank_results_by_trust(sources, clean_query)
+        context_parts = [_search_time_header(), f"Search Query: {clean_query}"]
+        context_parts.append(
+            "GROUNDING SNIPPETS & SOURCES:\n" + ("\n\n".join(search_chunks) if search_chunks else "No live web results found.")
+        )
+        google_context = "\n\n".join(context_parts)
+        return google_context, sources[:20]
+
+    # 2. Perform the search query via daemon if running
+    if daemon_running:
+        try:
+            logger.info("Querying open-websearch daemon: POST %s/search for %.80s", daemon_url, search_q)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(
+                    f"{daemon_url}/search",
+                    json={"query": search_q, "limit": 8, "engines": ["duckduckgo", "brave", "bing"]}
+                )
+                if res.status_code == 200:
+                    json_data = res.json()
+                    results = json_data.get("results", []) or json_data.get("data", {}).get("results", [])
+                    if results:
+                        return _process_results(results)
+        except Exception as http_err:
+            logger.warning("HTTP query to open-websearch daemon failed: %s. Falling back to CLI...", http_err)
+
+    # CLI fallback (using npx)
+    logger.info("Executing open-websearch via CLI subprocess for %.80s...", search_q)
+    npx_path = shutil.which("npx")
+    if not npx_path:
+        raise RuntimeError("npx not found in path")
+
+    def _run_cli():
+        cmd = [
+            npx_path, "open-websearch", "search", search_q,
+            "--limit", "8",
+            "--engines", "duckduckgo,brave,bing",
+            "--json"
+        ]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=25,
+            shell=True if os.name == 'nt' else False
+        )
+        if proc.returncode == 0:
+            stdout_text = proc.stdout or ""
+            start_idx = stdout_text.find('{')
+            if start_idx != -1:
+                json_data = json.loads(stdout_text[start_idx:])
+                results = json_data.get("data", {}).get("results", []) or json_data.get("results", [])
+                if results:
+                    return _process_results(results)
+        raise RuntimeError(f"CLI search failed with status {proc.returncode}")
+
+    try:
+        return await asyncio.to_thread(_run_cli)
+    except Exception as e:
+        logger.error("All open-websearch search methods failed: %s", e)
+        raise e
 
 
 # ── fetch_url: full-page reader (free, no paid API) ───────────────────────────
@@ -644,6 +723,8 @@ async def _perform_google_search(
     if not google_api_key and not os.getenv("TAVILY_API_KEY"):
         raise RuntimeError("No web search provider configured (set GOOGLE_API_KEY or TAVILY_API_KEY).")
 
+    query = _normalize_search_query(query)
+
     # ── Phase 1: Google Grounding via Gemini 2.5 Flash ────────────────────
     # Run the synchronous google-genai call off the event loop thread
     def _google_retrieval_phase() -> tuple:
@@ -672,7 +753,8 @@ async def _perform_google_search(
         if "sports" in _search_categories(query):
             sports_instruction = (
                 "\nSPORTS GROUNDING MANDATE:\n"
-                "- Search for live scores, match fixtures, and results on dedicated live score platforms (LiveScore, FlashScore, official league sites).\n"
+                "- TARGET AUTHORITATIVE LIVE PLATFORMS: Prioritize dedicated live score platforms: livescore.com, flashscore.com, sofascore.com, fotmob.com, premierleague.com, bbc.com/sport, skysports.com.\n"
+                "- STRICT DISREGARD FOR TABLOIDS & BLOGS: Disregard speculative blogs, tabloid content mills, and clickbait aggregators (e.g. thebiglead.com, sundayguardianlive.com, sportsmole.co.uk, caughtoffside.com).\n"
                 "- CRITICAL FOR GOALLESS MATCHES: If a match is in progress or completed and reported as 'goalless', 'deadlocked', or '0-0', the exact score IS 0 - 0. Never say 'score is unavailable' when a game is goalless.\n"
                 "- Extract exact home and away team names, numeric score (e.g. 0-0, 2-1), match clock/status, and all goal/card events."
             )
@@ -707,13 +789,14 @@ async def _perform_google_search(
                 if g_response.candidates and g_response.candidates[0].grounding_metadata:
                     metadata = g_response.candidates[0].grounding_metadata
 
-                    # Build deduplicated source list from grounding_chunks
+                    # Build deduplicated source list from grounding_chunks, filtering blocked domains
                     for chunk in (getattr(metadata, "grounding_chunks", []) or []):
                         web = getattr(chunk, "web", None)
                         if web:
                             url = getattr(web, "uri", "") or ""
                             title = getattr(web, "title", "") or url
-                            if url and url not in seen_urls:
+                            dom = _domain_of(url)
+                            if url and url not in seen_urls and dom not in _BLOCKED_SOURCE_DOMAINS:
                                 seen_urls.add(url)
                                 sources.append({"title": title, "url": url})
 

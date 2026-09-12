@@ -2468,45 +2468,64 @@ const CodeBlock: React.FC<{ language: string; content: string }> = ({ language, 
 
 }
 
+const BLOCKED_SOURCE_DOMAINS = new Set([
+  'thebiglead.com',
+  'sundayguardianlive.com',
+  'sportsmole.co.uk',
+  'caughtoffside.com',
+  'hitc.com',
+  'tribalfootball.com',
+  'givemesport.com',
+  'footballtransfers.com',
+  'yardbarker.com',
+  'essentiallysports.com',
+  'fanbuzz.com',
+  'bolavip.com',
+  'clutchpoints.com',
+])
+
 const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
   const [isOpen, setIsOpen] = useState(false)
 
+  // Filter out known clickbait and content mill scraper domains
+  const validSources = React.useMemo(() => {
+    return (sources || []).filter((s) => {
+      try {
+        const host = new URL(s.url).hostname.toLowerCase().replace(/^www\./, '')
+        if (BLOCKED_SOURCE_DOMAINS.has(host)) return false
+        for (const b of BLOCKED_SOURCE_DOMAINS) {
+          if (host.endsWith('.' + b)) return false
+        }
+        return true
+      } catch (_) {
+        return false
+      }
+    })
+  }, [sources])
+
   // Get unique hosts/domains for the favicons
-
   const uniqueHosts = React.useMemo(() => {
-
     const hosts: string[] = []
-
     const seen = new Set<string>()
 
-    for (const src of sources) {
-
+    for (const src of validSources) {
       try {
-
         let host = new URL(src.url).hostname
-
         if (host === 'vertexaisearch.cloud.google.com' && src.title && src.title.includes('.')) {
-
           host = src.title.trim().toLowerCase()
-
         }
-
         if (host && !seen.has(host)) {
-
           seen.add(host)
-
           hosts.push(host)
-
         }
-
       } catch (_) {}
-
     }
 
     return hosts
+  }, [validSources])
 
-  }, [sources])
+  if (!validSources || validSources.length === 0) return null
 
   const displayedFavicons = uniqueHosts.slice(0, 3)
 
@@ -2574,7 +2593,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
           <span className="text-[12px] font-semibold text-[#8e95a2] group-hover/stack:text-[#f0ece4] transition-colors duration-150">
 
-            {sources.length} {sources.length === 1 ? 'site' : 'sites'}
+            {validSources.length} {validSources.length === 1 ? 'site' : 'sites'}
 
           </span>
 
@@ -2602,7 +2621,7 @@ const SourcesStack: React.FC<{ sources: Source[] }> = ({ sources }) => {
 
         <div className="flex flex-wrap gap-2 mt-3 animate-fadeIn">
 
-          {sources.map((src, si) => (
+          {validSources.map((src, si) => (
 
             <a
 
