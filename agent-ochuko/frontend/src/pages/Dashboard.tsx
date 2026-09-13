@@ -8560,34 +8560,6 @@ export const Dashboard: React.FC = () => {
               </button>
             )}
 
-            {/* Direct PC Access Toggle Button (Agent Mode) */}
-            {mode === 'agent' && (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={isWorkstationAccessEnabled}
-                aria-label="Toggle PC Workstation Access"
-                onClick={() => {
-                  const val = !isWorkstationAccessEnabled
-                  setIsWorkstationAccessEnabled(val)
-                  localStorage.setItem('ochuko_workstation_access_enabled', val ? 'true' : 'false')
-                  window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
-                  showToast(val ? 'Workstation Access enabled (Agent Mode)' : 'Workstation Access disabled', 'info')
-                }}
-                className={`min-h-[44px] sm:min-h-[34px] sm:h-9 px-2.5 flex items-center gap-1.5 rounded-xl text-[11px] font-semibold transition cursor-pointer border select-none ${
-                  isWorkstationAccessEnabled
-                    ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 shadow-sm shadow-cyan-500/20'
-                    : 'bg-white/[0.04] border-white/10 text-white/50 hover:text-white/80 hover:bg-white/[0.08]'
-                }`}
-                title={isWorkstationAccessEnabled ? 'Workstation Access: ENABLED (Click to turn off)' : 'Workstation Access: OFF (Click to turn on)'}
-              >
-                <Cpu className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${isWorkstationAccessEnabled ? 'text-cyan-400' : 'text-white/40'}`} />
-                <span className="hidden md:inline">PC Access:</span>
-                <span className={isWorkstationAccessEnabled ? 'text-cyan-300 font-bold' : 'text-white/50'}>
-                  {isWorkstationAccessEnabled ? 'ON' : 'OFF'}
-                </span>
-              </button>
-            )}
 
             {/* Floating Settings Button */}
             <div ref={headerSettingsRef} className="relative">
