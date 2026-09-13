@@ -472,7 +472,7 @@ async def generate_structured_plan(
         if workstation_access_enabled:
             user_content = f"WORKSTATION ACCESS: ENABLED (User authorized local computer access via Workstation Cowork. Use mcp_workstation_* tools for local file operations).\n\n{user_content}"
         else:
-            user_content = f"WORKSTATION ACCESS: INACTIVE BY DEFAULT (Sandboxed for safety. If user asks about seeing PC files, explain Workstation Access via Browser Folder Mount or Companion Bridge).\n\n{user_content}"
+            user_content = f"WORKSTATION ACCESS: INACTIVE BY DEFAULT (Sandboxed for safety. If user asks about seeing PC files, explain Workstation Access can be enabled by toggling it ON in Settings or the header).\n\n{user_content}"
         if workspace_files:
             ws_str = ", ".join(f"'{f}'" for f in workspace_files)
             user_content = f"EXISTING ACTIVE WORKSPACE FILES: [{ws_str}]\n\n{user_content}"

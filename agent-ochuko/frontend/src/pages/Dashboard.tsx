@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 import { wakeBackend } from '../utils/wakeBackend'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, ChevronRight, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Terminal, Eye } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Eye } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -20,7 +20,6 @@ import {
 } from '../components/AgentModeWidgets'
 import type { PlanStepItem, AgentTaskData } from '../components/AgentModeWidgets'
 import { ArtifactPanel } from '../components/ArtifactPanel'
-import { ConnectorSettingsModal } from '../components/ConnectorSettingsModal'
 import { RepositoryDeliverableCard } from '../components/RepositoryDeliverableCard'
 import { SportsMatchCard } from '../components/SportsMatchCard'
 import { OptionsCard } from '../components/OptionsCard'
@@ -4112,7 +4111,6 @@ export const Dashboard: React.FC = () => {
   }
 
   const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
-  const [isConnectorSettingsOpen, setIsConnectorSettingsOpen] = useState(false)
   const [isWorkstationAccessEnabled, setIsWorkstationAccessEnabled] = useState<boolean>(() => {
     return localStorage.getItem('ochuko_workstation_access_enabled') === 'true'
   })
@@ -8562,6 +8560,35 @@ export const Dashboard: React.FC = () => {
               </button>
             )}
 
+            {/* Direct PC Access Toggle Button (Agent Mode) */}
+            {mode === 'agent' && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isWorkstationAccessEnabled}
+                aria-label="Toggle PC Workstation Access"
+                onClick={() => {
+                  const val = !isWorkstationAccessEnabled
+                  setIsWorkstationAccessEnabled(val)
+                  localStorage.setItem('ochuko_workstation_access_enabled', val ? 'true' : 'false')
+                  window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+                  showToast(val ? 'Workstation Access enabled (Agent Mode)' : 'Workstation Access disabled', 'info')
+                }}
+                className={`min-h-[44px] sm:min-h-[34px] sm:h-9 px-2.5 flex items-center gap-1.5 rounded-xl text-[11px] font-semibold transition cursor-pointer border select-none ${
+                  isWorkstationAccessEnabled
+                    ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 shadow-sm shadow-cyan-500/20'
+                    : 'bg-white/[0.04] border-white/10 text-white/50 hover:text-white/80 hover:bg-white/[0.08]'
+                }`}
+                title={isWorkstationAccessEnabled ? 'Workstation Access: ENABLED (Click to turn off)' : 'Workstation Access: OFF (Click to turn on)'}
+              >
+                <Cpu className={`w-4 h-4 sm:w-3.5 sm:h-3.5 ${isWorkstationAccessEnabled ? 'text-cyan-400' : 'text-white/40'}`} />
+                <span className="hidden md:inline">PC Access:</span>
+                <span className={isWorkstationAccessEnabled ? 'text-cyan-300 font-bold' : 'text-white/50'}>
+                  {isWorkstationAccessEnabled ? 'ON' : 'OFF'}
+                </span>
+              </button>
+            )}
+
             {/* Floating Settings Button */}
             <div ref={headerSettingsRef} className="relative">
               <button
@@ -8584,6 +8611,7 @@ export const Dashboard: React.FC = () => {
                           setIsWorkstationAccessEnabled(val)
                           localStorage.setItem('ochuko_workstation_access_enabled', val ? 'true' : 'false')
                           window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+                          showToast(val ? 'Workstation Access enabled (Agent Mode)' : 'Workstation Access disabled', 'info')
                         }}
                         className="px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-[40px] flex items-center justify-between gap-3 cursor-pointer hover:bg-white/5 active:bg-white/10 transition-colors select-none"
                       >
@@ -8591,7 +8619,7 @@ export const Dashboard: React.FC = () => {
                           <span className="text-brand-text text-xs sm:text-[11px] font-semibold flex items-center gap-1.5 truncate">
                             <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" /> Workstation Access
                           </span>
-                          <span className="text-[10px] sm:text-[9.5px] text-cyan-400/80 font-medium pl-5">Agent Mode Only</span>
+                          <span className="text-[10px] sm:text-[9.5px] text-cyan-400/80 font-medium pl-5">Direct PC File Access</span>
                         </div>
                         <div
                           className={`relative inline-flex h-6 w-11 sm:h-5 sm:w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out pointer-events-none ${
@@ -8605,20 +8633,6 @@ export const Dashboard: React.FC = () => {
                           />
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsConnectorSettingsOpen(true)
-                          setIsHeaderSettingsOpen(false)
-                        }}
-                        className="w-full text-left px-3.5 py-2.5 min-h-[40px] text-xs sm:text-[11px] text-brand-muted hover:text-cyan-300 hover:bg-white/5 active:bg-white/10 transition flex items-center justify-between font-medium cursor-pointer border-t border-[#1e2025]/50"
-                      >
-                        <span className="flex items-center gap-2 truncate">
-                          <Terminal className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                          <span>Workstation Setup & Bridge...</span>
-                        </span>
-                        <ChevronRight className="w-3.5 h-3.5 text-brand-muted/60 shrink-0" />
-                      </button>
                       <div className="border-t border-[#1e2025]/50 my-1" />
                     </>
                   )}
@@ -9971,11 +9985,6 @@ export const Dashboard: React.FC = () => {
         />
       )}
 
-      {/* Connectors & Workstation Access Settings Modal */}
-      <ConnectorSettingsModal
-        isOpen={isConnectorSettingsOpen}
-        onClose={() => setIsConnectorSettingsOpen(false)}
-      />
 
       {/* ── Responsive Mode Selector Modal (Mobile Bottom Sheet + Desktop Centered Dialog) ── */}
       <div

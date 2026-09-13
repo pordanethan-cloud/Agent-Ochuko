@@ -257,8 +257,7 @@ class WorkstationMCP:
                 if (len(path) > 2 and path[1] == ":") or "downloads" in path.lower() or "desktop" in path.lower():
                     return (
                         f"Workstation Notice: '{path}' is located on your physical computer. "
-                        f"To access it, please mount your local folder via the Settings icon or start "
-                        f"the local companion bridge: 'run_workstation_bridge.bat background' or 'python -m app.connectors.workstation_bridge'."
+                        f"To access it, please ensure Workstation Access is toggled ON in Settings."
                     )
                 return f"Error: File '{path}' does not exist on workstation."
             if os.path.isdir(safe_p):
@@ -369,8 +368,7 @@ class WorkstationMCP:
                 if (len(path) > 2 and path[1] == ":") or "downloads" in path.lower() or "desktop" in path.lower():
                     return (
                         f"Workstation Notice: '{path}' is located on your physical computer. "
-                        f"To access it, please mount your local folder via the Settings icon or start "
-                        f"the local companion bridge: 'run_workstation_bridge.bat background' or 'python -m app.connectors.workstation_bridge'."
+                        f"To access it, please ensure Workstation Access is toggled ON in Settings."
                     )
                 return f"Error: Directory '{path}' does not exist."
             if not os.path.isdir(safe_p):

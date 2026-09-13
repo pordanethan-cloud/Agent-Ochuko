@@ -192,18 +192,16 @@ def test_workstation_self_awareness_and_planner_roster():
     assert get_skill_name("can you access my computer") == "help"
     assert get_skill_name("how do I browse local files") == "help"
 
-    # 2. Help skill documents dual-tier Workstation Cowork and AGENT mode
+    # 2. Help skill documents Workstation Cowork and AGENT mode
     help_text = SKILLS["help"]
     assert "Workstation Computer Access (Cowork)" in help_text
-    assert "Tier 1 (Browser Folder Mount" in help_text
-    assert "Tier 2 (Workstation Companion Bridge" in help_text
-    assert "run_workstation_bridge.bat background" in help_text
+    assert "Direct PC Access" in help_text
     assert "AGENT: Full autonomous OODA loop" in help_text
 
     # 3. BASE_IDENTITY and ULTRA_IDENTITY contain Workstation awareness
-    assert "Workstation Access (Cowork)" in BASE_IDENTITY or "mcp_workstation" in BASE_IDENTITY
+    assert "Workstation Access" in BASE_IDENTITY or "mcp_workstation" in BASE_IDENTITY
     assert "mcp_workstation_*" in ULTRA_IDENTITY
-    assert "dual-tier Cowork system" in ULTRA_IDENTITY
+    assert "Workstation Access" in ULTRA_IDENTITY
 
     # 4. Planner tool roster explicitly includes workstation tools
     for tool in [
