@@ -5,6 +5,7 @@ Provides structured plan generation (List[PlanStep]) with risk classification
 and tool hint mapping for Agent Mode, alongside backward-compatible prompt injection.
 """
 
+import os
 import asyncio
 import json
 import re
@@ -56,13 +57,17 @@ _STRUCTURED_PLANNER_SYSTEM = (
     "  {\n"
     "    \"index\": 1,\n"
     "    \"description\": \"Specific step action description (e.g. Scrape pricing data from URL, Look up @handle on GitHub, Deploy landing page)\",\n"
-    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"youtube_transcript\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"terminal\" | \"fetch_stock_image\" | \"sandbox_ls\" | \"sandbox_read\" | \"sandbox_write\" | \"sandbox_edit\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | \"ask_user_input\" | \"present_deliverable\" | null,\n"
+    "    \"tool_name\": \"search_web\" | \"deep_research\" | \"fetch_url\" | \"scrape_web\" | \"youtube_transcript\" | \"lookup_handle\" | \"deploy_site\" | \"execute_code\" | \"terminal\" | \"fetch_stock_image\" | \"sandbox_ls\" | \"sandbox_read\" | \"sandbox_write\" | \"sandbox_edit\" | \"generate_image\" | \"memory_save\" | \"memory_recall\" | \"gmail_search\" | \"gmail_read\" | \"gmail_send\" | \"calendar_list_events\" | \"calendar_create_event\" | \"calendar_check_availability\" | \"photos_search\" | \"photos_list\" | \"photos_get\" | \"photos_upload\" | \"visualize__show_widget\" | \"ask_user_input\" | \"present_deliverable\" | \"mcp_workstation_list\" | \"mcp_workstation_read\" | \"mcp_workstation_write\" | \"mcp_workstation_exec\" | null,\n"
     "    \"tool_args_hint\": {\"question\": \"...\", \"options\": [\"Option 1\", \"Option 2\"]} | {\"path\": \"...\"} | {\"project_name\": \"...\", \"entry_file\": \"index.html\"} | null,\n"
     "    \"risk_level\": \"low\" | \"medium\" | \"high\"\n"
     "  }\n"
     "]\n\n"
     "Tool Selection Directives:\n"
     "- When finishing a multi-file website, software project, or deliverable bundle: use tool_name=\"present_deliverable\" (risk_level=\"low\"). Include tool_args_hint with {\"project_name\": \"...\", \"entry_file\": \"index.html\"}.\n"
+    "- When user asks to inspect, read, or list files/folders on their local computer or workstation: use tool_name=\"mcp_workstation_list\" (risk_level=\"low\"). Always include tool_args_hint with {\"path\": \"...\"} and optional {\"pattern\": \"*.ext\"}. Enforces compact 25-item limit.\n"
+    "- When user asks to inspect or read content from a local file: use tool_name=\"mcp_workstation_read\" (risk_level=\"low\"). Always include tool_args_hint with {\"path\": \"...\"} and chunking hints like {\"start_line\": 1, \"end_line\": 100} for large files.\n"
+    "- When user asks to write, create, or modify files on their local computer or workstation: use tool_name=\"mcp_workstation_write\" (risk_level=\"medium\").\n"
+    "- When user asks to run shell or terminal commands on their local computer or workstation: use tool_name=\"mcp_workstation_exec\" (risk_level=\"high\").\n"
     "- When user asks to design or build a website, landing page, dashboard, or web tool: follow Think Mode's world-class engineering standards. Plan an architectural & design step, complete implementation with modern aesthetics (Google Fonts, custom Tailwind/CSS tokens, dark mode/gradients, responsive breakpoints), live deployment with tool_name=\"deploy_site\", and interactive presentation with tool_name=\"present_deliverable\".\n"
     "- ZIP PACKAGING & INDIVIDUAL FILE ACCESS:\n"
     "  * ONLY multi-file software projects (2+ files) are packaged into a zip file (`project.zip`).\n"
@@ -243,13 +248,53 @@ def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> 
     needs_deploy = bool(re.search(r"\b(build\s+(?:and\s+)?deploy|deploy|create\s+(?:a\s+)?(?:web\s*app|website|landing\s*page|portfolio|calculator|dashboard)|interactive\s+web\s*app)\b", goal, re.IGNORECASE))
     needs_scrape = bool(re.search(r"\b(scrape|crawl|visit\s+https?://|extract\s+from\s+https?://|https?://[^\s]+)\b", goal, re.IGNORECASE))
     needs_profile = bool(re.search(r"\b(github|github\.com|profile\s+@|@\w+)\b", goal, re.IGNORECASE))
+    local_path_match = re.search(r'[A-Za-z]:\\[^"\'\n]+|[A-Za-z]:/[^"\'\n]+|\b(?:my\s+)?download(?:s)?\b|\b(?:my\s+)?desktop\b|\b(?:my\s+)?documents?\b|\b(?:on\s+my\s+(?:computer|laptop|pc|workstation))\b', goal, re.IGNORECASE)
+    needs_workstation = bool(local_path_match)
     needs_search = bool(re.search(r"\b(find|search|lookup|look up|research|who|what|when|where|latest|news|today|price|stock|weather)\b", goal, re.IGNORECASE)) or len(goal) > 25
     needs_code = bool(re.search(r"\b(code|python|script|calculate|compute|math|csv|excel|pdf|docx|file|chart|plot)\b", goal, re.IGNORECASE))
 
     fallback_steps = []
     step_idx = 1
 
-    if needs_deploy:
+    if needs_workstation:
+        extracted_p = "downloads"
+        win_m = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', goal)
+        if win_m:
+            extracted_p = win_m.group(0).rstrip(".:,;`)]'\"")
+        elif "desktop" in goal.lower():
+            extracted_p = "desktop"
+        elif "document" in goal.lower():
+            extracted_p = "documents"
+
+        tool_to_use = "mcp_workstation_read" if ("." in os.path.basename(extracted_p) and not extracted_p.endswith(("/", "\\"))) else "mcp_workstation_list"
+        fallback_steps.append(PlanStep(
+            index=step_idx,
+            description=f"Inspect workstation path: {extracted_p}",
+            tool_name=tool_to_use,
+            tool_args_hint={"path": extracted_p},
+            risk_level=RiskLevel.LOW,
+            status=StepStatus.PENDING,
+        ))
+        step_idx += 1
+
+        fallback_steps.append(PlanStep(
+            index=step_idx,
+            description=f"Confirm file access method with user if host path needs authorization",
+            tool_name="ask_user_input",
+            tool_args_hint={
+                "question": f"To access '{os.path.basename(extracted_p) or extracted_p}' on your computer, please select how to provide access:",
+                "options": [
+                    "Mount local folder via browser",
+                    "Select and upload file",
+                    "Start local workstation bridge",
+                ],
+                "select_type": "single_select",
+            },
+            risk_level=RiskLevel.LOW,
+            status=StepStatus.PENDING,
+        ))
+        step_idx += 1
+    elif needs_deploy:
         fallback_steps.append(PlanStep(
             index=step_idx,
             description=f"Design and deploy interactive web app: {goal[:60]}",
@@ -437,9 +482,19 @@ async def generate_structured_plan(
                 if not args_hint and tool == "ask_user_input":
                     args_hint = {
                         "question": desc,
-                        "options": ["Proceed with recommended plan", "Modify parameters", "Provide additional details"],
+                        "options": ["Mount local folder via browser", "Select and upload file", "Start local workstation bridge"],
                         "select_type": "single_select",
                     }
+                elif not args_hint and tool and ("workstation" in tool or tool.startswith("mcp_workstation_")):
+                    path_match = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', f"{desc} {goal}")
+                    if path_match:
+                        args_hint = {"path": path_match.group(0).rstrip(".:,;`)]'\"")}
+                    elif "download" in f"{desc} {goal}".lower():
+                        args_hint = {"path": "downloads"}
+                    elif "desktop" in f"{desc} {goal}".lower():
+                        args_hint = {"path": "desktop"}
+                    elif "document" in f"{desc} {goal}".lower():
+                        args_hint = {"path": "documents"}
 
                 step = PlanStep(
                     index=idx,

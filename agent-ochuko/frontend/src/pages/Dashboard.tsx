@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 import { wakeBackend } from '../utils/wakeBackend'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, ChevronRight, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Sliders, Eye } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, ChevronRight, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Terminal, Eye } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -4113,7 +4113,22 @@ export const Dashboard: React.FC = () => {
 
   const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false)
   const [isConnectorSettingsOpen, setIsConnectorSettingsOpen] = useState(false)
+  const [isWorkstationAccessEnabled, setIsWorkstationAccessEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('ochuko_workstation_access_enabled') === 'true'
+  })
   const headerSettingsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setIsWorkstationAccessEnabled(localStorage.getItem('ochuko_workstation_access_enabled') === 'true')
+    }
+    window.addEventListener('storage', handleStorageChange)
+    window.addEventListener('ochuko_workstation_access_changed', handleStorageChange)
+    return () => {
+      window.removeEventListener('storage', handleStorageChange)
+      window.removeEventListener('ochuko_workstation_access_changed', handleStorageChange)
+    }
+  }, [])
 
   useEffect(() => {
     if (!isHeaderSettingsOpen) return
@@ -5893,6 +5908,16 @@ export const Dashboard: React.FC = () => {
         fileInputRef.current.click()
         return
       }
+    } else if (answer.toLowerCase().includes('workstation bridge')) {
+      try {
+        const res = await fetch('http://127.0.0.1:3920/health', { signal: AbortSignal.timeout(1500) })
+        if (res.ok) {
+          const bInfo = await res.json()
+          finalAnswer = `Local companion bridge active on port 3920 (${bInfo.platform || 'Host'}). Proceeding with workstation access.`
+        }
+      } catch {
+        showToast('Bridge not running on 127.0.0.1:3920. Run: python -m app.connectors.workstation_bridge', 'info')
+      }
     }
 
     showToast('Response submitted! Continuing...', 'info')
@@ -5970,6 +5995,8 @@ export const Dashboard: React.FC = () => {
           local_time: new Date().toString(),
 
           viewport: window.innerWidth < 640 ? 'mobile' : 'desktop',
+
+          workstation_access_enabled: isWorkstationAccessEnabled,
 
           review_policy: localStorage.getItem('ochuko_review_policy') || 'always_ask',
 
@@ -6322,6 +6349,28 @@ export const Dashboard: React.FC = () => {
               // Context was compacted by the backend — insert a transparent marker
               // so the user knows what happened and what was summarised.
 
+              // CRITICAL: the marker must be inserted BEFORE the trailing
+              // assistant placeholder, never appended after it. Appending made
+              // the marker the "last message", so every subsequent
+              // content_block_delta wrote the streamed response into the marker
+              // (whose content is never rendered) — the response appeared halted.
+
+              const buildCompactionMarker = (): Message => ({
+                role: 'assistant' as const,
+                content: '',
+                isCompactionMarker: true,
+                compactionSummary: data.summary || '',
+              })
+
+              const insertMarker = (base: Message[]): Message[] => {
+                const last = base[base.length - 1]
+                // Insert before the streaming assistant placeholder if present
+                if (last && last.role === 'assistant' && !last.isCompactionMarker && !last.isArchived) {
+                  return [...base.slice(0, -1), buildCompactionMarker(), last]
+                }
+                return [...base, buildCompactionMarker()]
+              }
+
               setMessages((prev) => {
                 const activeIndices: number[] = []
                 prev.forEach((m, idx) => {
@@ -6331,24 +6380,12 @@ export const Dashboard: React.FC = () => {
                 })
                  if (activeIndices.length > 20) {
                   const indicesToArchive = activeIndices.slice(0, -20)
-                  return prev.map((m, idx) => {
-                    if (indicesToArchive.includes(idx)) {
-                      return { ...m, isArchived: true }
-                    }
-                    return m
-                  }).concat({
-                    role: 'assistant' as const,
-                    content: '',
-                    isCompactionMarker: true,
-                    compactionSummary: data.summary || '',
-                  })
+                  const archived = prev.map((m, idx) =>
+                    indicesToArchive.includes(idx) ? { ...m, isArchived: true } : m
+                  )
+                  return insertMarker(archived)
                 }
-                return prev.concat({
-                  role: 'assistant' as const,
-                  content: '',
-                  isCompactionMarker: true,
-                  compactionSummary: data.summary || '',
-                })
+                return insertMarker(prev)
               })
 
             } else if (data.type === 'image_gen_queued') {
@@ -8502,21 +8539,55 @@ export const Dashboard: React.FC = () => {
               </button>
               {isHeaderSettingsOpen && (
                 <div className="absolute right-0 mt-1.5 w-60 sm:w-56 max-h-[calc(100dvh-70px)] sm:max-h-[calc(100vh-80px)] overflow-y-auto rounded-xl border border-brand-border bg-brand-card/95 backdrop-blur-md shadow-2xl z-50 py-1.5 select-none touch-manipulation">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsConnectorSettingsOpen(true)
-                      setIsHeaderSettingsOpen(false)
-                    }}
-                    className="w-full text-left px-3.5 py-3 sm:py-2.5 min-h-[44px] sm:min-h-[40px] text-xs sm:text-[11px] text-brand-text hover:bg-white/5 active:bg-white/10 transition flex items-center justify-between font-medium cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2 truncate">
-                      <Sliders className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                      <span>Connected Apps & Safety...</span>
-                    </span>
-                    <ChevronRight className="w-3.5 h-3.5 text-brand-muted/60 shrink-0" />
-                  </button>
-                  <div className="border-t border-[#1e2025]/50 my-1" />
+                  {mode === 'agent' && (
+                    <>
+                      <div
+                        role="switch"
+                        aria-checked={isWorkstationAccessEnabled}
+                        aria-label="Toggle Workstation Access"
+                        onClick={() => {
+                          const val = !isWorkstationAccessEnabled
+                          setIsWorkstationAccessEnabled(val)
+                          localStorage.setItem('ochuko_workstation_access_enabled', val ? 'true' : 'false')
+                          window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+                        }}
+                        className="px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-[40px] flex items-center justify-between gap-3 cursor-pointer hover:bg-white/5 active:bg-white/10 transition-colors select-none"
+                      >
+                        <div className="flex flex-col min-w-0 pointer-events-none">
+                          <span className="text-brand-text text-xs sm:text-[11px] font-semibold flex items-center gap-1.5 truncate">
+                            <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" /> Workstation Access
+                          </span>
+                          <span className="text-[10px] sm:text-[9.5px] text-cyan-400/80 font-medium pl-5">Agent Mode Only</span>
+                        </div>
+                        <div
+                          className={`relative inline-flex h-6 w-11 sm:h-5 sm:w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out pointer-events-none ${
+                            isWorkstationAccessEnabled ? 'bg-cyan-500 shadow-sm shadow-cyan-500/30' : 'bg-white/[0.15]'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-5 w-5 sm:h-4 sm:w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                              isWorkstationAccessEnabled ? 'translate-x-5 sm:translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsConnectorSettingsOpen(true)
+                          setIsHeaderSettingsOpen(false)
+                        }}
+                        className="w-full text-left px-3.5 py-2.5 min-h-[40px] text-xs sm:text-[11px] text-brand-muted hover:text-cyan-300 hover:bg-white/5 active:bg-white/10 transition flex items-center justify-between font-medium cursor-pointer border-t border-[#1e2025]/50"
+                      >
+                        <span className="flex items-center gap-2 truncate">
+                          <Terminal className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <span>Workstation Setup & Bridge...</span>
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-brand-muted/60 shrink-0" />
+                      </button>
+                      <div className="border-t border-[#1e2025]/50 my-1" />
+                    </>
+                  )}
                   {localStorage.getItem('app_lock_pin') ? (
                     <>
                       <button
@@ -8715,7 +8786,8 @@ export const Dashboard: React.FC = () => {
                                 <span className="font-semibold text-brand-text/70 tracking-wide uppercase text-[10px]">Context summarised</span>
                                 {(() => {
                                   const archived = getArchivedForMarker(i);
-                                  if (archived.length === 0) return null;
+                                  const hasDetails = archived.length > 0 || !!msg.compactionSummary;
+                                  if (!hasDetails) return null;
                                   const isExpanded = expandedCompactionIndices.has(i);
                                   return (
                                     <button
@@ -8736,7 +8808,7 @@ export const Dashboard: React.FC = () => {
                                         </>
                                       ) : (
                                         <>
-                                          <span>Show {archived.length} messages</span>
+                                          <span>Show {archived.length > 0 ? `${archived.length} messages` : 'details'}</span>
                                           <ChevronDown className="w-3 h-3" />
                                         </>
                                       )}
@@ -8744,11 +8816,11 @@ export const Dashboard: React.FC = () => {
                                   );
                                 })()}
                               </div>
-                              {msg.compactionSummary ? (
-                                <p className="text-brand-muted/80 leading-relaxed">{msg.compactionSummary}</p>
-                              ) : (
-                                <p className="text-brand-muted/60 italic">Older messages were condensed to save context space. The full detail is preserved in your conversation history.</p>
-                              )}
+                              <p className="text-brand-muted/60 italic">
+                                {msg.compactionSummary
+                                  ? 'Earlier messages were summarized to free context space. Use "Show details" below to read the summary.'
+                                  : 'Older messages were condensed to save context space. The full detail is preserved in your conversation history.'}
+                              </p>
                             </div>
                           </div>
 
@@ -8756,9 +8828,15 @@ export const Dashboard: React.FC = () => {
                           {(() => {
                             const archived = getArchivedForMarker(i);
                             const isExpanded = expandedCompactionIndices.has(i);
-                            if (!isExpanded || archived.length === 0) return null;
+                            if (!isExpanded || (archived.length === 0 && !msg.compactionSummary)) return null;
                             return (
                               <div className="mt-3 pl-4 border-l border-[#2e3542] space-y-4">
+                                {msg.compactionSummary && (
+                                  <div className="text-xs text-brand-muted/80 leading-relaxed whitespace-pre-wrap">
+                                    <div className="text-[9px] text-brand-muted/50 font-medium uppercase tracking-wide mb-1 select-none">Summary</div>
+                                    {msg.compactionSummary}
+                                  </div>
+                                )}
                                 {archived.map((archivedMsg, archIdx) => (
                                   <div key={`arch-${archIdx}`} className="opacity-90">
                                     <div className={`flex w-full gap-3 ${archivedMsg.role === 'user' ? 'justify-end' : 'justify-start'} text-xs`}>

@@ -254,7 +254,13 @@ class WorkstationMCP:
         def _read():
             safe_p = self._resolve_safe_path(path)
             if not os.path.exists(safe_p):
-                return f"Error: File '{path}' does not exist in the workspace. Please upload the file if needed."
+                if (len(path) > 2 and path[1] == ":") or "downloads" in path.lower() or "desktop" in path.lower():
+                    return (
+                        f"Workstation Notice: '{path}' is located on your physical computer. "
+                        f"To access it, please mount your local folder via the Settings icon or start "
+                        f"the local companion bridge: 'run_workstation_bridge.bat background' or 'python -m app.connectors.workstation_bridge'."
+                    )
+                return f"Error: File '{path}' does not exist on workstation."
             if os.path.isdir(safe_p):
                 return f"Error: '{path}' is a directory, not a file. Use workstation_list_directory instead."
             try:
@@ -360,6 +366,12 @@ class WorkstationMCP:
         def _list():
             safe_p = self._resolve_safe_path(path)
             if not os.path.exists(safe_p):
+                if (len(path) > 2 and path[1] == ":") or "downloads" in path.lower() or "desktop" in path.lower():
+                    return (
+                        f"Workstation Notice: '{path}' is located on your physical computer. "
+                        f"To access it, please mount your local folder via the Settings icon or start "
+                        f"the local companion bridge: 'run_workstation_bridge.bat background' or 'python -m app.connectors.workstation_bridge'."
+                    )
                 return f"Error: Directory '{path}' does not exist."
             if not os.path.isdir(safe_p):
                 return f"Error: '{path}' is a file, not a directory. Use workstation_read_file instead."

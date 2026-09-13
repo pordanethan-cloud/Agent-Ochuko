@@ -29,9 +29,9 @@ Agent Ochuko is a production-grade autonomous AI engine and cloud system archite
 │                                              │  └────────────────────────┬────────────────────────┘  │   │
 │                                              │                           │                           │   │
 │                                              │  ┌────────────────────────▼────────────────────────┐  │   │
-│                                              │  │ Autonomous OODA Loop & ReWOO Execution Engine   │  │   │
+│                                              │  │ Autonomous OODA Task Orchestrator               │  │   │
 │                                              │  │  - Observe/Orient: Multi-Model Fallback Router │  │   │
-│                                              │  │  - Decide/Act: ReWOO Planner & Skill Store    │  │   │
+│                                              │  │  - Decide/Act: Structured Plan & Skill Store  │  │   │
 │                                              │  │  - Guardrails: CircuitBreaker & Reflexion     │  │   │
 │                                              │  └────────────────────────┬────────────────────────┘  │   │
 │                                              │                           │                           │   │
@@ -55,8 +55,8 @@ Agent Ochuko is a production-grade autonomous AI engine and cloud system archite
 
 ## Key Architectural Capabilities & Production Engineering
 
-### 1. Autonomous Agent Execution Loop (OODA & ReWOO)
-The engine executes complex multi-turn tasks using an explicit **Observe-Orient-Decide-Act (OODA)** state machine combined with **ReWOO (Reasoning Without Observation)** DAG planning:
+### 1. Autonomous Agent Execution Loop (OODA)
+The engine executes complex multi-turn tasks using an explicit **Observe-Orient-Decide-Act (OODA)** state machine driving a pre-computed structured plan with AI feedback adaptation:
 - **Dynamic Action Budgets**: Enforces strict step quotas per request cycle to prevent infinite tool loops and unbudgeted API consumption.
 - **Forced Final Step Synthesis Guard**: When approaching turn limits (`max_iterations - 1`), the engine automatically forces `"tool_choice": "none"`, guaranteeing structured markdown response completion without dropping output mid-stream.
 - **Reflexion Self-Correction Engine**: Intercepts tool execution errors, feeds execution trace critique back into the agent context, and dynamically attempts alternative execution strategies.
@@ -111,9 +111,9 @@ cd agent-ochuko/backend
 python -m pytest tests/test_document_pipeline.py tests/test_agent_architecture.py tests/test_model_router.py
 ```
 
-### Verified Test Matrix (17/17 Passed)
+### Verified Test Matrix (34/34 Passed)
 - `test_full_document_processing_pipeline`: PDF signature extraction, DOCX signatory replacement, and output ZIP header verification.
-- `test_agent_architecture`: OODA loop state machine, CircuitBreaker threshold enforcement, ReWOO DAG execution, and AST verification gates.
+- `test_agent_architecture`: OODA loop state machine, CircuitBreaker threshold enforcement, Reflexion engine, and AST verification gates.
 - `test_model_router`: Multi-tier fallback routing and prompt token budget pre-deductions.
 
 ```bash

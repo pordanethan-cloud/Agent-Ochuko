@@ -1,6 +1,6 @@
 """
 Comprehensive Unit and Integration Test Suite for Agent Ochuko Phase 14 Capabilities.
-Tests Verification Gates, Circuit Breakers, Prompt Defense, Scope Contracts, ReWOO Planner,
+Tests Verification Gates, Circuit Breakers, Prompt Defense, Scope Contracts,
 Durable State, Reflexion Engine, Hybrid Memory, Tree Planner, Skill Store, Telemetry,
 Supervisor Router, Reviewer Agent, and Repo Indexer.
 """
@@ -10,7 +10,6 @@ from app.core.verification_gates import verification_gates
 from app.core.circuit_breaker import create_turn_circuit_breaker, ActionBudgetExceeded, CircuitBreakerOpen
 from app.core.prompt_defense import prompt_defense
 from app.core.scope_contracts import scope_contract
-from app.core.rewoo_planner import rewoo_planner, ExecutionPlan, PlanStep
 from app.core.reflexion_engine import create_reflexion_engine
 from app.services.hybrid_memory import create_hybrid_memory
 from app.core.tree_planner import create_tree_planner
@@ -63,24 +62,6 @@ def test_scope_contracts():
 
     valid_traversal, reason = scope_contract.validate_sandbox_path("/etc/passwd", convo_id)
     assert valid_traversal is False
-
-
-def test_rewoo_planner():
-    plan = ExecutionPlan(
-        goal="Test Goal",
-        steps=[
-            PlanStep(step_id=1, tool_name="fetch_doc", args={"path": "doc.pdf"}, depends_on=[], description="Fetch doc"),
-            PlanStep(step_id=2, tool_name="parse_doc", args={"path": "doc.pdf"}, depends_on=[1], description="Parse doc")
-        ]
-    )
-
-    executable = rewoo_planner.get_executable_steps(plan, completed_steps=[])
-    assert len(executable) == 1
-    assert executable[0].step_id == 1
-
-    executable_next = rewoo_planner.get_executable_steps(plan, completed_steps=[1])
-    assert len(executable_next) == 1
-    assert executable_next[0].step_id == 2
 
 
 def test_reflexion_engine():

@@ -1250,7 +1250,7 @@ async def compact_conversation_history(conversation_id: str) -> Optional[str]:
         def get_active():
             return (
                 supabase.table("messages")
-                .select("id, role, content, is_summary")
+                .select("id, role, content, is_summary, created_at")
                 .eq("conversation_id", conversation_id)
                 .eq("is_archived_msg", False)
                 .order("created_at", desc=False)
@@ -1280,11 +1280,22 @@ async def compact_conversation_history(conversation_id: str) -> Optional[str]:
             else:
                 history_lines.append(f"{role.upper()}: {content}")
         history_text = "\n\n".join(history_lines)
+        # Hard cap to keep the summarizer call fast (bounded token cost).
+        if len(history_text) > 120000:
+            history_text = history_text[:120000] + "\n... [TRUNCATED FOR SUMMARIZATION] ..."
 
-        # Call OpenAI to generate summary
+        # Call OpenAI to generate summary.
+        # Prefer the dedicated compaction deployment (App Config key, live-editable
+        # via Admin Settings). Falls back to env, then the SOLVE chain.
         client = get_openai_client()
+        try:
+            compaction_cfg = await get_config("COMPACTION_MODEL_DEPLOYMENT")
+        except Exception:
+            compaction_cfg = None
         deploy = (
-            os.getenv("SOLVE_MODEL_DEPLOYMENT")
+            compaction_cfg
+            or os.getenv("COMPACTION_MODEL_DEPLOYMENT")
+            or os.getenv("SOLVE_MODEL_DEPLOYMENT")
             or os.getenv("AZURE_OPENAI_SOLVE_DEPLOYMENT")
             or "gpt-5.6-luna"
         )
@@ -1313,6 +1324,23 @@ async def compact_conversation_history(conversation_id: str) -> Optional[str]:
 
         # Insert new summary message and archive old ones in database
         def persist_compaction():
+            from datetime import timedelta
+
+            # Place the summary message's created_at just BEFORE the newest active
+            # message. build_llm_context() orders ASC by created_at; without this,
+            # a summary inserted with now() would land AFTER the user's latest
+            # message and be fed to the model out of order.
+            summary_created_at = None
+            newest_created = messages[-1].get("created_at") if messages else None
+            if newest_created:
+                try:
+                    newest_dt = datetime.fromisoformat(str(newest_created).replace("Z", "+00:00"))
+                    if newest_dt.tzinfo is None:
+                        newest_dt = newest_dt.replace(tzinfo=timezone.utc)
+                    summary_created_at = (newest_dt - timedelta(milliseconds=1)).isoformat()
+                except Exception as dt_err:
+                    logger.warning(f"Could not compute summary created_at: {dt_err}")
+
             # 1. Insert summary message
             summary_msg = {
                 "conversation_id": conversation_id,
@@ -1320,6 +1348,8 @@ async def compact_conversation_history(conversation_id: str) -> Optional[str]:
                 "is_summary": True,
                 "content": f"Summary of earlier conversation:\n{summary}",
             }
+            if summary_created_at:
+                summary_msg["created_at"] = summary_created_at
             supabase.table("messages").insert(summary_msg).execute()
 
             # 2. Archive old messages
@@ -1369,7 +1399,6 @@ async def chat_stream_generator(
     previous_response_id: Optional[str] = None,
     user_timezone: Optional[str] = None,
     viewport: Optional[str] = None,  # "mobile" | "desktop" | None
-    compaction_summary: Optional[str] = None,
     reasoning_effort: Optional[str] = None,  # GPT-5.6 reasoning effort tier
     complexity: Optional[str] = None,        # Rule-classified complexity tier
     workstation_access_enabled: bool = False,
@@ -1387,6 +1416,7 @@ async def chat_stream_generator(
       - routing_info:        model deployment and routing mode metadata
       - search_activity:     step-by-step status while Google search runs
       - image_gen_queued:    when AI decides to generate an image
+      - context_compacted:   history was compacted mid-stream (summary included)
       - content_block_delta: incremental text chunk
       - response_id:         the response ID to persist and pass on next turn
       - [DONE]:              stream termination signal
@@ -1416,6 +1446,16 @@ async def chat_stream_generator(
         + "\n\n"
     )
 
+    # ── Compaction runs INSIDE the stream (post header-flush) ────────────────
+    # The SSE handshake is already sent, so the (potentially slow) summarizer
+    # call can no longer stall the connection the way a pre-stream call did.
+    # The LLM context for this turn was built BEFORE compaction, so archiving
+    # mid-turn is safe; the NEXT turn picks up the compacted context.
+    try:
+        compaction_summary = await compact_conversation_history(conversation_id)
+    except Exception as compact_err:
+        logger.error(f"In-stream compaction failed (continuing): {compact_err}", exc_info=True)
+        compaction_summary = None
     if compaction_summary:
         yield (
             "data: "
@@ -3838,12 +3878,11 @@ async def stream_chat(
     except Exception as e:
         logger.error(f"Failed to save user message to database (non-fatal, stream continues): {e}")
 
-    # Trigger compaction check if not a brand new conversation
-    compaction_summary = None
-    if not is_new_conversation:
-        compaction_summary = await compact_conversation_history(conversation_id)
-
-    # 5. Build context from active database messages (ignores archived/compacted ones)
+    # 5. Build context from active database messages (ignores archived/compacted ones).
+    # Built BEFORE compaction on purpose: compaction now runs inside the stream
+    # generator (post SSE header-flush) so the slow summarizer call can't stall
+    # the handshake. This turn still gets the full active history; the compacted
+    # context benefits the NEXT turn.
     db_context_messages = await build_llm_context(conversation_id)
 
     # 5a. If the current turn has image attachments, inject them as multimodal image_url
@@ -3916,7 +3955,6 @@ async def stream_chat(
             previous_response_id,
             user_timezone=payload.get("timezone"),
             viewport=payload.get("viewport"),  # "mobile" | "desktop" | None
-            compaction_summary=compaction_summary,
             reasoning_effort=decision.reasoning_effort,
             complexity=decision.complexity,
             workstation_access_enabled=bool(payload.get("workstation_access_enabled", False)),

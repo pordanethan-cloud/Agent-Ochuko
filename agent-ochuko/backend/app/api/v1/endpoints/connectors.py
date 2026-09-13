@@ -60,6 +60,24 @@ CONNECTOR_CATALOG = [
         "icon": "image",
         "default_permissions": ["read", "write"],
     },
+    {
+        "name": "filesystem",
+        "title": "Local Sandbox Filesystem MCP",
+        "description": "Secure workspace storage access for project files and codebases.",
+        "type": "mcp",
+        "category": "System",
+        "icon": "folder",
+        "default_permissions": ["read", "write"],
+    },
+    {
+        "name": "workstation_access",
+        "title": "Workstation Computer Access MCP",
+        "description": "Direct read, write, directory navigation, and terminal command execution on your workstation (Agent Mode only).",
+        "type": "mcp",
+        "category": "System",
+        "icon": "cpu",
+        "default_permissions": ["read", "write", "execute"],
+    },
 ]
 
 
