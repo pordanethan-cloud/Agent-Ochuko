@@ -1503,6 +1503,16 @@ async def chat_stream_generator(
             from app.core.skills import ULTRA_IDENTITY
             full_system = full_system + "\n\n" + ULTRA_IDENTITY
 
+        ws_context_str = (
+            f"\n\n[System Context: WORKSTATION COMPUTER ACCESS (COWORK) STATUS: "
+            f"{'ENABLED' if workstation_access_enabled else 'NOT YET ENABLED (default safety sandbox)'}.\n"
+            f"Agent Ochuko features dual-tier Workstation Computer Access (Cowork):\n"
+            f"1. Tier 1 (Browser Folder Mount - Zero Install): Mount any local project folder, Downloads, or Desktop directory in Settings -> Workstation Setup via HTML5 File System Access API with zero background daemons.\n"
+            f"2. Tier 2 (Workstation Companion Bridge): Run `run_workstation_bridge.bat background` (Windows) or `python -m app.connectors.workstation_bridge` on port 3920 for full filesystem navigation, local file read/write, and terminal command execution via `mcp_workstation_*` tools.\n"
+            f"If the user asks whether you can see or browse their PC files: explain that direct access is isolated by default for safety, but they can easily enable Workstation Access via Tier 1 (Browser Folder Mount in Settings) or Tier 2 (Companion Bridge), allowing you to inspect, read, and edit their local files directly.]\n"
+        )
+        full_system = full_system + ws_context_str
+
         # ─── AGENT MODE AUTONOMOUS ORCHESTRATION ───────────────────────────
         if mode == "agent":
             from app.core.agent_task_models import AgentTask

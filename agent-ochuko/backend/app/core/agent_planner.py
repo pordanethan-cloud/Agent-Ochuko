@@ -112,7 +112,9 @@ _PLANNER_TOOL_ROSTER = frozenset({
     "memory_save", "memory_recall", "gmail_search", "gmail_read", "gmail_send",
     "calendar_list_events", "calendar_create_event", "calendar_check_availability",
     "photos_search", "photos_list", "photos_get", "visualize__show_widget",
-    "ask_user_input",
+    "ask_user_input", "present_deliverable",
+    "mcp_workstation_list", "mcp_workstation_read", "mcp_workstation_write", "mcp_workstation_exec",
+    "workstation_read", "workstation_list", "workstation_write", "workstation_exec",
 })
 
 # Phase 8: compact re-orientation prompt — deliberately terse to keep the
@@ -288,7 +290,14 @@ def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> 
     needs_deploy = bool(re.search(r"\b(build\s+(?:and\s+)?deploy|deploy|create\s+(?:a\s+)?(?:web\s*app|website|landing\s*page|portfolio|calculator|dashboard)|interactive\s+web\s*app)\b", goal, re.IGNORECASE))
     needs_scrape = bool(re.search(r"\b(scrape|crawl|visit\s+https?://|extract\s+from\s+https?://|https?://[^\s]+)\b", goal, re.IGNORECASE))
     needs_profile = bool(re.search(r"\b(github|github\.com|profile\s+@|@\w+)\b", goal, re.IGNORECASE))
-    local_path_match = re.search(r'[A-Za-z]:\\[^"\'\n]+|[A-Za-z]:/[^"\'\n]+|\b(?:my\s+)?download(?:s)?\b|\b(?:my\s+)?desktop\b|\b(?:my\s+)?documents?\b|\b(?:on\s+my\s+(?:computer|laptop|pc|workstation))\b', goal, re.IGNORECASE)
+    local_path_match = re.search(
+        r'[A-Za-z]:\\[^"\'\n]+|[A-Za-z]:/[^"\'\n]+|'
+        r'\b(?:my\s+)?download(?:s)?\b|\b(?:my\s+)?desktop\b|\b(?:my\s+)?documents?\b|'
+        r'\b(?:on|from|in|see|access|read|browse|view)\s+(?:my\s+)?(?:computer|laptop|pc|workstation|machine)\b|'
+        r'\b(?:pc|computer|workstation)\s+files?\b|\bcowork\b',
+        goal,
+        re.IGNORECASE,
+    )
     needs_workstation = bool(local_path_match)
     needs_search = bool(re.search(r"\b(find|search|lookup|look up|research|who|what|when|where|latest|news|today|price|stock|weather)\b", goal, re.IGNORECASE)) or len(goal) > 25
     needs_code = bool(re.search(r"\b(code|python|script|calculate|compute|math|csv|excel|pdf|docx|file|chart|plot)\b", goal, re.IGNORECASE))
@@ -297,43 +306,54 @@ def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> 
     step_idx = 1
 
     if needs_workstation:
-        extracted_p = "downloads"
-        win_m = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', goal)
-        if win_m:
-            extracted_p = win_m.group(0).rstrip(".:,;`)]'\"")
-        elif "desktop" in goal.lower():
-            extracted_p = "desktop"
-        elif "document" in goal.lower():
-            extracted_p = "documents"
+        is_inquiry = bool(re.search(r'\b(?:can|do)\s+you\s+(?:see|access|read|browse|view)\b|\bsee\s+(?:my\s+)?pc\s+files\b', goal, re.IGNORECASE))
+        if is_inquiry:
+            fallback_steps.append(PlanStep(
+                index=step_idx,
+                description="Explain Workstation Computer Access (Cowork) capabilities and setup instructions",
+                tool_name=None,
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+            ))
+            step_idx += 1
+        else:
+            extracted_p = "downloads"
+            win_m = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', goal)
+            if win_m:
+                extracted_p = win_m.group(0).rstrip(".:,;`)]'\"")
+            elif "desktop" in goal.lower():
+                extracted_p = "desktop"
+            elif "document" in goal.lower():
+                extracted_p = "documents"
 
-        tool_to_use = "mcp_workstation_read" if ("." in os.path.basename(extracted_p) and not extracted_p.endswith(("/", "\\"))) else "mcp_workstation_list"
-        fallback_steps.append(PlanStep(
-            index=step_idx,
-            description=f"Inspect workstation path: {extracted_p}",
-            tool_name=tool_to_use,
-            tool_args_hint={"path": extracted_p},
-            risk_level=RiskLevel.LOW,
-            status=StepStatus.PENDING,
-        ))
-        step_idx += 1
+            tool_to_use = "mcp_workstation_read" if ("." in os.path.basename(extracted_p) and not extracted_p.endswith(("/", "\\"))) else "mcp_workstation_list"
+            fallback_steps.append(PlanStep(
+                index=step_idx,
+                description=f"Inspect workstation path: {extracted_p}",
+                tool_name=tool_to_use,
+                tool_args_hint={"path": extracted_p},
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+            ))
+            step_idx += 1
 
-        fallback_steps.append(PlanStep(
-            index=step_idx,
-            description=f"Confirm file access method with user if host path needs authorization",
-            tool_name="ask_user_input",
-            tool_args_hint={
-                "question": f"To access '{os.path.basename(extracted_p) or extracted_p}' on your computer, please select how to provide access:",
-                "options": [
-                    "Mount local folder via browser",
-                    "Select and upload file",
-                    "Start local workstation bridge",
-                ],
-                "select_type": "single_select",
-            },
-            risk_level=RiskLevel.LOW,
-            status=StepStatus.PENDING,
-        ))
-        step_idx += 1
+            fallback_steps.append(PlanStep(
+                index=step_idx,
+                description=f"Confirm file access method with user if host path needs authorization",
+                tool_name="ask_user_input",
+                tool_args_hint={
+                    "question": f"To access '{os.path.basename(extracted_p) or extracted_p}' on your computer, please select how to provide access:",
+                    "options": [
+                        "Mount local folder via browser",
+                        "Select and upload file",
+                        "Start local workstation bridge",
+                    ],
+                    "select_type": "single_select",
+                },
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+            ))
+            step_idx += 1
     elif needs_deploy:
         fallback_steps.append(PlanStep(
             index=step_idx,
@@ -402,6 +422,7 @@ async def generate_structured_plan(
     nano_deployment: str = "gpt-5.6-luna",
     auto_approve_level: str = "high",
     workspace_files: Optional[List[str]] = None,
+    workstation_access_enabled: bool = False,
 ) -> List[PlanStep]:
     """
     Generates a structured List[PlanStep] for Agent Mode with risk levels and approval requirements.
@@ -448,6 +469,10 @@ async def generate_structured_plan(
                 history_snippet += f"{role}: {content}\n"
 
         user_content = f"GOAL: {goal}"
+        if workstation_access_enabled:
+            user_content = f"WORKSTATION ACCESS: ENABLED (User authorized local computer access via Workstation Cowork. Use mcp_workstation_* tools for local file operations).\n\n{user_content}"
+        else:
+            user_content = f"WORKSTATION ACCESS: INACTIVE BY DEFAULT (Sandboxed for safety. If user asks about seeing PC files, explain Workstation Access via Browser Folder Mount or Companion Bridge).\n\n{user_content}"
         if workspace_files:
             ws_str = ", ".join(f"'{f}'" for f in workspace_files)
             user_content = f"EXISTING ACTIVE WORKSPACE FILES: [{ws_str}]\n\n{user_content}"

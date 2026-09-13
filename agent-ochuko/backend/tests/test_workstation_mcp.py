@@ -181,3 +181,47 @@ async def test_atomic_write_central_backup():
         read_res = await mcp.read_file(file_path)
         assert "Modified Version 2" in read_res
 
+
+def test_workstation_self_awareness_and_planner_roster():
+    """Verifies that Ochuko is self-aware of Workstation Computer Access (Cowork)."""
+    from app.core.skills import get_skill_name, SKILLS, BASE_IDENTITY, ULTRA_IDENTITY
+    from app.core.agent_planner import _PLANNER_TOOL_ROSTER, _programmatic_fallback_plan
+
+    # 1. Skill Classifier recognises PC file questions
+    assert get_skill_name("can you see my Pc files ?") == "help"
+    assert get_skill_name("can you access my computer") == "help"
+    assert get_skill_name("how do I browse local files") == "help"
+
+    # 2. Help skill documents dual-tier Workstation Cowork and AGENT mode
+    help_text = SKILLS["help"]
+    assert "Workstation Computer Access (Cowork)" in help_text
+    assert "Tier 1 (Browser Folder Mount" in help_text
+    assert "Tier 2 (Workstation Companion Bridge" in help_text
+    assert "run_workstation_bridge.bat background" in help_text
+    assert "AGENT: Full autonomous OODA loop" in help_text
+
+    # 3. BASE_IDENTITY and ULTRA_IDENTITY contain Workstation awareness
+    assert "Workstation Access (Cowork)" in BASE_IDENTITY or "mcp_workstation" in BASE_IDENTITY
+    assert "mcp_workstation_*" in ULTRA_IDENTITY
+    assert "dual-tier Cowork system" in ULTRA_IDENTITY
+
+    # 4. Planner tool roster explicitly includes workstation tools
+    for tool in [
+        "mcp_workstation_list",
+        "mcp_workstation_read",
+        "mcp_workstation_write",
+        "mcp_workstation_exec",
+        "workstation_read",
+        "workstation_list",
+        "workstation_write",
+        "workstation_exec",
+        "present_deliverable",
+    ]:
+        assert tool in _PLANNER_TOOL_ROSTER
+
+    # 5. Programmatic fallback plan for PC file inquiry creates informative step
+    steps = _programmatic_fallback_plan("can you see my Pc files ?")
+    assert len(steps) >= 1
+    assert "Workstation" in steps[0].description
+
+

@@ -126,6 +126,7 @@ class AgentTaskManager:
         except Exception as ws_err:
             logger.debug(f"Workspace hydration warning in init_plan: {ws_err}")
 
+        ws_access = bool(self.config.get("workstation_access_enabled", False))
         plan = await generate_structured_plan(
             goal=self.task.goal,
             conversation_history=history,
@@ -133,6 +134,7 @@ class AgentTaskManager:
             nano_deployment=self.nano_deployment,
             auto_approve_level=auto_level,
             workspace_files=workspace_file_names,
+            workstation_access_enabled=ws_access,
         )
         self.task.plan = plan
         self.task.state = TaskState.EXECUTING
@@ -412,6 +414,18 @@ class AgentTaskManager:
                     "For single-file deliverables, ensure they are provided directly without zipping.\n\n"
                     + AGENT_CONDUCT + "\n\n" + ULTRA_IDENTITY
                 )
+
+                ws_enabled = bool(self.config.get("workstation_access_enabled", False))
+                ws_context = (
+                    "WORKSTATION COMPUTER ACCESS (COWORK):\n"
+                    f"- Current Status: {'ENABLED' if ws_enabled else 'NOT YET ENABLED (default safety sandbox)'}.\n"
+                    "- Agent Ochuko features dual-tier Workstation Computer Access (Cowork):\n"
+                    "  * Tier 1 (Browser Folder Mount): Mount any local directory (project repository, Downloads, Desktop) directly in Settings -> Workstation Setup via HTML5 File System Access API with zero background daemons.\n"
+                    "  * Tier 2 (Workstation Companion Bridge): Run `run_workstation_bridge.bat background` or `python -m app.connectors.workstation_bridge` on port 3920 for full disk filesystem navigation and terminal command execution via `mcp_workstation_*` tools.\n"
+                    "- If the user asks whether you can see or browse their PC files, explain that while access is sandboxed by default for safety, you HAVE full Workstation Access (Cowork) capabilities. Clearly explain how they can enable it via Tier 1 (Folder Mount in Settings) or Tier 2 (Companion Bridge). When enabled, you can read, write, and execute commands on their PC directly using `mcp_workstation_*` tools.\n\n"
+                )
+                system_instruction = system_instruction + "\n\n" + ws_context
+
                 input_payload = [
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": synthesis_prompt},
@@ -884,8 +898,15 @@ class AgentTaskManager:
             else:
                 # Direct analytical reasoning / greeting step
                 greeting_match = bool(re.match(r"^\s*(hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|who\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you|help|thanks|thank\s+you|sup|yo)\b[!?.]*\s*$", self.task.goal.strip(), re.IGNORECASE))
+                pc_query_match = bool(re.search(r"\b(?:see|access|read|browse|view)\s+(?:my\s+)?(?:pc|computer|laptop|local|workstation)\s+files?\b|\b(?:pc|computer|workstation)\s+files?\b", self.task.goal.strip(), re.IGNORECASE))
                 if greeting_match:
                     summary = "Hello! I can plan and execute multi-step research, data analysis, document generation, and autonomous tasks for you. What would you like to build or explore?"
+                elif pc_query_match:
+                    ws_active = bool(self.config.get("workstation_access_enabled", False))
+                    if ws_active:
+                        summary = "Workstation Computer Access is currently enabled. I have direct access to your local files and can inspect, read, or edit files using workstation tools."
+                    else:
+                        summary = "By default, PC access is isolated for safety. However, I have Workstation Computer Access (Cowork) which you can enable via Tier 1: Browser Folder Mount (in Settings) or Tier 2: Companion Bridge (`run_workstation_bridge.bat background`)."
                 else:
                     step_prompt = AgentContextCompressor.build_step_payload(self.task, step.index)
                     summary = await self.sub_agents.compress_text(
