@@ -671,10 +671,9 @@ class AgentTaskManager:
                 mcp_registry = MCPRegistry()
                 args = dict(step.tool_args_hint) if isinstance(step.tool_args_hint, dict) else {}
                 if not args.get("path") or args.get("path") == ".":
-                    combined_text = f"{clean_step_desc} {self.task.goal}"
-                    path_match = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', combined_text)
+                    path_match = re.search(r'[A-Za-z]:\\[^<>:"|?*\n\r`\']+|[A-Za-z]:/[^<>:"|?*\n\r`\']+', combined_text)
                     if path_match:
-                        args["path"] = path_match.group(0).rstrip(".:,;`)]'\"")
+                        args["path"] = path_match.group(0).rstrip(".:,;`)]'\" ")
                     elif re.search(r'\bdownload(?:s)?\b', combined_text, re.IGNORECASE):
                         args["path"] = "downloads"
                     elif re.search(r'\bdesktop\b', combined_text, re.IGNORECASE):

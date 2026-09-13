@@ -12,4 +12,5 @@ agent-ochuko/frontend
 **/*.pyo
 **/*.pyd
 .env*
+bybit-manual-button-app
 !agent-ochuko/backend/.env

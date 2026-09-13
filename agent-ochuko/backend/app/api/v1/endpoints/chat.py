@@ -3806,6 +3806,30 @@ async def stream_chat(
             except Exception as wf_err:
                 logger.warning(f"Error saving workstation file to sandbox: {wf_err}")
 
+    # Process directory listings transferred via local workstation companion bridge
+    workstation_dirs = payload.get("workstation_dirs", [])
+    if workstation_dirs and isinstance(workstation_dirs, list):
+        try:
+            ws_dirs_path = os.path.join(data_dir, "workstation_dirs.json")
+            with open(ws_dirs_path, "w", encoding="utf-8") as f:
+                json.dump(workstation_dirs, f, indent=2)
+            for wd in workstation_dirs:
+                res_p = wd.get("resolved_path") or wd.get("path", "")
+                entries = wd.get("entries", [])
+                tot = wd.get("total_count", len(entries))
+                entry_lines = "\n".join(
+                    f"- {'[DIR] ' if e.get('is_dir') else ''}{e.get('name')} ({e.get('size_formatted', str(e.get('size', 0)) + 'B')}, modified: {e.get('relative_time') or e.get('modified', '')})"
+                    for e in entries[:50]
+                )
+                injected_code_prompts.append(
+                    f"--- VERIFIED WORKSTATION DIRECTORY LISTING (From User PC): {res_p} ({tot} items) ---\n"
+                    f"{entry_lines}\n"
+                    f"--- END VERIFIED WORKSTATION DIRECTORY LISTING ---"
+                )
+                logger.info(f"Injected verified workstation directory listing for '{res_p}' ({tot} items)")
+        except Exception as wd_err:
+            logger.warning(f"Error saving workstation dirs to sandbox: {wd_err}")
+
     # Check all files currently present in the sandbox data directory
     current_sandbox_files = []
     if os.path.exists(data_dir):

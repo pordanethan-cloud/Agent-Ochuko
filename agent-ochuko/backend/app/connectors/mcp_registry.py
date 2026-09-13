@@ -50,17 +50,20 @@ class MCPRegistry:
                 or target_path.lower() in ("downloads", "download", "desktop", "documents", "home")
             )
 
-            # Check if target file exists in conversation sandbox first
+            # Check if target file or workstation directory cache exists in conversation sandbox
             if conversation_id:
-                conv_dir = f"/tmp/sandbox_{conversation_id}"
-                if os.path.exists(conv_dir):
-                    # If target is a simple filename or relative path, check if it's already in the sandbox
-                    base_name = os.path.basename(target_path) if target_path else ""
-                    sandbox_candidate = os.path.join(conv_dir, base_name) if base_name else conv_dir
-                    if os.path.exists(sandbox_candidate):
-                        arguments["path"] = sandbox_candidate
-                    elif not is_host_path:
-                        self.workstation.workspace_root = conv_dir
+                import tempfile
+                for cand_dir in (f"/tmp/sandbox_{conversation_id}", os.path.join(tempfile.gettempdir(), f"sandbox_{conversation_id}")):
+                    if os.path.exists(cand_dir):
+                        self.workstation.workspace_root = cand_dir
+                        base_name = os.path.basename(target_path.replace("\\", "/")) if target_path else ""
+                        for sub_d in (os.path.join(cand_dir, "data"), cand_dir):
+                            if base_name:
+                                sandbox_candidate = os.path.join(sub_d, base_name)
+                                if os.path.exists(sandbox_candidate):
+                                    arguments["path"] = sandbox_candidate
+                                    break
+                        break
 
             return await self.workstation.handle_tool_call(tool_name, arguments)
 

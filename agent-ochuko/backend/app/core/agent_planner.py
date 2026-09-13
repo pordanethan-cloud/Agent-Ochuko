@@ -275,7 +275,11 @@ async def generate_plan(
         return None
 
 
-def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> List[PlanStep]:
+def _programmatic_fallback_plan(
+    goal: str,
+    auto_approve_level: str = "high",
+    conversation_history: Optional[List[Any]] = None,
+) -> List[PlanStep]:
     """Context-aware programmatic fallback plan generator."""
     pasted_full = re.search(r"\[Pasted Content:[^\]]*\]\s*```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```", goal, flags=re.IGNORECASE)
     if pasted_full:
@@ -290,12 +294,22 @@ def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> 
     needs_deploy = bool(re.search(r"\b(build\s+(?:and\s+)?deploy|deploy|create\s+(?:a\s+)?(?:web\s*app|website|landing\s*page|portfolio|calculator|dashboard)|interactive\s+web\s*app)\b", goal, re.IGNORECASE))
     needs_scrape = bool(re.search(r"\b(scrape|crawl|visit\s+https?://|extract\s+from\s+https?://|https?://[^\s]+)\b", goal, re.IGNORECASE))
     needs_profile = bool(re.search(r"\b(github|github\.com|profile\s+@|@\w+)\b", goal, re.IGNORECASE))
+
+    # Check goal and recent conversation history for local paths and workstation keywords
+    recent_hist_text = ""
+    if conversation_history:
+        recent_hist_text = " ".join(
+            (m.get("content", "") if isinstance(m, dict) else getattr(m, "content", ""))
+            for m in (conversation_history[-4:] if isinstance(conversation_history, list) else [])
+        )
+    combined_eval_text = f"{goal}\n{recent_hist_text}"
+
     local_path_match = re.search(
-        r'[A-Za-z]:\\[^"\'\n]+|[A-Za-z]:/[^"\'\n]+|'
+        r'[A-Za-z]:\\[^<>:"|?*\n\r`\']+|[A-Za-z]:/[^<>:"|?*\n\r`\']+|'
         r'\b(?:my\s+)?download(?:s)?\b|\b(?:my\s+)?desktop\b|\b(?:my\s+)?documents?\b|'
         r'\b(?:on|from|in|see|access|read|browse|view)\s+(?:my\s+)?(?:computer|laptop|pc|workstation|machine)\b|'
         r'\b(?:pc|computer|workstation)\s+files?\b|\bcowork\b',
-        goal,
+        combined_eval_text,
         re.IGNORECASE,
     )
     needs_workstation = bool(local_path_match)
@@ -306,7 +320,7 @@ def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> 
     step_idx = 1
 
     if needs_workstation:
-        is_inquiry = bool(re.search(r'\b(?:can|do)\s+you\s+(?:see|access|read|browse|view)\b|\bsee\s+(?:my\s+)?pc\s+files\b', goal, re.IGNORECASE))
+        is_inquiry = bool(re.search(r'\b(?:can|do)\s+you\s+(?:see|access|read|browse|view)\b|\bsee\s+(?:my\s+)?pc\s+files\b', goal, re.IGNORECASE)) and not bool(re.search(r'[A-Za-z]:[\\\/]', combined_eval_text))
         if is_inquiry:
             fallback_steps.append(PlanStep(
                 index=step_idx,
@@ -318,12 +332,12 @@ def _programmatic_fallback_plan(goal: str, auto_approve_level: str = "high") -> 
             step_idx += 1
         else:
             extracted_p = "downloads"
-            win_m = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', goal)
+            win_m = re.search(r'[A-Za-z]:\\[^<>:"|?*\n\r`\']+|[A-Za-z]:/[^<>:"|?*\n\r`\']+', combined_eval_text)
             if win_m:
-                extracted_p = win_m.group(0).rstrip(".:,;`)]'\"")
-            elif "desktop" in goal.lower():
+                extracted_p = win_m.group(0).rstrip(".:,;`)]'\" ")
+            elif "desktop" in combined_eval_text.lower():
                 extracted_p = "desktop"
-            elif "document" in goal.lower():
+            elif "document" in combined_eval_text.lower():
                 extracted_p = "documents"
 
             tool_to_use = "mcp_workstation_read" if ("." in os.path.basename(extracted_p) and not extracted_p.endswith(("/", "\\"))) else "mcp_workstation_list"
@@ -550,10 +564,9 @@ async def generate_structured_plan(
                         "options": ["Mount local folder via browser", "Select and upload file", "Start local workstation bridge"],
                         "select_type": "single_select",
                     }
-                elif not args_hint and tool and ("workstation" in tool or tool.startswith("mcp_workstation_")):
-                    path_match = re.search(r'[A-Za-z]:\\[^"\'\s]+|[A-Za-z]:/[^"\'\s]+', f"{desc} {goal}")
+                    path_match = re.search(r'[A-Za-z]:\\[^<>:"|?*\n\r`\']+|[A-Za-z]:/[^<>:"|?*\n\r`\']+', f"{desc} {goal}")
                     if path_match:
-                        args_hint = {"path": path_match.group(0).rstrip(".:,;`)]'\"")}
+                        args_hint = {"path": path_match.group(0).rstrip(".:,;`)]'\" ")}
                     elif "download" in f"{desc} {goal}".lower():
                         args_hint = {"path": "downloads"}
                     elif "desktop" in f"{desc} {goal}".lower():

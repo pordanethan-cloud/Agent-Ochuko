@@ -6000,19 +6000,62 @@ export const Dashboard: React.FC = () => {
 
       let token = (await getEffectiveToken()) || ''
 
-      // Pre-fetch local files via companion bridge if paths are referenced and Workstation Access is active
+      // Pre-fetch local files and directory listings via companion bridge if paths are referenced and Workstation Access is active
       const workstationFiles: { path: string; content: string }[] = []
+      const workstationDirs: { path: string; resolved_path: string; total_count: number; entries: any[] }[] = []
       if (isWorkstationAccessEnabled) {
         try {
           const userMsgStr = typeof newUserMessage === 'string' ? newUserMessage : (newUserMessage?.content || '')
-          const quotedMatches = Array.from(userMsgStr.matchAll(/["'`]((?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^"'`\n\r]+)["'`]/g)).map((m) => m[1])
-          const extMatches = userMsgStr.match(/(?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^"'`\n\r<>*?]+?\.[a-zA-Z0-9_-]{1,8}\b/g) || []
-          const unquotedMatches = userMsgStr.match(/(?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^\s"'`\n\r]+/g) || []
-          const candidatePaths = Array.from(new Set([...quotedMatches, ...extMatches, ...unquotedMatches]))
+          // Include recent messages so follow-ups like "I gave you access for autonomy" or "inspect that folder" retain context
+          const historyText = (nextMessages || []).slice(-4).map((m) => m.content || '').join('\n')
+          const combinedMsgContext = `${userMsgStr}\n${historyText}`
+
+          // 1. Quoted paths (single, double, backticks)
+          const quotedMatches = Array.from(combinedMsgContext.matchAll(/["'`]((?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^"'`\n\r]+)["'`]/g)).map((m) => m[1].trim())
+          // 2. Unquoted paths (Windows or Unix paths, allowing spaces in directory names)
+          const rawPathMatches = Array.from(combinedMsgContext.matchAll(/(?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^<>:"|?*\n\r`']+/g)).map((m) => m[0].trim().replace(/[.,;!?)\]]+$/, ''))
+          // 3. Folder aliases
+          const aliasMatches: string[] = []
+          if (/\b(?:my\s+)?downloads\b/i.test(combinedMsgContext)) aliasMatches.push('downloads')
+          if (/\b(?:my\s+)?documents\b/i.test(combinedMsgContext)) aliasMatches.push('documents')
+          if (/\b(?:my\s+)?desktop\b/i.test(combinedMsgContext)) aliasMatches.push('desktop')
+
+          const candidatePaths = Array.from(new Set([...quotedMatches, ...rawPathMatches, ...aliasMatches]))
 
           if (candidatePaths.length > 0) {
-            for (const candPath of candidatePaths.slice(0, 5)) {
+            for (const candPath of candidatePaths.slice(0, 6)) {
               try {
+                // First try /list in case it's a directory
+                const lCtrl = new AbortController()
+                const lTimeout = setTimeout(() => lCtrl.abort(), 2000)
+                const lRes = await fetch(`http://127.0.0.1:3920/list?path=${encodeURIComponent(candPath)}`, {
+                  signal: lCtrl.signal,
+                })
+                clearTimeout(lTimeout)
+                if (lRes.ok) {
+                  const lJson = await lRes.json()
+                  if (lJson && lJson.success && Array.isArray(lJson.entries)) {
+                    workstationDirs.push({
+                      path: candPath,
+                      resolved_path: lJson.resolved_path || candPath,
+                      total_count: lJson.total_count || lJson.entries.length,
+                      entries: lJson.entries,
+                    })
+                    // Create formatted directory inventory text file so it is placed in sandbox and injected into agent context
+                    const entryLines = lJson.entries.map((e: any) => {
+                      const prefix = e.is_dir ? '[DIR]' : '[FILE]'
+                      return `${prefix} ${e.name} (${e.size_formatted || e.size + 'B'}, modified: ${e.relative_time || e.modified})`
+                    }).join('\n')
+                    const invContent = `=== WORKSTATION DIRECTORY INVENTORY: ${lJson.resolved_path || candPath} ===\nTotal items: ${lJson.total_count || lJson.entries.length}\n\n${entryLines}`
+                    workstationFiles.push({
+                      path: `workstation_folder_inventory.txt`,
+                      content: invContent,
+                    })
+                    continue
+                  }
+                }
+
+                // If not a directory, try /read for file
                 const bCtrl = new AbortController()
                 const bTimeout = setTimeout(() => bCtrl.abort(), 2000)
                 const bRes = await fetch(`http://127.0.0.1:3920/read?path=${encodeURIComponent(candPath)}`, {
@@ -6066,6 +6109,8 @@ export const Dashboard: React.FC = () => {
           workstation_access_enabled: isWorkstationAccessEnabled,
 
           workstation_files: workstationFiles,
+
+          workstation_dirs: workstationDirs,
 
           review_policy: localStorage.getItem('ochuko_review_policy') || 'always_ask',
 
