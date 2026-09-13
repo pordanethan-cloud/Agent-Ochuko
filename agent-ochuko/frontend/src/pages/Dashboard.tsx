@@ -6014,11 +6014,26 @@ export const Dashboard: React.FC = () => {
           const quotedMatches = Array.from(combinedMsgContext.matchAll(/["'`]((?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^"'`\n\r]+)["'`]/g)).map((m) => m[1].trim())
           // 2. Unquoted paths (Windows or Unix paths, allowing spaces in directory names)
           const rawPathMatches = Array.from(combinedMsgContext.matchAll(/(?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^<>:"|?*\n\r`']+/g)).map((m) => m[0].trim().replace(/[.,;!?)\]]+$/, ''))
-          // 3. Folder aliases
+          // 3. Folder aliases and natural phrases
           const aliasMatches: string[] = []
           if (/\b(?:my\s+)?downloads\b/i.test(combinedMsgContext)) aliasMatches.push('downloads')
           if (/\b(?:my\s+)?documents\b/i.test(combinedMsgContext)) aliasMatches.push('documents')
           if (/\b(?:my\s+)?desktop\b/i.test(combinedMsgContext)) aliasMatches.push('desktop')
+
+          // Extract patterns like "books folder in documents", "books in documents"
+          const inFolderMatches = Array.from(combinedMsgContext.matchAll(/(?:my\s+)?([a-zA-Z0-9_\-\s]{2,25}?)(?:\s+folder|\s+directory)?\s+(?:in|under|inside)\s+(documents|downloads|desktop)\b/gi))
+          for (const m of inFolderMatches) {
+            const sub = m[1].trim()
+            const parent = m[2].trim().toLowerCase()
+            aliasMatches.push(`${parent}/${sub}`)
+            aliasMatches.push(sub)
+          }
+
+          // Extract patterns like "<name> folder" or "folder <name>"
+          const namedFolderMatches = Array.from(combinedMsgContext.matchAll(/(?:my\s+)?([a-zA-Z0-9_\-]{2,25})\s+(?:folder|directory)\b/gi))
+          for (const m of namedFolderMatches) {
+            aliasMatches.push(m[1].trim())
+          }
 
           const candidatePaths = Array.from(new Set([...quotedMatches, ...rawPathMatches, ...aliasMatches]))
 

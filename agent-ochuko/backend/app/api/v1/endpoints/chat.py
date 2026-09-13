@@ -1503,12 +1503,19 @@ async def chat_stream_generator(
             from app.core.skills import ULTRA_IDENTITY
             full_system = full_system + "\n\n" + ULTRA_IDENTITY
 
-        ws_context_str = (
-            f"\n\n[System Context: WORKSTATION COMPUTER ACCESS (COWORK) STATUS: "
-            f"{'ENABLED' if workstation_access_enabled else 'NOT YET ENABLED (default safety sandbox)'}.\n"
-            f"When Workstation Access is toggled ON, you have direct access to the user's computer via `mcp_workstation_*` tools (read, write, list, exec).\n"
-            f"If the user asks whether you can see or browse their PC files: explain that direct access is isolated by default for safety, but they can easily enable Workstation Access by toggling it ON in Settings or the header, allowing you to inspect, read, and edit their local files directly.]\n"
-        )
+        if workstation_access_enabled:
+            ws_context_str = (
+                f"\n\n[System Context: WORKSTATION COMPUTER ACCESS (COWORK) STATUS: ENABLED (ACTIVE).\n"
+                f"- The user has explicitly granted Workstation Access. You HAVE direct verified access to their computer files, folders, and directories.\n"
+                f"- NEVER state 'I can't access your local files or folders' or instruct the user to manually open their file manager.\n"
+                f"- Use `mcp_workstation_*` tools (or inspect verified workstation file inventories in context) to read, list, and search files.\n"
+                f"- When workstation directory listings or file inventories are present in context below, analyze and report their contents directly, comprehensively, and accurately.]\n"
+            )
+        else:
+            ws_context_str = (
+                f"\n\n[System Context: WORKSTATION COMPUTER ACCESS STATUS: NOT YET ENABLED (default safety sandbox).\n"
+                f"PC file access is isolated by default for user safety. If the user asks whether you can access local computer files, explain that toggling Workstation Access ON in Settings grants direct access at any time.]\n"
+            )
         full_system = full_system + ws_context_str
 
         # ─── AGENT MODE AUTONOMOUS ORCHESTRATION ───────────────────────────
@@ -3817,13 +3824,16 @@ async def stream_chat(
                 res_p = wd.get("resolved_path") or wd.get("path", "")
                 entries = wd.get("entries", [])
                 tot = wd.get("total_count", len(entries))
+                entry_limit = 100
+                displayed_entries = entries[:entry_limit]
                 entry_lines = "\n".join(
                     f"- {'[DIR] ' if e.get('is_dir') else ''}{e.get('name')} ({e.get('size_formatted', str(e.get('size', 0)) + 'B')}, modified: {e.get('relative_time') or e.get('modified', '')})"
-                    for e in entries[:50]
+                    for e in displayed_entries
                 )
+                more_note = f"\n... and {tot - len(displayed_entries)} more items." if tot > len(displayed_entries) else ""
                 injected_code_prompts.append(
                     f"--- VERIFIED WORKSTATION DIRECTORY LISTING (From User PC): {res_p} ({tot} items) ---\n"
-                    f"{entry_lines}\n"
+                    f"{entry_lines}{more_note}\n"
                     f"--- END VERIFIED WORKSTATION DIRECTORY LISTING ---"
                 )
                 logger.info(f"Injected verified workstation directory listing for '{res_p}' ({tot} items)")
@@ -3871,7 +3881,7 @@ async def stream_chat(
         context_parts = []
         if injected_code_prompts:
             context_parts.append(
-                "Here are the contents of the attached code/text files:\n" +
+                "Here are the contents of attached files and verified workstation resources:\n" +
                 "\n\n".join(injected_code_prompts)
             )
         if injected_image_files:

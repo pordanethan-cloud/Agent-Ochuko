@@ -430,12 +430,20 @@ class AgentTaskManager:
                 )
 
                 ws_enabled = bool(self.config.get("workstation_access_enabled", False))
-                ws_context = (
-                    "WORKSTATION COMPUTER ACCESS (COWORK):\n"
-                    f"- Current Status: {'ENABLED' if ws_enabled else 'NOT YET ENABLED (default safety sandbox)'}.\n"
-                    "- When Workstation Access is toggled ON, you have direct access to the user's computer via `mcp_workstation_*` tools (read, write, list, exec).\n"
-                    "- If the user asks whether you can see or browse their PC files, explain that access is isolated by default for safety, but they can easily enable Workstation Access by toggling it ON in Settings or the header. When enabled, you can read, write, and inspect their local files directly.\n\n"
-                )
+                if ws_enabled:
+                    ws_context = (
+                        "WORKSTATION COMPUTER ACCESS (COWORK):\n"
+                        "- Current Status: ENABLED (ACTIVE).\n"
+                        "- You HAVE direct verified access to the user's computer files, folders, and directories.\n"
+                        "- NEVER state 'I can't access your local files or folders' or instruct the user to manually open their file manager.\n"
+                        "- Use `mcp_workstation_*` tools (or inspect verified workstation directory listings/files in context) to read, list, and search files.\n\n"
+                    )
+                else:
+                    ws_context = (
+                        "WORKSTATION COMPUTER ACCESS (COWORK):\n"
+                        "- Current Status: NOT YET ENABLED (default safety sandbox).\n"
+                        "- If the user asks whether you can see or browse their PC files, explain that access is isolated by default for safety, but they can easily enable Workstation Access by toggling it ON in Settings. When enabled, you can read, write, and inspect their local files directly.\n\n"
+                    )
                 system_instruction = system_instruction + "\n\n" + ws_context
 
                 input_payload = [
@@ -1050,7 +1058,7 @@ class AgentTaskManager:
                     if ws_active:
                         summary = "Workstation Computer Access is currently enabled. I have direct access to your local files and can inspect, read, or edit files using workstation tools."
                     else:
-                        summary = "By default, PC access is isolated for safety. However, I have Workstation Computer Access (Cowork) which you can enable by toggling Workstation Access ON in Settings or the header."
+                        summary = "By default, PC access is isolated for safety. However, I have Workstation Computer Access (Cowork) which you can enable by toggling Workstation Access ON in Settings."
                 else:
                     step_prompt = AgentContextCompressor.build_step_payload(self.task, step.index)
                     summary = await self.sub_agents.compress_text(

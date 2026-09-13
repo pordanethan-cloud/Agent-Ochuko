@@ -136,12 +136,46 @@ def resolve_local_path(target_path: str, cwd: Optional[str] = None) -> str:
     if lower_t in ("documents", "my documents"):
         return folders["documents"]
 
+    # Natural language phrases: "books folder in documents", "books in documents"
+    m_in = re.match(r"(?:my\s+)?(.+?)(?:\s+folder|\s+directory)?\s+(?:in|under|inside)\s+(documents|downloads|desktop|home)\b", lower_t)
+    if m_in:
+        sub_name = m_in.group(1).strip()
+        parent_alias = m_in.group(2).strip()
+        parent_dir = folders.get(parent_alias, folders["documents"])
+        cand_in = os.path.normpath(os.path.join(parent_dir, sub_name))
+        if os.path.exists(cand_in):
+            return cand_in
+        if os.path.exists(parent_dir):
+            try:
+                for entry in os.scandir(parent_dir):
+                    if entry.name.lower() == sub_name.lower():
+                        return os.path.normpath(entry.path)
+            except Exception:
+                pass
+
     if t.startswith("~"):
         return os.path.normpath(os.path.expanduser(t))
 
     # 2. Absolute path rule
     if os.path.isabs(t) or (len(t) > 2 and t[1] == ":" and t[2] in ("\\", "/")):
         return os.path.normpath(t)
+
+    # 2b. Check if path starts with friendly alias like "documents/..." or "downloads/..."
+    clean_slash = t.replace("\\", "/")
+    for alias_name in ("documents", "downloads", "desktop", "home"):
+        if clean_slash.lower().startswith(f"{alias_name}/"):
+            sub_rel = clean_slash[len(alias_name) + 1:]
+            cand_alias = os.path.normpath(os.path.join(folders[alias_name], sub_rel))
+            if os.path.exists(cand_alias):
+                return cand_alias
+            # Try case-insensitive lookup of sub-parts
+            if os.path.exists(folders[alias_name]):
+                try:
+                    for entry in os.scandir(folders[alias_name]):
+                        if entry.name.lower() == sub_rel.lower():
+                            return os.path.normpath(entry.path)
+                except Exception:
+                    pass
 
     # 3. Explicit directory separator rule (e.g. sub/test.txt) -> join directly with base_dir
     if "/" in t or "\\" in t:
