@@ -546,8 +546,13 @@ export const AgentUserInputCard: React.FC<AgentUserInputProps> = ({
 
   const handleCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (customInput.trim()) {
-      onSubmit(customInput.trim())
+    const trimmed = customInput.trim()
+    if (!trimmed) return
+    const num = parseInt(trimmed, 10)
+    if (!isNaN(num) && options && num >= 1 && num <= options.length) {
+      onSubmit(options[num - 1])
+    } else {
+      onSubmit(trimmed)
     }
   }
 
@@ -572,7 +577,7 @@ export const AgentUserInputCard: React.FC<AgentUserInputProps> = ({
         </div>
       </div>
 
-      {/* Option pills — neutral, ivory-wash on hover */}
+      {/* Option pills — numbered badges */}
       {options && options.length > 0 && (
         <div className="flex flex-wrap gap-2 pb-1">
           {options.map((opt, idx) => (
@@ -580,9 +585,12 @@ export const AgentUserInputCard: React.FC<AgentUserInputProps> = ({
               key={idx}
               type="button"
               onClick={() => onSubmit(opt)}
-              className="px-3.5 py-1.5 rounded-lg text-[12px] font-medium bg-white/[0.05] hover:bg-brand-accent/[0.09] hover:text-white border border-brand-border hover:border-brand-accent/35 text-white/85 transition active:scale-95 text-left cursor-pointer"
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white/[0.05] hover:bg-brand-accent/[0.09] hover:text-white border border-brand-border hover:border-brand-accent/35 text-white/85 transition active:scale-95 text-left cursor-pointer flex items-center gap-2"
             >
-              {opt}
+              <span className="w-5 h-5 rounded-md bg-white/10 text-cyan-300 font-mono text-[11px] font-bold flex items-center justify-center shrink-0 border border-white/10">
+                {idx + 1}
+              </span>
+              <span className="truncate">{opt}</span>
             </button>
           ))}
         </div>

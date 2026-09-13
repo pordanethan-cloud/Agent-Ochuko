@@ -108,9 +108,9 @@ class AgentContextCompressor:
             f"ORIGINAL GOAL: {task.goal}\n\n"
             f"ALL EXECUTED STEP RESULTS:\n{results_text}"
             f"{artifacts_text}\n\n"
-            f"Synthesize a compact, precise, beautifully structured answer answering the goal directly.\n"
-            f"The answer is chat text — a short summary. NEVER include full file contents or code dumps; deliverables live only as sandbox files with download links.\n"
-            f"If and ONLY if actual deliverables are listed above under GENERATED ARTIFACTS, you may reference them. Never hallucinate fake files."
+            f"Synthesize an authoritative, thorough, beautifully structured final answer that directly fulfills the user's goal.\n"
+            f"Provide complete technical explanations, architecture details, and setup/execution guidance. You may include concise code blocks or configuration snippets to clearly guide the user.\n"
+            f"If deliverables are listed above under GENERATED ARTIFACTS, highlight them clearly with their file paths. Never hallucinate fake download links."
         )
 
 

@@ -6000,6 +6000,41 @@ export const Dashboard: React.FC = () => {
 
       let token = (await getEffectiveToken()) || ''
 
+      // Pre-fetch local files via companion bridge if paths are referenced and Workstation Access is active
+      const workstationFiles: { path: string; content: string }[] = []
+      if (isWorkstationAccessEnabled) {
+        try {
+          const userMsgStr = typeof newUserMessage === 'string' ? newUserMessage : (newUserMessage?.content || '')
+          const quotedMatches = Array.from(userMsgStr.matchAll(/["'`]((?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^"'`\n\r]+)["'`]/g)).map((m) => m[1])
+          const extMatches = userMsgStr.match(/(?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^"'`\n\r<>*?]+?\.[a-zA-Z0-9_-]{1,8}\b/g) || []
+          const unquotedMatches = userMsgStr.match(/(?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^\s"'`\n\r]+/g) || []
+          const candidatePaths = Array.from(new Set([...quotedMatches, ...extMatches, ...unquotedMatches]))
+
+          if (candidatePaths.length > 0) {
+            for (const candPath of candidatePaths.slice(0, 5)) {
+              try {
+                const bCtrl = new AbortController()
+                const bTimeout = setTimeout(() => bCtrl.abort(), 2000)
+                const bRes = await fetch(`http://127.0.0.1:3920/read?path=${encodeURIComponent(candPath)}`, {
+                  signal: bCtrl.signal,
+                })
+                clearTimeout(bTimeout)
+                if (bRes.ok) {
+                  const bJson = await bRes.json()
+                  if (bJson && bJson.content) {
+                    workstationFiles.push({ path: candPath, content: bJson.content })
+                  }
+                }
+              } catch {
+                // Bridge not reachable or timeout — non-blocking
+              }
+            }
+          }
+        } catch {
+          // Ignore pre-fetch failures
+        }
+      }
+
       const sendStreamRequest = () => fetch(`${API_BASE}/v1/responses/stream`, {
 
         method: 'POST',
@@ -6029,6 +6064,8 @@ export const Dashboard: React.FC = () => {
           viewport: window.innerWidth < 640 ? 'mobile' : 'desktop',
 
           workstation_access_enabled: isWorkstationAccessEnabled,
+
+          workstation_files: workstationFiles,
 
           review_policy: localStorage.getItem('ochuko_review_policy') || 'always_ask',
 

@@ -12,6 +12,7 @@ import logging
 import asyncio
 import subprocess
 import shutil
+import tempfile
 from typing import Tuple, List, Dict, Any, Optional
 
 def _find_bash_executable() -> str:
@@ -172,6 +173,58 @@ def prune_expired_sandboxes(max_age_seconds: int = 7200) -> int:
             pass
 
     return pruned_count
+
+
+def get_or_create_sandbox_workspace(conversation_id: str) -> Tuple[str, str, str]:
+    """
+    Returns (workspace_root, src_dir, data_dir) for the conversation sandbox,
+    ensuring directories are created on disk.
+    """
+    work_dir = os.path.join(tempfile.gettempdir(), f"sandbox_{conversation_id}")
+    data_dir = os.path.join(work_dir, "data")
+    src_dir = os.path.join(work_dir, "src")
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(src_dir, exist_ok=True)
+    return work_dir, src_dir, data_dir
+
+
+async def _upload_generated_file(
+    file_bytes: bytes,
+    filename: str,
+    mime_type: str,
+    conversation_id: str,
+    user_id: str,
+) -> str:
+    """Upload generated deliverable file to Cloudflare R2 and return public URL."""
+    try:
+        from app.services.cloudflare_r2 import upload_file_bytes
+        r2_url = await upload_file_bytes(
+            file_bytes=file_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            bucket_type="GENERATED",
+            key_prefix=f"generated/{conversation_id}/",
+        )
+        try:
+            from app.services.supabase_admin import get_supabase_admin
+            supabase = get_supabase_admin()
+            if supabase:
+                await asyncio.to_thread(
+                    lambda: supabase.table("generated_files").insert({
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "filename": filename,
+                        "r2_url": r2_url,
+                        "size_bytes": len(file_bytes),
+                        "mime_type": mime_type,
+                    }).execute()
+                )
+        except Exception as db_err:
+            logger.debug(f"Generated file db metadata insert notice: {db_err}")
+        return r2_url
+    except Exception as e:
+        logger.warning(f"R2 upload fallback in _upload_generated_file: {e}")
+        return f"/v1/files/sandbox/{conversation_id}/{filename}"
 
 
 async def sync_conversation_sandbox_workspace(conversation_id: str, user_id: str) -> List[Dict[str, Any]]:

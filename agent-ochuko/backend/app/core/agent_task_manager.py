@@ -126,6 +126,17 @@ class AgentTaskManager:
         except Exception as ws_err:
             logger.debug(f"Workspace hydration warning in init_plan: {ws_err}")
 
+        try:
+            import tempfile
+            conv_id = self.task.conversation_id or "default"
+            local_data_dir = os.path.join(tempfile.gettempdir(), f"sandbox_{conv_id}", "data")
+            if os.path.exists(local_data_dir):
+                for f in os.listdir(local_data_dir):
+                    if f not in workspace_file_names and not f.startswith("."):
+                        workspace_file_names.append(f)
+        except Exception as scan_err:
+            logger.debug(f"Local sandbox scan warning in init_plan: {scan_err}")
+
         ws_access = bool(self.config.get("workstation_access_enabled", False))
         plan = await generate_structured_plan(
             goal=self.task.goal,
@@ -311,7 +322,10 @@ class AgentTaskManager:
                 step.result_summary = step_result.summary
                 if step_result.artifacts:
                     step.artifacts = step_result.artifacts
-                    self.task.artifacts.extend(step_result.artifacts)
+                    for art in step_result.artifacts:
+                        if not any(a.get("filename") == art.get("filename") for a in self.task.artifacts):
+                            self.task.artifacts.append(art)
+                    yield f"data: {json.dumps({'type': 'generated_files', 'files': step_result.artifacts})}\n\n"
 
                 self.task.step_results.append({
                     "step_index": step.index,
@@ -488,6 +502,7 @@ class AgentTaskManager:
                     "content_parts": {
                         "agent_task_id": self.task.id,
                         "artifacts": self.task.artifacts,
+                        "generated_files": self.task.artifacts,
                         "plan": [s.model_dump() for s in self.task.plan],
                     }
                 }
@@ -823,8 +838,10 @@ class AgentTaskManager:
                     m = re.search(r"[\w\-\.\/]+\.[a-zA-Z0-9]+", clean_step_desc)
                     if m:
                         target_path = m.group(0)
-                if not file_content:
-                    file_content = clean_step_desc
+                    else:
+                        target_path = "output.txt"
+                if not file_content or len(file_content.strip()) < 60 or file_content.strip() == clean_step_desc.strip():
+                    file_content = await self._generate_file_content(step, target_path)
                 conv_id = self.task.conversation_id or "default"
                 res_str = await sandbox_write_file(conv_id, target_path or "output.txt", file_content)
                 is_err = "sandbox_write error" in res_str
@@ -841,14 +858,144 @@ class AgentTaskManager:
                             mime_type=mime,
                             bucket_type="GENERATED",
                         )
-                        artifacts_list.append({"filename": target_path, "download_url": r2_url})
+                        art = {"filename": target_path, "download_url": r2_url, "size_bytes": len(file_content)}
+                        artifacts_list.append(art)
+                        if not any(a.get("filename") == target_path for a in self.task.artifacts):
+                            self.task.artifacts.append(art)
                     except Exception:
-                        artifacts_list.append({"filename": target_path, "download_url": f"/v1/files/sandbox/{conv_id}/{target_path}"})
+                        art = {"filename": target_path, "download_url": f"/v1/files/sandbox/{conv_id}/{target_path}", "size_bytes": len(file_content)}
+                        artifacts_list.append(art)
+                        if not any(a.get("filename") == target_path for a in self.task.artifacts):
+                            self.task.artifacts.append(art)
                 return StepResult(
                     success=not is_err,
-                    summary=res_str[:400],
+                    summary=f"Wrote {len(file_content)} bytes to {target_path}. {res_str[:150]}",
                     artifacts=artifacts_list,
-                    token_spend=100,
+                    token_spend=350,
+                    raw_length=len(file_content),
+                    error=res_str if is_err else None,
+                )
+
+            elif step.tool_name == "present_deliverable":
+                import zipfile
+                import mimetypes
+                from app.services.code_sandbox import get_or_create_sandbox_workspace, _upload_generated_file
+                from app.services.google_drive import upload_to_google_drive
+
+                conv_id = self.task.conversation_id or "default"
+                user_id = self.task.user_id or "anonymous"
+                workspace_root, src_dir, data_dir = get_or_create_sandbox_workspace(conv_id)
+                presented_items = []
+
+                candidate_files = []
+                if os.path.exists(data_dir):
+                    for r, d, fs in os.walk(data_dir):
+                        d[:] = [x for x in d if x not in (".git", "node_modules", ".venv", "__pycache__")]
+                        for f in fs:
+                            if f not in ("script.py", "script.js", "command.sh", "project.zip"):
+                                candidate_files.append(os.path.relpath(os.path.join(r, f), data_dir).replace("\\", "/"))
+
+                for rel_f in candidate_files:
+                    full_p = os.path.join(data_dir, rel_f)
+                    if os.path.exists(full_p) and os.path.isfile(full_p):
+                        try:
+                            with open(full_p, "rb") as f_in:
+                                b_data = f_in.read()
+                            mime_t, _ = mimetypes.guess_type(rel_f)
+                            f_url = await _upload_generated_file(
+                                file_bytes=b_data,
+                                filename=rel_f,
+                                mime_type=mime_t or "application/octet-stream",
+                                conversation_id=conv_id,
+                                user_id=user_id,
+                            )
+                            presented_items.append({
+                                "filename": rel_f,
+                                "download_url": f_url,
+                                "size_bytes": len(b_data),
+                            })
+                        except Exception as up_err:
+                            logger.warning(f"Failed to upload {rel_f} in present_deliverable: {up_err}")
+
+                if len(candidate_files) > 1 and os.path.exists(data_dir):
+                    try:
+                        import io as _io
+                        z_buf = _io.BytesIO()
+                        with zipfile.ZipFile(z_buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                            for root_z, dirs_z, files_z in os.walk(data_dir):
+                                dirs_z[:] = [d for d in dirs_z if d not in (".git", "node_modules", ".venv", "__pycache__")]
+                                for fz in files_z:
+                                    if fz in ("script.py", "script.js", "command.sh", "project.zip"):
+                                        continue
+                                    fp_z = os.path.join(root_z, fz)
+                                    zf.write(fp_z, arcname=os.path.relpath(fp_z, data_dir))
+                        z_bytes = z_buf.getvalue()
+                        if z_bytes:
+                            zip_p = os.path.join(data_dir, "project.zip")
+                            with open(zip_p, "wb") as zf_out:
+                                zf_out.write(z_bytes)
+                            try:
+                                await upload_to_google_drive(user_id, conv_id, data_dir)
+                            except Exception as gd_err:
+                                logger.warning(f"Google Drive sync in present_deliverable: {gd_err}")
+                            z_url = await _upload_generated_file(
+                                file_bytes=z_bytes,
+                                filename="project.zip",
+                                mime_type="application/zip",
+                                conversation_id=conv_id,
+                                user_id=user_id,
+                            )
+                            presented_items.append({
+                                "filename": "project.zip",
+                                "download_url": z_url,
+                                "size_bytes": len(z_bytes),
+                            })
+                    except Exception as z_err:
+                        logger.warning(f"Error creating project.zip in present_deliverable: {z_err}")
+
+                for item in presented_items:
+                    if not any(a.get("filename") == item["filename"] for a in self.task.artifacts):
+                        self.task.artifacts.append(item)
+
+                return StepResult(
+                    success=True,
+                    summary=f"Packaged and presented {len(presented_items)} deliverable files including project.zip.",
+                    artifacts=presented_items,
+                    token_spend=120,
+                    raw_length=len(presented_items),
+                )
+
+            elif step.tool_name in ("mcp_workstation_read", "workstation_read"):
+                target_path = ""
+                if isinstance(step.tool_args_hint, dict):
+                    target_path = step.tool_args_hint.get("path", "")
+                if not target_path:
+                    m = re.search(r"[\w\-\.\/\\:]+\.[a-zA-Z0-9]+", clean_step_desc)
+                    if m:
+                        target_path = m.group(0)
+                target_path = target_path or clean_step_desc
+                res_str = ""
+                try:
+                    import urllib.request
+                    import urllib.parse
+                    url = f"http://127.0.0.1:3920/read?path={urllib.parse.quote(target_path)}"
+                    req = urllib.request.Request(url, method="GET")
+                    with urllib.request.urlopen(req, timeout=2.0) as resp:
+                        if resp.status == 200:
+                            data = json.loads(resp.read().decode("utf-8"))
+                            res_str = data.get("content", "")
+                except Exception:
+                    pass
+                if not res_str:
+                    from app.services.code_sandbox import sandbox_read_file
+                    fname = os.path.basename(target_path.replace("\\", "/"))
+                    res_str = await sandbox_read_file(self.task.conversation_id or "default", fname)
+                is_err = not res_str or "sandbox_read error" in res_str
+                return StepResult(
+                    success=not is_err,
+                    summary=res_str[:400] if not is_err else f"Could not read workstation file {target_path}",
+                    artifacts=[],
+                    token_spend=80,
                     raw_length=len(res_str),
                     error=res_str if is_err else None,
                 )
@@ -909,8 +1056,8 @@ class AgentTaskManager:
                     step_prompt = AgentContextCompressor.build_step_payload(self.task, step.index)
                     summary = await self.sub_agents.compress_text(
                         step_prompt,
-                        instruction=f"Formulate a concise direct answer for step {step.index}: {step.description}",
-                        max_tokens=200,
+                        instruction=f"Formulate a thorough, detailed answer for step {step.index}: {step.description}",
+                        max_tokens=1500,
                     )
                 return StepResult(
                     success=True,
@@ -1250,3 +1397,64 @@ class AgentTaskManager:
         except Exception as e:
             logger.warning(f"Step code generation failed: {e}")
             return "print('Task step completed.')"
+
+    async def _generate_file_content(self, step: PlanStep, target_path: str) -> str:
+        """Generates complete, production-grade file content using the flagship deployment."""
+        if not self.client:
+            return f"// {target_path}\n// Deliverable for goal: {self.task.goal}\n"
+
+        effort = await self._get_effort()
+        prev_context = []
+        for s in self.task.plan:
+            if s.index < step.index and s.result_summary:
+                prev_context.append(f"Step {s.index} ({s.description}): {s.result_summary[:300]}")
+        prev_summary = "\n".join(prev_context)
+
+        system_instruction = (
+            "You are a Principal Software Engineer and Production System Architect. "
+            "You write complete, bug-free, fully functional, production-ready code and documents. "
+            "CRITICAL RULES:\n"
+            "1. NEVER output placeholders, stubs, TODOs, or truncate code with '// ... remaining logic ...'.\n"
+            "2. Write ALL functions, error handling, imports, styles, and edge case handlers in full.\n"
+            "3. Output ONLY the raw file contents. Do NOT wrap the response in outer conversational commentary.\n"
+            "4. If the target file is a code file (HTML, CSS, JS, Python, JSON, etc.), do NOT enclose in outer markdown fences — output pure raw code directly."
+        )
+
+        user_content = (
+            f"GOAL: {self.task.goal}\n\n"
+            f"TARGET FILE PATH: {target_path}\n"
+            f"STEP SPECIFICATION: {step.description}\n"
+        )
+        if prev_summary:
+            user_content += f"\nPREVIOUS STEP FINDINGS:\n{prev_summary}\n"
+
+        prompt = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_content},
+        ]
+
+        try:
+            if hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
+                cc_kwargs: Dict[str, Any] = {"model": self.deployment, "messages": prompt}
+                if effort:
+                    cc_kwargs["reasoning_effort"] = effort
+                resp = await self.client.chat.completions.create(**cc_kwargs)
+                content = resp.choices[0].message.content or ""
+            else:
+                rs_kwargs: Dict[str, Any] = {"model": self.deployment, "input": prompt}
+                if effort:
+                    rs_kwargs["reasoning"] = {"effort": effort}
+                resp = await self.client.responses.create(**rs_kwargs)
+                content = getattr(resp, "output_text", "") or ""
+
+            ext = os.path.splitext(target_path.lower())[1]
+            if ext != ".md":
+                m_fence = re.search(r"^```[a-zA-Z0-9_\-]*\n([\s\S]*?)\n```\s*$", content.strip())
+                if m_fence:
+                    content = m_fence.group(1)
+
+            return content.strip()
+        except Exception as e:
+            logger.warning(f"File content generation failed for {target_path}: {e}")
+            return f"// Failed to generate content for {target_path}: {e}"
+

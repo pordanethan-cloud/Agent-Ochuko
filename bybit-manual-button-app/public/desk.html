@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bybit Manual Range Scalping — Fast Execution Panel</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%2232%22 height=%2232%22><rect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%23f7a600%22/><path d=%22M8 9h10a4 4 0 0 1 0 8H8V9zm0 8h11a4 4 0 0 1 0 8H8v-8z%22 fill=%22%23000%22/></svg>">
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="logo-badge">
+        <div class="bybit-icon">B</div>
+        <span>Bybit Manual Scalper</span>
+      </div>
+      <span class="version-chip">v1.3 V5 Spot</span>
+      <button id="envToggleBtn" class="env-pill testnet" title="Click to toggle Testnet/Mainnet">
+        Testnet
+      </button>
+    </div>
+
+    <div class="header-status">
+      <div class="wallet-badge">
+        <span class="wallet-label">USDT</span>
+        <span id="headerUsdtBal" class="wallet-value">--</span>
+      </div>
+      <div class="wallet-badge">
+        <span id="headerBaseCoinLabel" class="wallet-label">BTC</span>
+        <span id="headerBaseBal" class="wallet-value">--</span>
+      </div>
+      <div class="wallet-badge">
+        <span class="wallet-label">API</span>
+        <span id="apiStatusIndicator" class="status-dot" title="API Connected"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Grid Layout -->
+  <main class="main-container">
+
+    <!-- Left Column: Strategy & Range Config -->
+    <aside class="sidebar-col">
+      <!-- Range Setup Card -->
+      <div class="card range-card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+            Range Parameters
+          </h3>
+          <span id="symbolBadge" class="version-chip">BTCUSDT</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Symbol</label>
+          <div class="input-row">
+            <input type="text" id="symbolInput" class="form-input" value="BTCUSDT" placeholder="e.g. BTCUSDT">
+            <button id="updateSymbolBtn" class="btn-secondary">Set</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Support Price (Lower Bound)</label>
+          <div class="input-row">
+            <input type="number" id="supportInput" class="form-input" step="any" placeholder="e.g. 62500">
+            <button id="useCurrentAsSupportBtn" class="btn-secondary" title="Use current market price">Last</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Resistance Price (Upper Bound)</label>
+          <div class="input-row">
+            <input type="number" id="resistanceInput" class="form-input" step="any" placeholder="e.g. 64200">
+            <button id="useCurrentAsResBtn" class="btn-secondary" title="Use current market price">Last</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Calculated Midpoint</label>
+          <input type="text" id="midpointDisplay" class="form-input" readonly value="--" style="opacity: 0.7;">
+        </div>
+
+        <button id="saveRangeBtn" class="btn-secondary" style="width: 100%; margin-top: 0.5rem; background: rgba(247, 166, 0, 0.15); border-color: rgba(247, 166, 0, 0.4); color: var(--bybit-gold);">
+          Save Range Boundaries
+        </button>
+      </div>
+
+      <!-- Execution Sizing & Risk Controls -->
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-header">
+          <h3 class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Risk & Order Size
+          </h3>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Order Size (USDT per Click)</label>
+          <input type="number" id="orderSizeUsdtInput" class="form-input" value="100" min="5" step="10">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Daily Loss Circuit Breaker ($)</label>
+          <input type="number" id="dailyLossInput" class="form-input" value="200" min="0" step="50">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Today's Realized PnL</label>
+          <div id="dailyPnlDisplay" style="font-family: var(--font-mono); font-weight: 700; color: #10b981; font-size: 1rem;">
+            +$0.00 USDT
+          </div>
+        </div>
+      </div>
+
+      <!-- API Key Modal / Settings Toggle -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            API Credentials
+          </h3>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Bybit V5 API Key</label>
+          <input type="text" id="apiKeyInput" class="form-input" placeholder="Paste API Key">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">API Secret</label>
+          <input type="password" id="apiSecretInput" class="form-input" placeholder="Paste API Secret">
+        </div>
+
+        <button id="saveApiKeysBtn" class="btn-secondary" style="width: 100%;">
+          Connect Bybit V5
+        </button>
+      </div>
+    </aside>
+
+    <!-- Right Column: Interactive Fast Execution & Monitoring -->
+    <section class="execution-col">
+
+      <!-- Live Ticker & Range Visualizer Card -->
+      <div class="card range-card">
+        <div class="price-display-banner">
+          <div>
+            <div class="current-price-label">Live Spot Market Price</div>
+            <div id="livePrice" class="current-price">0.00</div>
+          </div>
+          <div style="text-align: right;">
+            <div id="zoneBadge" class="zone-badge zone-mid">Awaiting Range</div>
+            <div id="priceChange24h" style="font-family: var(--font-mono); font-size: 0.85rem; margin-top: 0.25rem; color: #9ca3af;">
+              24h: 0.00%
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive Range Track Bar -->
+        <div class="range-bar-container">
+          <div class="range-bar-track">
+            <div class="midpoint-pin" title="Midpoint (50%)"></div>
+            <div id="priceMarker" class="price-marker" style="left: 50%;"></div>
+          </div>
+
+          <div class="range-labels">
+            <div class="range-label-item supp">
+              <span class="range-label-name">Support (0%)</span>
+              <span id="labelSupportPrice">--</span>
+            </div>
+            <div class="range-label-item mid">
+              <span class="range-label-name">Midpoint (50%)</span>
+              <span id="labelMidpointPrice">--</span>
+            </div>
+            <div class="range-label-item res">
+              <span class="range-label-name">Resistance (100%)</span>
+              <span id="labelResistancePrice">--</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- High-Impact Action Buttons Grid -->
+      <div class="button-grid">
+        <!-- 1. Buy at Support Limit -->
+        <button id="btnBuySupport" class="action-btn btn-buy-support">
+          <span class="action-btn-main">BUY AT SUPPORT</span>
+          <span id="buySupportSub" class="action-btn-sub">Limit @ Support</span>
+        </button>
+
+        <!-- 2. Sell at Resistance Limit -->
+        <button id="btnSellResistance" class="action-btn btn-sell-resistance">
+          <span class="action-btn-main">SELL AT RESISTANCE</span>
+          <span id="sellResistanceSub" class="action-btn-sub">Limit @ Resistance</span>
+        </button>
+
+        <!-- 3. Buy Market -->
+        <button id="btnBuyMarket" class="action-btn btn-buy-market">
+          <span class="action-btn-main">BUY MARKET</span>
+          <span id="buyMarketSub" class="action-btn-sub">Instant Market Buy</span>
+        </button>
+
+        <!-- 4. Sell Market -->
+        <button id="btnSellMarket" class="action-btn btn-sell-market">
+          <span class="action-btn-main">SELL MARKET</span>
+          <span id="sellMarketSub" class="action-btn-sub">Instant Market Sell</span>
+        </button>
+      </div>
+
+      <!-- Secondary Emergency & Take Profit Utilities -->
+      <div class="utility-grid">
+        <button id="btnClose50" class="btn-utility" title="Market sell 50% of current base token balance">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+          Close 50%
+        </button>
+
+        <button id="btnCancelAll" class="btn-utility" title="Cancel all pending limit orders">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>
+          Cancel All Orders
+        </button>
+
+        <button id="btnPanicClose" class="btn-utility btn-panic" title="Cancel all orders & market sell 100% position">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M3.6 15h16.8L12 3 3.6 15z"/></svg>
+          EMERGENCY CLOSE 100%
+        </button>
+      </div>
+
+      <!-- Open Orders Table -->
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-header">
+          <h3 class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+            Active Open Orders (<span id="openOrderCount">0</span>)
+          </h3>
+          <button id="refreshOrdersBtn" class="btn-secondary" style="padding: 3px 8px; font-size: 0.75rem;">Refresh</button>
+        </div>
+
+        <div style="overflow-x: auto;">
+          <table class="orders-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Side</th>
+                <th>Type</th>
+                <th>Price</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="ordersTableBody">
+              <tr>
+                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                  No active open orders
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Live Execution Activity Log -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+            Execution Logs & Audit
+          </h3>
+          <button id="clearLogsBtn" class="btn-secondary" style="padding: 2px 6px; font-size: 0.7rem;">Clear</button>
+        </div>
+        <div id="logBox" class="log-box">
+          <div class="log-entry">
+            <span class="log-time">[System]</span> Bybit Manual Scalping Panel v1.3 Initialized. Ready for range setup.
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Panic Close Confirmation Modal -->
+  <div id="panicModal" class="modal-backdrop">
+    <div class="modal-content">
+      <div class="modal-icon">⚠️</div>
+      <h2 class="modal-title">Confirm Emergency Close?</h2>
+      <p class="modal-desc">
+        This will immediately <strong>CANCEL ALL PENDING ORDERS</strong> and <strong>MARKET SELL 100%</strong> of your base asset position to USDT.
+      </p>
+      <div class="modal-actions">
+        <button id="cancelPanicBtn" class="btn-modal-cancel">Cancel</button>
+        <button id="confirmPanicBtn" class="btn-modal-confirm">EXECUTE PANIC CLOSE</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

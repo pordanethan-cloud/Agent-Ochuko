@@ -3783,6 +3783,29 @@ async def stream_chat(
                 except Exception as e:
                     logger.error(f"Failed to process attachment {att_name}: {e}")
                         
+    # Process files transferred via local workstation companion bridge
+    workstation_files = payload.get("workstation_files", [])
+    if workstation_files and isinstance(workstation_files, list):
+        for wf in workstation_files:
+            try:
+                wf_path = wf.get("path", "")
+                wf_content = wf.get("content", "")
+                if wf_path and wf_content:
+                    fname = os.path.basename(wf_path.replace("\\", "/"))
+                    if fname:
+                        f_data_p = os.path.join(data_dir, fname)
+                        with open(f_data_p, "w", encoding="utf-8", errors="replace") as f:
+                            f.write(wf_content)
+                        f_src_p = os.path.join(src_dir, fname)
+                        with open(f_src_p, "w", encoding="utf-8", errors="replace") as f:
+                            f.write(wf_content)
+                        logger.info(f"Placed workstation file '{fname}' from user PC into sandbox data & src: {f_data_p}")
+                        injected_code_prompts.append(
+                            f"--- WORKSTATION FILE FROM USER PC: {fname} ({wf_path}) ---\n{wf_content[:40000]}\n--- END WORKSTATION FILE: {fname} ---"
+                        )
+            except Exception as wf_err:
+                logger.warning(f"Error saving workstation file to sandbox: {wf_err}")
+
     # Check all files currently present in the sandbox data directory
     current_sandbox_files = []
     if os.path.exists(data_dir):
