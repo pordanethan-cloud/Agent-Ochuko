@@ -24,7 +24,7 @@ from app.core.agent_task_models import (
     RiskLevel,
     StepResult,
 )
-from app.core.agent_planner import generate_structured_plan, refine_plan
+from app.core.agent_planner import generate_structured_plan, refine_plan, replan_remaining, check_premise_divergence
 from app.core.hitl_gates import HITLGate
 from app.core.skills import AGENT_CONDUCT, ULTRA_IDENTITY
 from app.core.sub_agent_pool import SubAgentPool
@@ -34,6 +34,29 @@ from app.services.supabase_admin import get_supabase_admin
 from app.services.hybrid_memory import AgentContextCompressor
 
 logger = logging.getLogger("app.core.agent_task_manager")
+
+# Phase 8.1 — zero-cost heuristic gate for premise divergence. These are
+# LITERAL strings: the canonical investigative tool names from the spec plus
+# the live roster equivalents, and the exact divergence keyword list. Do NOT
+# infer or abbreviate them — the gate must match these verbatim.
+_DIVERGENCE_INVESTIGATIVE_TOOLS = frozenset({
+    # Canonical Phase 8.1 spec names (verbatim):
+    "search_web", "read_file", "list_dir", "workstation_read",
+    # Live roster equivalents so the gate fires on actual step tool names:
+    "sandbox_read", "sandbox_ls", "fetch_url", "scrape_web", "deep_research",
+    "youtube_transcript", "terminal", "mcp_workstation_read", "mcp_workstation_list",
+})
+_DIVERGENCE_KEYWORDS = (
+    "instead of", "not found", "different", "unsupported", "actual stack",
+    "actually", "turns out", "requires", "missing",
+)
+_DIVERGENCE_KEYWORDS_RE = re.compile(
+    "|".join(re.escape(k) for k in _DIVERGENCE_KEYWORDS), re.IGNORECASE,
+)
+_DISCOVERY_VERB_RE = re.compile(
+    r"\b(inspect|check|review|read|list|fetch|query|scan|browse|verify|research|investigate|examine)\b",
+    re.IGNORECASE,
+)
 
 
 class AgentTaskManager:
@@ -128,6 +151,7 @@ class AgentTaskManager:
                 "plan": [s.model_dump() for s in self.task.plan],
                 "state": self.task.state.value,
                 "current_step": self.task.current_step,
+                "replan_count": self.task.replan_count,
                 "step_results": self.task.step_results,
                 "artifacts": self.task.artifacts,
                 "total_token_spend": self.task.total_token_spend,
@@ -168,9 +192,15 @@ class AgentTaskManager:
         # Emit plan approval confirmation
         yield f"data: {json.dumps({'type': 'agent_plan', 'task_id': self.task.id, 'plan': [s.model_dump() for s in self.task.plan], 'state': 'executing'})}\n\n"
 
-        for step in self.task.plan:
+        # Phase 8: index-based `while` loop so plan splices (dynamic
+        # re-orientation) take effect mid-flight — a `for` binds a snapshot
+        # iterator and would silently skip appended steps.
+        i = 0
+        while i < len(self.task.plan):
+            step = self.task.plan[i]
             # Skip already completed/skipped steps if resuming
             if step.status in (StepStatus.COMPLETED, StepStatus.SKIPPED):
+                i += 1
                 continue
 
             self.task.current_step = step.index
@@ -291,6 +321,38 @@ class AgentTaskManager:
                 self.circuit_breaker.record_success()
 
                 yield f"data: {json.dumps({'type': 'agent_step_complete', 'task_id': self.task.id, 'step_index': step.index, 'result_summary': step.result_summary, 'artifacts': step.artifacts, 'duration_ms': step_duration_ms, 'token_spend': step.token_spend})}\n\n"
+                # Phase 8.1: Proactive premise-divergence re-orientation.
+                # A step can SUCCEED yet reveal facts that invalidate later steps
+                # (e.g. "repo uses bun, not npm"). The heuristic gate below is
+                # zero-cost; check_premise_divergence only fires on a match and
+                # returns None on any failure. Only a REAL re-plan spends budget.
+                try:
+                    _max_replans = int(self.config.get("max_replans_per_task", 2))
+                except (ValueError, TypeError):
+                    _max_replans = 2
+                if (
+                    self.client
+                    and i + 1 < len(self.task.plan)
+                    and self.task.replan_count < _max_replans
+                ):
+                    divergence = await self._check_premise_divergence(step, i)
+                    if divergence:
+                        reoriented_tail = await self._attempt_replan(
+                            discovery_context=divergence,
+                            remaining_steps=self.task.plan[i + 1:],
+                        )
+                        if reoriented_tail:
+                            self.task.replan_count += 1
+                            self.task.plan = self.task.plan[: i + 1] + reoriented_tail
+                            yield (
+                                f"data: {json.dumps({'type': 'agent_plan_reoriented', 'task_id': self.task.id, 'replan_count': self.task.replan_count, 'trigger': 'discovery', 'reason': divergence, 'plan': [s.model_dump() for s in self.task.plan]})}\n\n"
+                            )
+                            logger.info(
+                                "Agent task %s re-oriented plan after step %s discovery (premise shift; replan #%s): %s",
+                                self.task.id, step.index, self.task.replan_count, divergence,
+                            )
+                            await self.save_state()
+
             else:
                 step.status = StepStatus.FAILED
                 step.error = step_result.error or "Step failed"
@@ -307,6 +369,27 @@ class AgentTaskManager:
                 yield f"data: {json.dumps({'type': 'agent_step_complete', 'task_id': self.task.id, 'step_index': step.index, 'status': 'failed', 'error': step.error, 'duration_ms': step_duration_ms})}\n\n"
 
             await self.save_state()
+
+            # Phase 8: Dynamic plan re-orientation (long-horizon OODA).
+            # After BOTH AI retries are exhausted and the step is still FAILED,
+            # regenerate the remaining steps against reality — budget-capped
+            # via max_replans_per_task and guarded by the circuit breaker.
+            if step.status == StepStatus.FAILED:
+                reoriented_tail = await self._attempt_replan(
+                    failed_step=step,
+                    remaining_steps=self.task.plan[i + 1:],
+                )
+                if reoriented_tail:
+                    self.task.replan_count += 1
+                    self.task.plan = self.task.plan[: i + 1] + reoriented_tail
+                    yield f"data: {json.dumps({'type': 'agent_plan_reoriented', 'task_id': self.task.id, 'replan_count': self.task.replan_count, 'plan': [s.model_dump() for s in self.task.plan]})}\n\n"
+                    logger.info(
+                        "Agent task %s re-oriented plan after step %s failure (replan #%s)",
+                        self.task.id, step.index, self.task.replan_count,
+                    )
+                    await self.save_state()
+
+            i += 1
 
         # 5. Final Synthesis: Orchestrator streams the complete markdown answer to the chat
         synthesis_prompt = AgentContextCompressor.build_synthesis_payload(self.task)
@@ -825,6 +908,108 @@ class AgentTaskManager:
                 summary=f"Execution error: {str(err)[:150]}",
                 error=str(err),
             )
+
+    async def _attempt_replan(
+        self,
+        remaining_steps: List[PlanStep],
+        failed_step: Optional[PlanStep] = None,
+        discovery_context: Optional[str] = None,
+    ) -> Optional[List[PlanStep]]:
+        """
+        Phase 8 / 8.1: Budget-capped dynamic plan re-orientation guard.
+
+        Phase 8: called once per step whose failure exhausted both AI retries.
+        Phase 8.1: also called proactively after a successful investigative step
+        whose findings shift the plan's premise (discovery_context). Skipped
+        when the re-plan budget (max_replans_per_task, default 2, 0 disables)
+        is spent or the circuit breaker's time budget is exhausted. Token
+        economy: the actual call runs on the nano deployment via
+        replan_remaining (effort floored at 'low', truncated summaries).
+        Exactly one of (failed_step, discovery_context) should be provided.
+        """
+        try:
+            max_replans = int(self.config.get("max_replans_per_task", 2))
+        except (ValueError, TypeError):
+            max_replans = 2
+        if max_replans <= 0 or self.task.replan_count >= max_replans:
+            return None
+        if not remaining_steps:
+            return None
+        # Circuit-breaker guard: never re-plan into an exhausted budget.
+        try:
+            self.circuit_breaker.check_time_budget()
+        except ActionBudgetExceeded:
+            return None
+
+        default_level = "medium" if self.config.get("review_policy") == "always_ask" else "high"
+        auto_level = self.config.get("auto_approve_level", default_level)
+        return await replan_remaining(
+            original_plan=self.task.plan,
+            completed_results=self.task.step_results,
+            remaining_steps=remaining_steps,
+            goal=self.task.goal,
+            failed_step=failed_step,
+            auto_approve_level=auto_level,
+            openai_client=self.client,
+            nano_deployment=self.nano_deployment,
+            discovery_context=discovery_context,
+        )
+
+    async def _check_premise_divergence(
+        self,
+        step: PlanStep,
+        i: int,
+    ) -> Optional[str]:
+        """
+        Phase 8.1: Zero-cost heuristic gate + nano divergence probe.
+
+        Returns a one-sentence contradiction summary when a SUCCESSFUL
+        investigative step's findings invalidate a remaining step's premise,
+        otherwise None. Never raises — check_premise_divergence already
+        returns None on any internal failure.
+
+        Heuristic gate (both arms must pass before any LLM call):
+          A. Investigative tool — step.tool_name is in the literal
+             _DIVERGENCE_INVESTIGATIVE_TOOLS set, OR the step description
+             matches _DISCOVERY_VERB_RE.
+          B. Divergence signal — step.result_summary contains at least one
+             _DIVERGENCE_KEYWORD (matched case-insensitively).
+        Budget guard: skipped when replan_count already >= max_replans.
+        """
+        try:
+            max_replans = int(self.config.get("max_replans_per_task", 2))
+        except (ValueError, TypeError):
+            max_replans = 2
+        if max_replans <= 0 or self.task.replan_count >= max_replans:
+            return None
+        if i + 1 >= len(self.task.plan):
+            return None
+        if not self.client:
+            return None
+
+        tool = (step.tool_name or "").strip()
+        summary = step.result_summary or ""
+
+        # Arm A: investigative tool (exact literal set) or discovery verb.
+        is_investigative = (
+            tool in _DIVERGENCE_INVESTIGATIVE_TOOLS
+            or bool(_DISCOVERY_VERB_RE.search(step.description or ""))
+        )
+        if not is_investigative:
+            return None
+
+        # Arm B: divergence keyword present in the result summary.
+        if not _DIVERGENCE_KEYWORDS_RE.search(summary):
+            return None
+
+        # Both arms passed — fire the cheap nano divergence probe.
+        return await check_premise_divergence(
+            completed_step=step,
+            result_summary=summary,
+            next_steps=self.task.plan[i + 1:],
+            openai_client=self.client,
+            nano_deployment=self.nano_deployment,
+        )
 
     async def _ai_resolve_feedback_and_adapt(
         self,

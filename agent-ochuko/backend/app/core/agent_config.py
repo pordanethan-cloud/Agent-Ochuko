@@ -20,6 +20,8 @@ Agent Mode Settings:
   AGENT_MODE_MAX_DURATION    Max wall-clock task runtime in seconds (default: 1800 / 30 min)
   AGENT_MODE_STEP_TIMEOUT    Max timeout per step in seconds (default: 90)
   AGENT_MODE_AUTO_APPROVE    Risk threshold for auto-approval: 'low' | 'medium' | 'high' | 'none'
+  AGENT_MODE_MAX_REPLANS     Max dynamic re-plans per task after exhausted step failures
+                             (Phase 8 long-horizon re-orientation; default 2, "0" disables)
 
 Generation budget (Phase 5):
   MAX_OUTPUT_TOKENS_AGENT    Agent-mode output budget (default "0" = UNCAPPED — the
@@ -127,6 +129,7 @@ async def get_agent_mode_config() -> Dict[str, Any]:
     max_dur_val = await get_config("AGENT_MODE_MAX_DURATION", "1800")
     step_to_val = await get_config("AGENT_MODE_STEP_TIMEOUT", "90")
     auto_app_val = await get_config("AGENT_MODE_AUTO_APPROVE", "high")
+    max_replans_val = await get_config("AGENT_MODE_MAX_REPLANS", "2")
 
     try:
         max_steps = int(max_steps_val)
@@ -143,12 +146,18 @@ async def get_agent_mode_config() -> Dict[str, Any]:
     except (ValueError, TypeError):
         step_timeout = 90
 
+    try:
+        max_replans = int(max_replans_val)
+    except (ValueError, TypeError):
+        max_replans = 2
+
     return {
         "enabled": enabled_val.lower() != "false",
         "max_steps": max_steps,
         "max_duration_seconds": max_duration,
         "step_timeout_seconds": step_timeout,
         "auto_approve_level": auto_app_val.lower() if auto_app_val else "high",
+        "max_replans_per_task": max_replans,
     }
 
 

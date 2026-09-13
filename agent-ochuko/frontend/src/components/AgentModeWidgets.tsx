@@ -16,7 +16,30 @@ import {
   Folder,
   FolderOpen,
   ChevronRight,
+  Route,
 } from 'lucide-react'
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   AGENT MODE WIDGETS — design language.
+
+   One system, shared by every agent widget:
+   · Shell    — flat `brand-card` + hairline `brand-border`; radius-xl cards,
+                radius-lg rows, radius-full chips. No glows, no drop shadows:
+                tone layering only.
+   · Text     — white at graded opacity: /95 titles, /80 body, /50 secondary,
+                /35 meta. `brand-muted` for labels.
+   · Accent   — ivory (`brand-accent`) is the ONLY action colour: primary
+                buttons, progress, active states.
+   · Semantic — `brand-ok` (muted sage) success/live; `brand-err` (muted
+                terracotta) failure/high-risk. Nothing else is coloured.
+   · Mono     — indices, tools, tokens, timings, paths.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+// Shared card shell — every widget is built from this one surface.
+const CARD = 'w-full my-3 rounded-xl bg-brand-card border border-brand-border animate-fadeIn select-none'
+
+// Shared neutral chip.
+const CHIP = 'text-[10px] font-medium px-2 py-0.5 rounded-full border'
 
 export interface PlanStepItem {
   index: number
@@ -46,11 +69,15 @@ export interface AgentTaskData {
   elapsed_seconds?: number
   max_seconds?: number
   error_message?: string
+  reoriented?: boolean   // Phase 8: plan was dynamically re-oriented mid-execution
+  replan_count?: number
+  replan_trigger?: 'failure' | 'discovery'  // Phase 8.1: why the plan shifted
+  replan_reason?: string  // Phase 8.1: contradiction summary (undefined on pre-8.1 events)
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   1. PLAN REVIEW CARD (Before execution)
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   1. PLAN REVIEW CARD (before execution)
+   ───────────────────────────────────────────────────────────────────────────── */
 interface AgentPlanReviewProps {
   plan: PlanStepItem[]
   taskId?: string
@@ -84,40 +111,33 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
   }
 
   return (
-    <div className="w-full my-3 rounded-2xl bg-brand-card border border-brand-border p-3.5 sm:p-5 shadow-xl relative overflow-hidden animate-fadeIn select-none">
-      {/* Background ambient glow */}
-      <div className="absolute top-0 right-0 w-48 h-48 bg-white/[0.02] rounded-full blur-3xl pointer-events-none" />
-
+    <div className={`${CARD} p-3.5 sm:p-5`}>
       {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-white/[0.08] mb-3.5">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-brand-accent/15 border border-brand-accent/30 flex items-center justify-center text-brand-accent">
-            <Bot className="w-4 h-4" />
-          </div>
-          <div>
-            <h4 className="text-[13px] font-semibold text-white/95 tracking-tight flex items-center gap-2">
-              Autonomous Execution Plan
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-accent/15 text-brand-accent border border-brand-accent/30 font-medium">
-                {plan.length} Steps
-              </span>
-            </h4>
-            <p className="text-[11px] text-white/50">Review task roadmap. Step-by-step verification active.</p>
-          </div>
+      <div className="flex items-center gap-2.5 pb-3 border-b border-brand-border mb-3.5">
+        <div className="w-7 h-7 rounded-lg bg-white/[0.05] border border-brand-border flex items-center justify-center text-brand-muted shrink-0">
+          <Bot className="w-4 h-4" />
+        </div>
+        <div className="min-w-0">
+          <h4 className="text-[13px] font-semibold text-white/95 tracking-tight leading-tight">
+            Execution Plan
+          </h4>
+          <p className="text-[11px] text-white/45 leading-tight">
+            {plan.length} steps — approve to begin
+          </p>
         </div>
       </div>
 
-      {/* Plan Steps List */}
-      <div className="space-y-2 mb-4">
+      {/* Steps */}
+      <div className="space-y-1.5 mb-4">
         {plan.map((step) => {
-          const isHighRisk = step.risk_level === 'high'
-          const isMedRisk = step.risk_level === 'medium'
+          const needsApproval = step.risk_level === 'high' || step.requires_approval
 
           return (
             <div
               key={step.index}
-              className="flex items-start gap-3 p-2.5 rounded-xl bg-white/[0.02] hover:bg-white/[0.04] border border-white/[0.05] transition group"
+              className="flex items-start gap-3 p-2.5 rounded-lg bg-white/[0.02] hover:bg-white/[0.035] hover:border-brand-border border border-transparent transition group"
             >
-              <div className="w-5 h-5 rounded-full bg-white/[0.08] text-white/80 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
+              <div className="w-5 h-5 rounded-full border border-brand-border text-white/70 flex items-center justify-center text-[10px] font-mono shrink-0 mt-0.5">
                 {step.index}
               </div>
 
@@ -129,29 +149,29 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleSaveEdit(step.index)}
-                      className="flex-1 bg-black/50 border border-white/20 rounded px-2 py-1 text-[12px] text-white focus:outline-none focus:border-brand-accent"
+                      className="flex-1 bg-white/[0.04] border border-brand-border rounded-lg px-2 py-1 text-[12px] text-white focus:outline-none focus:border-brand-accent/60 transition"
                       autoFocus
                     />
                     <button
                       onClick={() => handleSaveEdit(step.index)}
-                      className="px-2 py-1 bg-white/10 hover:bg-white/20 rounded text-[11px] text-white font-medium"
+                      className="px-2 py-1 bg-white/[0.07] hover:bg-white/[0.12] rounded-lg text-[11px] text-white/85 font-medium transition"
                     >
                       Save
                     </button>
                     <button
                       onClick={() => setEditingIndex(null)}
-                      className="p-1 text-white/40 hover:text-white"
+                      className="p-1 text-white/40 hover:text-white/80 transition"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 ) : (
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-[12.5px] text-white/90 leading-snug">{step.description}</p>
+                    <p className="text-[12.5px] text-white/85 leading-snug">{step.description}</p>
                     {!isExecuting && onEditStep && (
                       <button
                         onClick={() => handleStartEdit(step)}
-                        className="opacity-70 sm:opacity-0 group-hover:opacity-100 p-1 text-white/40 hover:text-white transition"
+                        className="opacity-60 sm:opacity-0 group-hover:opacity-100 p-1 text-white/40 hover:text-white/80 transition shrink-0"
                         title="Edit step description"
                       >
                         <Pencil className="w-3 h-3" />
@@ -160,26 +180,17 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
                   </div>
                 )}
 
-                {/* Badges */}
+                {/* Meta — tool chip is neutral; the only coloured chip is
+                    high-risk (approval needed) */}
                 <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                   {step.tool_name && (
-                    <span className="text-[9.5px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-white/60 border border-white/[0.06]">
+                    <span className="text-[9.5px] font-mono px-1.5 py-0.5 rounded bg-white/[0.05] text-white/55 border border-brand-border">
                       {step.tool_name}
                     </span>
                   )}
-                  {isHighRisk && (
-                    <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 flex items-center gap-1">
-                      <AlertTriangle className="w-2.5 h-2.5" /> Approval Required
-                    </span>
-                  )}
-                  {isMedRisk && (
-                    <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-white/[0.07] text-white/70 border border-white/15">
-                      Compute Step
-                    </span>
-                  )}
-                  {!isHighRisk && !isMedRisk && (
-                    <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                      Auto-execute
+                  {needsApproval && (
+                    <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-brand-err/10 text-brand-err border border-brand-err/25 flex items-center gap-1">
+                      <AlertTriangle className="w-2.5 h-2.5" /> Approval required
                     </span>
                   )}
                 </div>
@@ -189,46 +200,39 @@ export const AgentPlanReviewCard: React.FC<AgentPlanReviewProps> = ({
         })}
       </div>
 
-      {/* Action Footer */}
-      {!isExecuting && (
-        <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-white/[0.08]">
-          {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="px-3.5 py-2 rounded-xl text-[11.5px] font-medium text-white/60 hover:text-white hover:bg-white/5 transition"
-            >
-              Cancel
-            </button>
-          )}
+      {/* Footer actions */}
+      <div className="flex items-center justify-end gap-2 pt-3 border-t border-brand-border">
+        {onCancel && (
           <button
             type="button"
-            onClick={onApprove}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-[12px] font-semibold bg-emerald-500 hover:bg-emerald-400 text-black shadow-lg shadow-emerald-500/20 transition active:scale-95 cursor-pointer"
+            onClick={onCancel}
+            disabled={isExecuting}
+            className="px-3 py-1.5 rounded-lg text-[11.5px] font-medium text-white/50 hover:text-white/90 hover:bg-white/[0.05] transition disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            Approve & Execute Plan
+            Cancel
           </button>
-        </div>
-      )}
+        )}
+        <button
+          type="button"
+          onClick={onApprove}
+          disabled={isExecuting}
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11.5px] font-semibold bg-brand-accent text-brand-bg transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+        >
+          {isExecuting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+          {isExecuting ? 'Running' : 'Approve & Run'}
+        </button>
+      </div>
     </div>
   )
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   2. EXECUTION STEPPER & PROGRESS WIDGET (During execution)
-   ─────────────────────────────────────────────────────────────────────────── */
-interface AgentExecutionStepperProps {
-  task: AgentTaskData
-  onPause?: () => void
-  onCancel?: () => void
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
-   2. EXECUTION STEPPER — Verdent-style activity log.
-   "Working for Xm Ys" live header + OODA-labelled collapsible step rows.
-   Labels are derived client-side from tool_name/description: zero tokens.
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   2. EXECUTION STEPPER — activity log with live elapsed timer.
+   OODA phase labels (Observe/Orient/Decide/Act) are derived client-side from
+   tool_name/description — deterministic, zero tokens.
+   Phase 8: renders `agent_plan_reoriented` state as an ivory "Plan
+   re-oriented ×N" chip + re-spliced step list.
+   ───────────────────────────────────────────────────────────────────────────── */
 interface AgentExecutionStepperProps {
   task: AgentTaskData
   onPause?: () => void
@@ -243,8 +247,7 @@ const formatElapsed = (ms: number): string => {
   return `${m}m ${s}s`
 }
 
-// Task-based OODA loop: classify each step into Observe/Orient/Decide/Act
-// from its tool and description (deterministic, client-side, zero cost).
+// Classify each step into the OODA loop from its tool + description.
 const oodaPhase = (step: PlanStepItem): string => {
   const hay = `${step.tool_name || ''} ${step.description || ''}`.toLowerCase()
   if (/\b(plan|decide|select|choose|strateg|design|determine|identify)\b/.test(hay)) return 'Decide'
@@ -253,9 +256,8 @@ const oodaPhase = (step: PlanStepItem): string => {
   return 'Act'
 }
 
-// Two-colour discipline: neutrals carry the UI; emerald (success) and rose
-// (failure) are the only semantic accents. OODA phase labels stay monochrome.
-const OODA_LABEL_CLASS = 'text-white/55 font-medium'
+// OODA labels stay monochrome — neutrals carry the UI.
+const OODA_LABEL_CLASS = 'text-white/50'
 
 export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
   task,
@@ -299,20 +301,21 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
   }
 
   return (
-    <div className="w-full my-3 rounded-xl bg-brand-card border border-brand-border p-3.5 sm:p-4 shadow-lg relative overflow-hidden animate-fadeIn select-none">
-      {/* Header — "Working for 2m 41s" */}
-      <div className="flex items-center justify-between pb-2.5 mb-3">
+    <div className={`${CARD} p-3.5 sm:p-4`}>
+      {/* Header — status + live timer + Phase 8 re-orientation chip */}
+      <div className="flex items-center justify-between pb-2.5 mb-2.5">
         <div className="flex items-center gap-2 min-w-0">
           {isTaskDone ? (
-            <div className="w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-              <Check className="w-3 h-3 stroke-[3]" />
+            <div className="w-4 h-4 rounded-full bg-brand-ok/15 border border-brand-ok/30 flex items-center justify-center shrink-0">
+              <Check className="w-2.5 h-2.5 text-brand-ok stroke-[3.5]" />
             </div>
           ) : (
-            <Loader2 className="w-4 h-4 text-brand-muted animate-spin shrink-0" />
+            <Loader2 className="w-3.5 h-3.5 text-brand-muted animate-spin shrink-0" />
           )}
           <span className={`text-[13px] font-medium tracking-tight ${isTaskDone ? 'text-white/90' : 'text-white/75'}`}>
-            {isTaskDone ? 'Completed' : 'Working'} {elapsedMs > 0 && (
-              <span className="font-mono text-[11.5px] text-white/45">
+            {isTaskDone ? 'Completed' : 'Working'}
+            {elapsedMs > 0 && (
+              <span className="font-mono text-[11px] text-white/40 ml-1.5">
                 {isTaskDone ? 'in' : 'for'} {formatElapsed(elapsedMs)}
               </span>
             )}
@@ -320,8 +323,27 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0">
+          {task.reoriented ? (
+            <span
+              className={`${CHIP} bg-brand-accent/[0.08] border-brand-accent/25 text-brand-accent/85 flex items-center gap-1 whitespace-nowrap`}
+              title={
+                // Phase 8.1: show the divergence reason when present; fall back
+                // to a generic explanation. reason may be undefined on events
+                // that predate this phase, so never render the literal "undefined".
+                task.replan_reason && task.replan_reason.length > 0
+                  ? task.replan_reason
+                  : task.replan_trigger === 'discovery'
+                    ? 'The agent adapted the remaining steps after discovering new facts'
+                    : 'The agent re-planned the remaining steps after a step failure'
+              }
+            >
+              <Route className="w-2.5 h-2.5" />
+              {task.replan_trigger === 'discovery' ? 'Plan adapted (Discovery)' : 'Plan re-oriented'}
+              {task.replan_count && task.replan_count > 1 ? ` ×${task.replan_count}` : ''}
+            </span>
+          ) : null}
           {task.total_token_spend && task.total_token_spend > 0 ? (
-            <span className="text-[10px] font-mono text-white/35">
+            <span className="text-[10px] font-mono text-white/30">
               ~{task.total_token_spend.toLocaleString()} tok
             </span>
           ) : null}
@@ -329,8 +351,17 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
         </div>
       </div>
 
+      {/* Hairline progress track */}
+      <div className="h-px bg-white/[0.07] mb-3 overflow-hidden">
+        <div
+          className="h-full bg-brand-accent/70 transition-all duration-500"
+          style={{ width: `${progressPct}%` }}
+        />
+      </div>
+
       {/* Steps — collapsible activity rows */}
-      <div className="space-y-1">
+      <div className="space-y-0.5">
+
         {plan.map((step) => {
           const isDone = step.status === 'completed'
           const isSkipped = step.status === 'skipped'
@@ -338,48 +369,46 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
           const isRunning = step.status === 'running' || (!isDone && !isFailed && !isSkipped && step.index === currentStep && task.state === 'executing')
           const isExpanded = expandedSteps.has(step.index)
           const phase = oodaPhase(step)
+          const hasDetail = !!(step.result_summary || step.adapted_reasoning)
 
           return (
             <div
               key={step.index}
               className={`rounded-lg border transition ${
                 isRunning
-                  ? 'bg-white/[0.045] border-white/[0.09]'
-                  : isDone
-                  ? 'bg-transparent border-transparent hover:bg-white/[0.02]'
+                  ? 'bg-white/[0.035] border-brand-border'
                   : isFailed
-                  ? 'bg-rose-500/[0.05] border-rose-500/25'
+                  ? 'bg-brand-err/[0.05] border-brand-err/20'
                   : 'bg-transparent border-transparent'
               }`}
             >
               <div
-                onClick={() => ((step.result_summary || step.adapted_reasoning) ? toggleExpand(step.index) : undefined)}
+                onClick={() => (hasDetail ? toggleExpand(step.index) : undefined)}
                 className={`px-2 py-[7px] flex items-center gap-2.5 rounded-lg ${
-                  (step.result_summary || step.adapted_reasoning) ? 'cursor-pointer hover:bg-white/[0.03]' : ''
+                  hasDetail ? 'cursor-pointer hover:bg-white/[0.03]' : ''
                 } ${isSkipped ? 'opacity-45' : ''}`}
               >
-                {/* Status icon */}
+                {/* Status glyph — the only coloured dots in the row */}
                 <div className="w-4 flex items-center justify-center shrink-0">
                   {isRunning ? (
                     <Loader2 className="w-3.5 h-3.5 text-white/70 animate-spin" />
                   ) : isDone ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-400/90 stroke-[3]" />
+                    <Check className="w-3.5 h-3.5 text-brand-ok/90 stroke-[3]" />
                   ) : isFailed ? (
-                    <X className="w-3.5 h-3.5 text-rose-400/90 stroke-[3]" />
+                    <X className="w-3.5 h-3.5 text-brand-err/90 stroke-[3]" />
                   ) : (
                     <span className="text-[10px] font-mono text-white/30">{step.index}</span>
                   )}
                 </div>
 
-                {/* Activity line: OODA phase + description — wraps to 2 lines on
-                    mobile so context is readable; single line + truncate on desktop */}
+                {/* OODA phase + activity line */}
                 <p className={`text-[12.5px] leading-snug line-clamp-2 sm:truncate flex-1 min-w-0 ${
-                  isRunning ? 'text-white/90' : isDone ? 'text-white/65' : isFailed ? 'text-rose-300/90' : 'text-white/40'
+                  isRunning ? 'text-white/90' : isDone ? 'text-white/60' : isFailed ? 'text-brand-err/90' : 'text-white/40'
                 }`}>
                   <span className={`mr-1.5 ${OODA_LABEL_CLASS}`}>{phase}</span>
                   {isDone && step.result_summary ? step.result_summary.split('\n')[0] : step.description}
                   {step.adapted_reasoning && (
-                    <span className="ml-2 inline-flex items-center text-[10px] text-amber-300/80 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 font-mono">
+                    <span className="ml-2 inline-flex items-center text-[10px] text-brand-accent/70 bg-brand-accent/[0.06] px-1.5 py-0.5 rounded border border-brand-accent/15 font-mono">
                       Adapted: {step.previous_tool || 'tool'} → {step.tool_name}
                     </span>
                   )}
@@ -390,8 +419,8 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
                   {step.duration_ms ? (
                     <span className="text-[9.5px] font-mono text-white/30">{formatElapsed(step.duration_ms)}</span>
                   ) : null}
-                  {(step.result_summary || step.adapted_reasoning) && (
-                    <span className="text-white/35 hover:text-white/70">
+                  {hasDetail && (
+                    <span className="text-white/30 hover:text-white/70">
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </span>
                   )}
@@ -399,15 +428,16 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
               </div>
 
               {/* Collapsible step detail */}
-              {isExpanded && (step.result_summary || step.adapted_reasoning) && (
+              {isExpanded && hasDetail && (
                 <div className="px-2 pb-2.5 pt-0.5 space-y-1.5">
                   {step.adapted_reasoning && (
-                    <div className="text-[11px] text-amber-300/85 leading-relaxed border-l-2 border-amber-500/40 pl-2.5 ml-[7px] bg-amber-500/[0.04] py-1 pr-2 rounded-r">
-                      <span className="font-semibold text-amber-200">AI Adaptation:</span> {step.adapted_reasoning}
+                    <div className="text-[11px] text-white/70 leading-relaxed border-l-2 border-brand-accent/35 pl-2.5 ml-[7px] bg-white/[0.02] py-1 pr-2 rounded-r">
+                      <span className="font-semibold text-brand-accent/85">Adapted — </span>
+                      {step.adapted_reasoning}
                     </div>
                   )}
                   {step.result_summary && (
-                    <p className="text-[11.5px] text-white/60 leading-relaxed whitespace-pre-wrap border-l-2 border-white/10 pl-2.5 ml-[7px]">
+                    <p className="text-[11.5px] text-white/55 leading-relaxed whitespace-pre-wrap border-l-2 border-brand-border pl-2.5 ml-[7px]">
                       {step.result_summary}
                     </p>
                   )}
@@ -421,9 +451,9 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
   )
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   3. IN-CHAT HITL APPROVAL CARD (When step pauses for human approval)
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   3. IN-CHAT HITL APPROVAL CARD (when a step pauses for human approval)
+   ───────────────────────────────────────────────────────────────────────────── */
 interface AgentHITLApprovalProps {
   step: PlanStepItem
   taskId: string
@@ -442,66 +472,63 @@ export const AgentHITLApprovalCard: React.FC<AgentHITLApprovalProps> = ({
   onCancel,
 }) => {
   return (
-    <div className="w-full my-3.5 rounded-2xl bg-brand-card border border-white/15 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
-      {/* Background ambient flare — neutral */}
-      <div className="absolute top-0 right-0 w-36 h-36 bg-white/[0.03] rounded-full blur-2xl pointer-events-none" />
-
+    <div className={`${CARD} p-4 sm:p-5`}>
       <div className="flex items-start gap-3 mb-3">
-        <div className="w-8 h-8 rounded-xl bg-white/[0.07] border border-white/15 flex items-center justify-center text-white/80 shrink-0 mt-0.5">
+        <div className="w-8 h-8 rounded-lg bg-brand-err/10 border border-brand-err/25 flex items-center justify-center text-brand-err shrink-0">
           <AlertTriangle className="w-4 h-4" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h4 className="text-[13px] font-semibold text-white tracking-tight">
-              Action Approval Required
+            <h4 className="text-[13px] font-semibold text-white/95 tracking-tight">
+              Approval required
             </h4>
-            <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-white/[0.07] text-white/70 border border-white/15 font-bold uppercase tracking-wider">
+            <span className={`${CHIP} bg-white/[0.05] border-brand-border text-white/60 font-mono`}>
               Step {step.index}
             </span>
           </div>
-          <p className="text-[12px] text-white/70 mt-1 font-medium leading-snug">
+          <p className="text-[12.5px] text-white/80 mt-1 leading-snug">
             {step.description}
           </p>
           {reason && (
-            <p className="text-[11px] text-white/50 mt-1 leading-relaxed">
+            <p className="text-[11px] text-white/45 mt-1 leading-relaxed">
               {reason}
             </p>
           )}
         </div>
       </div>
 
-      {/* Buttons */}
-      <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2 pt-3 border-t border-white/[0.08]">
+      {/* Actions — ivory is the affirmative choice */}
+      <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2 pt-3 border-t border-brand-border">
         <button
           type="button"
           onClick={onCancel}
-          className="px-3 py-1.5 rounded-xl text-[11px] font-medium text-white/50 hover:text-white hover:bg-white/5 transition"
+          className="px-3 py-1.5 rounded-lg text-[11px] font-medium text-white/50 hover:text-white/90 hover:bg-white/[0.05] transition"
         >
-          Cancel Task
+          Cancel task
         </button>
         <button
           type="button"
           onClick={onSkip}
-          className="px-3 py-1.5 rounded-xl text-[11px] font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/15 transition"
+          className="px-3 py-1.5 rounded-lg text-[11px] font-medium text-white/75 hover:text-white bg-white/[0.06] hover:bg-white/[0.1] border border-brand-border transition"
         >
-          Skip Step
+          Skip step
         </button>
         <button
           type="button"
           onClick={onApprove}
-          className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-[11.5px] font-bold bg-emerald-500 hover:bg-emerald-400 text-black shadow-md shadow-emerald-500/20 transition active:scale-95 cursor-pointer"
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11.5px] font-semibold bg-brand-accent text-brand-bg transition active:scale-95 cursor-pointer"
         >
           <Check className="w-3.5 h-3.5 stroke-[3]" />
-          Approve Action
+          Approve
         </button>
       </div>
     </div>
   )
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────────────────────
    3b. INTERACTIVE USER INPUT / CLARIFICATION CARD
-   ─────────────────────────────────────────────────────────────────────────── */
+   ───────────────────────────────────────────────────────────────────────────── */
 export interface AgentUserInputProps {
   question: string
   options: string[]
@@ -525,37 +552,35 @@ export const AgentUserInputCard: React.FC<AgentUserInputProps> = ({
   }
 
   return (
-    <div className="w-full my-3.5 rounded-2xl bg-[#12141c] border border-cyan-500/30 p-4 sm:p-5 shadow-2xl relative overflow-hidden animate-fadeIn select-none">
-      <div className="absolute top-0 right-0 w-36 h-36 bg-cyan-500/[0.05] rounded-full blur-2xl pointer-events-none" />
-
+    <div className={`${CARD} p-4 sm:p-5`}>
       <div className="flex items-start gap-3 mb-3.5">
-        <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0 mt-0.5">
+        <div className="w-8 h-8 rounded-lg bg-white/[0.05] border border-brand-border flex items-center justify-center text-brand-muted shrink-0">
           <HelpCircle className="w-4 h-4" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h4 className="text-[13px] font-semibold text-white tracking-tight">
-              Input Required from You
+            <h4 className="text-[13px] font-semibold text-white/95 tracking-tight">
+              Input required
             </h4>
-            <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-bold uppercase tracking-wider">
+            <span className={`${CHIP} bg-white/[0.05] border-brand-border text-white/55 uppercase tracking-wider font-bold`}>
               Clarification
             </span>
           </div>
-          <p className="text-[12.5px] text-white/90 mt-1.5 font-medium leading-relaxed">
+          <p className="text-[12.5px] text-white/85 mt-1.5 leading-relaxed">
             {question}
           </p>
         </div>
       </div>
 
-      {/* Clickable Option Pills */}
+      {/* Option pills — neutral, ivory-wash on hover */}
       {options && options.length > 0 && (
-        <div className="flex flex-wrap gap-2 pt-1 pb-3">
+        <div className="flex flex-wrap gap-2 pb-1">
           {options.map((opt, idx) => (
             <button
               key={idx}
               type="button"
               onClick={() => onSubmit(opt)}
-              className="px-3.5 py-1.5 rounded-xl text-[12px] font-medium bg-white/[0.06] hover:bg-cyan-500/20 hover:text-cyan-200 border border-white/10 hover:border-cyan-500/40 text-white/90 transition active:scale-95 text-left cursor-pointer"
+              className="px-3.5 py-1.5 rounded-lg text-[12px] font-medium bg-white/[0.05] hover:bg-brand-accent/[0.09] hover:text-white border border-brand-border hover:border-brand-accent/35 text-white/85 transition active:scale-95 text-left cursor-pointer"
             >
               {opt}
             </button>
@@ -563,19 +588,19 @@ export const AgentUserInputCard: React.FC<AgentUserInputProps> = ({
         </div>
       )}
 
-      {/* Custom write-in response form */}
-      <form onSubmit={handleCustomSubmit} className="flex items-center gap-2 pt-2.5 border-t border-white/[0.06]">
+      {/* Custom write-in response */}
+      <form onSubmit={handleCustomSubmit} className="flex items-center gap-2 pt-3 mt-1.5 border-t border-brand-border">
         <input
           type="text"
           value={customInput}
           onChange={(e) => setCustomInput(e.target.value)}
-          placeholder="Or type your custom response..."
-          className="flex-1 bg-white/[0.04] border border-white/10 rounded-xl px-3 py-1.5 text-[12px] text-white placeholder-white/40 focus:outline-none focus:border-cyan-500/50 transition"
+          placeholder="Or type your own answer…"
+          className="flex-1 bg-white/[0.04] border border-brand-border rounded-lg px-3 py-1.5 text-[12px] text-white placeholder-white/35 focus:outline-none focus:border-brand-accent/50 transition"
         />
         <button
           type="submit"
           disabled={!customInput.trim()}
-          className="px-3.5 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-30 text-black text-[12px] font-bold transition active:scale-95 flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+          className="px-3.5 py-1.5 rounded-lg bg-brand-accent text-brand-bg disabled:bg-white/[0.06] disabled:text-white/30 text-[12px] font-semibold transition active:scale-95 flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
         >
           <span>Send</span>
           <Send className="w-3 h-3 stroke-[2.5]" />
@@ -585,10 +610,10 @@ export const AgentUserInputCard: React.FC<AgentUserInputProps> = ({
   )
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────────────────────
    4. INSTANT STATIC SITE DEPLOYMENT CARD (/sites/:slug) — compact, no inline
    iframe in the thread; preview opens in the ArtifactPanel right dock.
-   ─────────────────────────────────────────────────────────────────────────── */
+   ───────────────────────────────────────────────────────────────────────────── */
 interface AgentSiteDeploymentProps {
   title: string
   previewUrl: string
@@ -613,39 +638,43 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
   }
 
   return (
-    <div className="w-full my-3.5 rounded-lg bg-brand-card border border-white/10 shadow-lg relative overflow-hidden animate-fadeIn select-none">
+    <div className={CARD}>
       <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-7 h-7 rounded-md bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-white/[0.05] border border-brand-border flex items-center justify-center text-brand-muted shrink-0">
             <Zap className="w-3.5 h-3.5" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-[13px] font-semibold text-white truncate">{title || 'Live Deployed Web App'}</span>
-              <span className="text-[9.5px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0">
+              <span className="text-[13px] font-semibold text-white/95 truncate">{title || 'Live Deployed Web App'}</span>
+              {/* The one live indicator: a breathing sage dot on a neutral chip */}
+              <span className={`${CHIP} bg-white/[0.05] border-brand-border text-white/65 flex items-center gap-1.5 shrink-0`}>
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-ok animate-pulse" />
                 LIVE
               </span>
             </div>
-            <span className="text-[10.5px] text-white/45 truncate block font-mono">{previewUrl}</span>
+            <span className="text-[10.5px] text-white/40 truncate block font-mono">{previewUrl}</span>
           </div>
         </div>
 
-        {/* Actions: panel preview + external visit */}
+        {/* Actions */}
         <div className="flex items-center gap-1.5 shrink-0 w-full sm:w-auto justify-end">
           <button
             type="button"
             onClick={openInPanel}
             title="Open preview in the artifact panel"
-            className="px-3 py-1.5 rounded-md text-[11px] font-semibold bg-white/5 hover:bg-white/10 text-white/85 border border-white/10 flex items-center gap-1.5 transition"
+            className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/[0.05] hover:bg-white/[0.1] text-white/85 border border-brand-border transition"
           >
-            <Play className="w-3 h-3" />
-            <span>Open preview</span>
+            <span className="flex items-center gap-1.5">
+              <Play className="w-3 h-3" />
+              Preview
+            </span>
           </button>
           <a
             href={previewUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="px-3 py-1.5 rounded-md text-[11px] font-bold bg-brand-accent hover:bg-brand-accent/90 text-black flex items-center gap-1 transition active:scale-95"
+            className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-brand-accent hover:bg-brand-accent/90 text-brand-bg transition active:scale-95"
           >
             Visit site
           </a>
@@ -655,12 +684,11 @@ export const AgentSiteDeploymentCard: React.FC<AgentSiteDeploymentProps> = ({
   )
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   5. TURN TRACKER — thin scrubber rail on the RIGHT edge of the thread.
-   Short line-ticks, one per assistant turn; the active tick is taller and
-   brighter while streaming. Tap a tick to jump, or DRAG along the rail to
-   scrub through turns (pointer-capture slider, works with touch).
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   5. TURN TRACKER — thin scrubber rail on the right edge of the thread.
+   Line-ticks, one per assistant turn; the active tick is taller and brighter
+   while streaming. Tap a tick to jump, or drag along the rail to scrub.
+   ───────────────────────────────────────────────────────────────────────────── */
 interface TurnTrackerProps {
   /** Message indices of USER prompts, in order */
   turnIndices: number[]
@@ -724,8 +752,8 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef
       aria-valuemax={turnIndices.length}
       aria-valuenow={activeIdx + 1}
     >
-      {/* Thin vertical rail line */}
-      <div className="absolute right-2 top-6 bottom-6 w-px bg-white/10 rounded-full pointer-events-none" />
+      {/* Rail line */}
+      <div className="absolute right-2 top-6 bottom-6 w-px bg-white/[0.08] pointer-events-none" />
 
       {turnIndices.map((_, i) => {
         const isActive = i === activeIdx
@@ -735,12 +763,11 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef
             onClick={() => jumpTo(i)}
             className="relative flex items-center justify-end w-full py-0.5"
           >
-            {/* Horizontal tick line */}
             <span
               className={`block rounded-full transition-all duration-200 cursor-pointer ${
                 isActive
-                  ? 'w-3.5 h-[2px] bg-white/95 shadow-[0_0_6px_rgba(255,255,255,0.7)]'
-                  : 'w-2 h-px bg-white/25 group-hover:bg-white/50 hover:w-3 hover:bg-cyan-400'
+                  ? 'w-3.5 h-[2px] bg-brand-accent/90'
+                  : 'w-2 h-px bg-white/25 group-hover:bg-white/55 hover:w-3 hover:bg-white/70'
               }`}
               title={`Jump to turn ${i + 1}`}
             />
@@ -751,10 +778,10 @@ export const TurnTracker: React.FC<TurnTrackerProps> = ({ turnIndices, scrollRef
   )
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   6. FILES-CHANGED CARD — one compact chip for everything the agent produced,
-   Verdent-style ("4 files changed"). Rows open in the ArtifactPanel.
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   6. FILES-CHANGED CARD — one compact chip for everything the agent produced.
+   Rows open in the ArtifactPanel.
+   ───────────────────────────────────────────────────────────────────────────── */
 export interface AgentArtifactItem {
   filename: string
   download_url?: string
@@ -877,7 +904,7 @@ export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifact
             <span className="text-white/40 group-hover:text-white/70 transition">
               {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             </span>
-            <span className="text-amber-400/90 shrink-0">
+            <span className="text-white/45 shrink-0">
               {isOpen ? <FolderOpen className="w-3.5 h-3.5" /> : <Folder className="w-3.5 h-3.5" />}
             </span>
             <span className="text-[11.5px] font-mono font-medium text-white/85 truncate flex-1">
@@ -914,28 +941,28 @@ export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifact
   }
 
   return (
-    <div className="w-full my-3 rounded-lg bg-brand-card border border-white/10 shadow-sm animate-fadeIn select-none">
+    <div className={CARD}>
       <div className="w-full px-3.5 py-2.5 flex items-center justify-between gap-3">
         <button
           type="button"
           onClick={() => setExpanded((e) => !e)}
           className="flex items-center gap-2.5 min-w-0 flex-1 hover:opacity-85 text-left transition"
         >
-          <div className="w-6 h-6 rounded-md bg-white/[0.06] border border-white/10 flex items-center justify-center text-white/70 shrink-0">
+          <div className="w-6 h-6 rounded-md bg-white/[0.05] border border-brand-border flex items-center justify-center text-brand-muted shrink-0">
             <FileText className="w-3 h-3" />
           </div>
           <span className="text-[12.5px] font-medium text-white/85 truncate">
             {files.length} {files.length === 1 ? 'file' : 'files'} changed
             {allFolderPaths.size > 0 && ` (${allFolderPaths.size} folders)`}
           </span>
-          <span className="text-white/40 hover:text-white/70 shrink-0 ml-auto">
+          <span className="text-white/35 hover:text-white/70 shrink-0 ml-auto">
             {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </span>
         </button>
       </div>
 
       {expanded && (
-        <div className="px-3.5 pb-3 border-t border-white/[0.04] pt-2 space-y-1">
+        <div className="px-3.5 pb-3 border-t border-brand-border pt-2 space-y-1">
           {allFolderPaths.size > 1 && (
             <div className="flex justify-end pb-1">
               <button
@@ -955,5 +982,3 @@ export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifact
     </div>
   )
 }
-
-

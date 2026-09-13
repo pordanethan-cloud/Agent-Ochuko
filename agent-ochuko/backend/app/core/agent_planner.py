@@ -102,6 +102,46 @@ _STRUCTURED_PLANNER_SYSTEM = (
     + AGENT_CONDUCT + "\n\n" + ULTRA_IDENTITY
 )
 
+# Tool roster a re-plan may emit — mirrors the tool_name enumeration in the
+# _STRUCTURED_PLANNER_SYSTEM schema, plus ask_user_input (used by the
+# programmatic fallback and specially handled by the HITL pause path).
+_PLANNER_TOOL_ROSTER = frozenset({
+    "search_web", "deep_research", "fetch_url", "scrape_web", "youtube_transcript",
+    "lookup_handle", "deploy_site", "execute_code", "terminal", "fetch_stock_image",
+    "sandbox_ls", "sandbox_read", "sandbox_write", "sandbox_edit", "generate_image",
+    "memory_save", "memory_recall", "gmail_search", "gmail_read", "gmail_send",
+    "calendar_list_events", "calendar_create_event", "calendar_check_availability",
+    "photos_search", "photos_list", "photos_get", "visualize__show_widget",
+    "ask_user_input",
+})
+
+# Phase 8: compact re-orientation prompt — deliberately terse to keep the
+# re-plan call in the low hundreds of tokens on the nano deployment.
+_REPLAN_SYSTEM = (
+    "You re-orient an autonomous agent's plan after a step failed. "
+    "Given the goal, completed results, the failed step, and the stale remaining steps, "
+    "produce 1-6 replacement steps that accomplish the REMAINING work only. "
+    "Never repeat completed work. Adapt the original approach if it is still viable; "
+    "route around it if the failure showed the plan was wrong. "
+    'Output ONLY a JSON array of step objects: '
+    '[{"description": "concrete action + verification", "tool_name": "<tool or null>", '
+    '"risk_level": "low" | "medium" | "high"}]. '
+    "Keep the whole plan under 150 words."
+)
+
+# Phase 8.1: terse premise-divergence checker — the cheapest LLM call in the
+# stack (nano deployment, reasoning effort "none", 3-second timeout). It only
+# answers one boolean; anything it cannot answer cleanly must be a None.
+_DIVERGENCE_SYSTEM = (
+    "You detect when one completed step's findings invalidate the premise of "
+    "the immediately following step. "
+    "If the completed step's results clearly contradict or invalidate what the "
+    "next step assumes, respond with exactly: "
+    '{"diverged": true, "reason": "<one-sentence summary of the contradiction>"}. '
+    "Otherwise respond with exactly: {\"diverged\": false}. "
+    "If uncertain, default to {\"diverged\": false}. Only obvious contradictions count."
+)
+
 # Patterns that signal research-intensive prompts
 _RESEARCH_INTENSIVE_RE = re.compile(
     r"\b(compare|vs\.?|versus|rank(?:ing)?|ramification|all\s+(?:aspect|dimension|ramification)|"
@@ -531,6 +571,302 @@ async def refine_plan(
             HITLGate.requires_approval(new_step)
         updated_plan.append(new_step)
     return updated_plan
+
+
+async def replan_remaining(
+    original_plan: List[PlanStep],
+    completed_results: List[Dict[str, Any]],
+    remaining_steps: List[PlanStep],
+    goal: str,
+    failed_step: Optional[PlanStep] = None,
+    auto_approve_level: str = "high",
+    openai_client: Optional[AsyncAzureOpenAI] = None,
+    nano_deployment: str = "gpt-5.6-luna",
+    discovery_context: Optional[str] = None,
+) -> Optional[List[PlanStep]]:
+    """
+    Phase 8 / 8.1: Regenerates the remaining steps of a plan.
+
+    Phase 8: invoked after an exhausted step failure. Phase 8.1: also invoked
+    proactively after a SUCCESSFUL investigative step whose findings shift the
+    plan's premise (discovery_context), so doomed downstream steps never run.
+
+    Token economy is first-class: nano deployment, reasoning effort floored at
+    'low', a sliding 5-result window (immediate predecessor expanded to 400
+    chars + explicit artifact filenames; older steps 200 chars each, summaries
+    only, never artifacts), and a dynamic step horizon of
+    min(6, max(2, len(remaining_steps) + 1)) so the LLM neither over-generates
+    near the finish line nor under-generates on early pivots.
+    Returns a fresh List[PlanStep] re-indexed to continue the original
+    numbering (every step HITL-gated), or None on ANY parse/validation
+    failure so the caller can keep the original remaining steps.
+    """
+    if not remaining_steps:
+        return None
+    if openai_client is None:
+        return None
+
+    start_index = remaining_steps[0].index
+
+    # --- Token-economical prompt: summaries only, weighted sliding window ---
+    # Phase 8.1 breadcrumbs: the immediate predecessor gets 400 chars plus its
+    # artifact filenames; older steps get 200 chars each. Summaries only —
+    # artifacts never enter the prompt as content, only their names.
+    window = completed_results[-5:]
+    completed_trail = ""
+    for res in window:
+        width = 400 if res is window[-1] else 200
+        summary = str(res.get("summary", "") or "")[:width]
+        line = f"- #{res.get('step_index', '?')} {summary}\n"
+        if res is window[-1]:
+            art_names = [
+                str(a.get("filename", ""))
+                for a in (res.get("artifacts") or [])
+                if isinstance(a, dict) and a.get("filename")
+            ]
+            if art_names:
+                line = line.rstrip("\n") + f" [artifacts: {', '.join(art_names[:5])}]\n"
+        completed_trail += line
+    if len(completed_results) > 5:
+        completed_trail = f"(+{len(completed_results) - 5} earlier steps omitted)\n" + completed_trail
+
+    # Phase 8.1: dynamic step horizon — the LLM is told exactly how many steps
+    # it may emit, so near-finish tails stay 2 steps and early pivots open up.
+    max_replan_steps = min(6, max(2, len(remaining_steps) + 1))
+
+    remaining_lines = ""
+    for s in remaining_steps[:6]:
+        remaining_lines += f"- #{s.index} [{s.tool_name or 'reason'}] {s.description[:150]}\n"
+
+    # Obstacle block: exactly one of (premise shift | hard failure) is shown.
+    obstacle = ""
+    if discovery_context:
+        obstacle = (
+            f"OBSERVATION / PREMISE SHIFT: {discovery_context[:400]}\n"
+            "A completed step revealed facts that invalidate the stale steps "
+            "below — re-plan them around reality, do not repeat completed work.\n"
+        )
+    elif failed_step:
+        obstacle = (
+            f"FAILED STEP #{failed_step.index} [{failed_step.tool_name or 'reason'}]: "
+            f"{failed_step.description[:200]}\n"
+            f"ERROR: {(failed_step.error or 'unknown failure')[:300]}\n"
+        )
+
+    user_content = (
+        f"GOAL: {goal[:500]}\n\n"
+        f"{obstacle}"
+        f"COMPLETED CONTEXT:\n{completed_trail}\n"
+        f"STALE REMAINING STEPS:\n{remaining_lines}\n"
+        f"Re-plan the remaining work ({max_replan_steps} steps max, JSON array only)."
+    )
+
+    prompt_input = [
+        {"role": "system", "content": _REPLAN_SYSTEM},
+        {"role": "user", "content": user_content},
+    ]
+
+    try:
+        use_responses = hasattr(openai_client, "responses") and hasattr(openai_client.responses, "create")
+        effort = await _resolve_planner_effort(goal, nano_deployment, floor="low")
+
+        async def _replan_call(with_effort: bool):
+            kwargs: Dict[str, Any] = (
+                {"model": nano_deployment, "input": prompt_input}
+                if use_responses
+                else {"model": nano_deployment, "messages": prompt_input}
+            )
+            if with_effort:
+                kwargs.update(_effort_api_kwargs(effort, use_responses))
+            if use_responses:
+                return await asyncio.wait_for(openai_client.responses.create(**kwargs), timeout=6.0)
+            return await asyncio.wait_for(openai_client.chat.completions.create(**kwargs), timeout=6.0)
+
+        try:
+            response = await _replan_call(True)
+        except Exception as call_err:
+            if effort and _is_param_error(call_err):
+                logger.debug(f"Re-plan effort '{effort}' rejected — retrying without it: {call_err}")
+                response = await _replan_call(False)
+            else:
+                raise
+
+        if use_responses:
+            raw_json = (getattr(response, "output_text", "") or "").strip()
+        else:
+            raw_json = (response.choices[0].message.content or "").strip()
+
+        # Clean JSON markdown formatting if present
+        if raw_json.startswith("```"):
+            lines = raw_json.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_json = "\n".join(lines).strip()
+
+        parsed = json.loads(raw_json)
+        if isinstance(parsed, dict) and "steps" in parsed:
+            parsed = parsed["steps"]
+        if not isinstance(parsed, list) or not parsed:
+            return None
+
+        new_steps: List[PlanStep] = []
+        for offset, item in enumerate(parsed[:max_replan_steps]):
+            desc = str(item.get("description", "")).strip()
+            if not desc:
+                return None
+            tool = item.get("tool_name")
+            tool_str = str(tool).strip() if tool else ""
+            if tool_str and tool_str not in _PLANNER_TOOL_ROSTER:
+                return None
+            raw_risk = str(item.get("risk_level", "low")).lower()
+            risk = RiskLevel.HIGH if raw_risk == "high" else (
+                RiskLevel.MEDIUM if raw_risk == "medium" else RiskLevel.LOW
+            )
+            args_hint = item.get("tool_args_hint") if isinstance(item.get("tool_args_hint"), dict) else None
+            step = PlanStep(
+                index=start_index + offset,
+                description=desc,
+                tool_name=tool_str or None,
+                tool_args_hint=args_hint,
+                risk_level=risk,
+                status=StepStatus.PENDING,
+            )
+            HITLGate.requires_approval(step, auto_approve_level=auto_approve_level)
+            new_steps.append(step)
+        return new_steps
+    except Exception as err:
+        logger.warning(f"replan_remaining failed, keeping original remaining steps: {err}")
+        return None
+
+
+async def check_premise_divergence(
+    completed_step: PlanStep,
+    result_summary: str,
+    next_steps: List[PlanStep],
+    openai_client: Optional[AsyncAzureOpenAI],
+    nano_deployment: str = "gpt-5.6-luna",
+) -> Optional[str]:
+    """
+    Phase 8.1: Terse premise-divergence nano-call.
+
+    This is the CHEAPEST LLM call in the stack. Every clause below is a hard
+    requirement — not a suggestion — because loose behavior here silently
+    breaks the long-horizon OODA loop.
+
+    BEHAVIOR (explicit, non-negotiable):
+      1. Runs on the NANO deployment (``nano_deployment``, default gpt-5.6-luna).
+      2. Reasoning effort is HARDCODED TO "none" — the absolute cheapest tier.
+      3. RETRY ENVELOPE: if the API rejects the reasoning-effort parameter
+         (detected via ``_is_param_error`` — a 400-class "unknown parameter"
+         style error), retry the call ONCE without the effort kwarg. This is
+         the same envelope used by the replan path.
+      4. 3-SECOND HARD TIMEOUT: the entire API call is wrapped in
+         ``asyncio.wait_for(..., timeout=3.0)``. A timeout of any kind fails
+         GRACEFULLY BACK TO None — it never raises, never returns a partial
+         string, never logs an error that surfaces to the user.
+      5. GRACEFUL FAILURE: ANY of the following — timeout, API error, JSON
+         parse failure, missing/invalid response shape, ``diverged=false``,
+         or ``diverged=true`` with an empty/missing reason — returns None.
+         The function MUST NEVER RAISE. The caller treats None as "no
+         divergence, continue the plan unchanged."
+      6. SUCCESS: returns the ``reason`` string ONLY when ``diverged`` is
+         truthy AND ``reason`` is a non-empty string.
+
+    Args:
+        completed_step: The step that just finished successfully.
+        result_summary: Its ``result_summary`` text (the facts discovered).
+        next_steps: The still-pending steps whose premise we are checking.
+        openai_client: An initialized AsyncAzureOpenAI client. If None, returns None.
+        nano_deployment: Nano model id to call.
+
+    Returns:
+        A one-sentence contradiction summary if the completed step's findings
+        clearly invalidate the next step's premise, otherwise None.
+    """
+    # Guard: no client, no call. Returns None (graceful).
+    if openai_client is None or not next_steps:
+        return None
+
+    next_desc = (next_steps[0].description or "")[:300]
+    completed_desc = (completed_step.description or "")[:300]
+    summary = (result_summary or "")[:400]
+
+    user_content = (
+        f"COMPLETED STEP: {completed_desc}\n"
+        f"RESULTS: {summary}\n\n"
+        f"NEXT STEP (pending): {next_desc}\n\n"
+        f"Do the completed step's results clearly contradict or invalidate the "
+        f"premise the next step assumes? Answer per your instructions."
+    )
+
+    use_responses = hasattr(openai_client, "responses") and hasattr(
+        openai_client.responses, "create"
+    )
+
+    async def _call(with_effort: bool) -> str:
+        """Inner call. Effort HARDCODED TO 'none' (cheapest tier)."""
+        kwargs: Dict[str, Any] = _effort_api_kwargs("none", use_responses) if with_effort else {}
+        if use_responses:
+            resp = await openai_client.responses.create(  # type: ignore[attr-defined]
+                model=nano_deployment,
+                input=[{"role": "system", "content": _DIVERGENCE_SYSTEM},
+                       {"role": "user", "content": user_content}],
+                **kwargs,
+            )
+            chunks = []
+            for item in getattr(resp, "output", []) or []:
+                for part in getattr(item, "content", []) or []:
+                    if hasattr(part, "text"):
+                        chunks.append(part.text)
+            return "".join(chunks).strip()
+        resp = await openai_client.chat.completions.create(  # type: ignore[attr-defined]
+            model=nano_deployment,
+            messages=[{"role": "system", "content": _DIVERGENCE_SYSTEM},
+                      {"role": "user", "content": user_content}],
+            **kwargs,
+        )
+        choice = resp.choices[0]
+        return (choice.message.content or "").strip()
+
+    try:
+        # Try with effort "none" first; on param-rejection retry once without it.
+        try:
+            raw = await asyncio.wait_for(_call(True), timeout=3.0)
+        except Exception as primary_err:
+            if _is_param_error(primary_err):
+                try:
+                    raw = await asyncio.wait_for(_call(False), timeout=3.0)
+                except Exception:
+                    # Retry failed (timeout or other) — graceful None.
+                    logger.debug("check_premise_divergence retry failed: %s", primary_err)
+                    return None
+            else:
+                # Timeout or non-param error on first attempt — graceful None.
+                logger.debug("check_premise_divergence failed: %s", primary_err)
+                return None
+
+        # Strip optional ```json fence.
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, dict):
+            return None  # invalid shape — graceful None
+
+        diverged = bool(parsed.get("diverged"))
+        reason = str(parsed.get("reason", "") or "").strip()
+
+        if diverged and reason:
+            return reason  # SUCCESS: one-sentence contradiction
+        return None  # diverged=false, or empty reason — graceful None
+
+    except Exception:
+        # ANY failure (timeout, parse, shape, API) — graceful None. Never raises.
+        return None
 
 
 def format_plan_for_system_prompt(plan_text: str) -> str:

@@ -28,6 +28,8 @@ export default {
           accent: "#e8e6e3",     // Soft ivory primary
           text: "#e9e8e6",       // Softened off-white body text
           muted: "#a6a29c",      // Warm gray secondary
+          ok: "#a9c1a5",         // Muted sage — success / live (semantic only)
+          err: "#dba49a",        // Muted terracotta — failure / attention (semantic only)
         }
       },
       fontFamily: {

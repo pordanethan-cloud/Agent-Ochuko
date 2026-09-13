@@ -80,6 +80,7 @@ class AgentTask(BaseModel):
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     total_token_spend: int = 0
     max_duration_seconds: int = 300
+    replan_count: int = 0
     error_message: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

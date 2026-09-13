@@ -5528,6 +5528,40 @@ export const Dashboard: React.FC = () => {
         }
         return updated
       })
+    } else if (data.type === 'agent_plan_reoriented') {
+      // Phase 8: dynamic plan re-orientation mid-execution. Render rule:
+      // keep completed/failed/skipped steps in place with their original
+      // index labels and state; replace everything else with the re-oriented plan.
+      setMessages((prev) => {
+        const updated = [...prev]
+        const targetIdx = findTargetIndex(updated)
+        if (targetIdx >= 0) {
+          const targetMsg = { ...updated[targetIdx] }
+          const existingData = targetMsg.agentTaskData
+          if (existingData) {
+            const planData: PlanStepItem[] = data.plan || []
+            const mergedPlan = planData.map((step) => {
+              const existing = existingData.plan?.find((s) => s.index === step.index)
+              if (existing && (existing.status === 'completed' || existing.status === 'failed' || existing.status === 'skipped')) {
+                return existing
+              }
+              return step
+            })
+            targetMsg.agentTaskData = {
+              ...existingData,
+              plan: mergedPlan,
+              reoriented: true,
+              replan_count: data.replan_count ?? 1,
+              // Phase 8.1: forward divergence trigger + reason. Both are
+              // undefined-safe so events predating this phase still render.
+              replan_trigger: data.trigger || 'failure',
+              replan_reason: typeof data.reason === 'string' ? data.reason : undefined,
+            }
+            updated[targetIdx] = targetMsg
+          }
+        }
+        return updated
+      })
     } else if (data.type === 'agent_step_start') {
       setMessages((prev) => {
         const updated = [...prev]
