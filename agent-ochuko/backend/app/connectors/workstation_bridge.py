@@ -168,14 +168,18 @@ def resolve_local_path(target_path: str, cwd: Optional[str] = None) -> str:
             cand_alias = os.path.normpath(os.path.join(folders[alias_name], sub_rel))
             if os.path.exists(cand_alias):
                 return cand_alias
-            # Try case-insensitive lookup of sub-parts
+            # Case-insensitive first-segment lookup ("documents/books/x"
+            # -> "~/Documents/BOOKS/x"). Returns the host path even when it
+            # doesn't exist yet — writes create missing parents.
             if os.path.exists(folders[alias_name]):
+                parts = sub_rel.replace("\\", "/").split("/")
                 try:
                     for entry in os.scandir(folders[alias_name]):
-                        if entry.name.lower() == sub_rel.lower():
-                            return os.path.normpath(entry.path)
+                        if entry.name.lower() == parts[0].lower():
+                            return os.path.normpath(os.path.join(entry.path, *parts[1:]))
                 except Exception:
                     pass
+                return cand_alias
 
     # 3. Explicit directory separator rule (e.g. sub/test.txt) -> join directly with base_dir
     if "/" in t or "\\" in t:
@@ -426,6 +430,21 @@ class WorkstationBridgeHandler(BaseHTTPRequestHandler):
                 return
 
             resolved = resolve_local_path(target)
+            # Alias paths must land in the REAL user folder, never nested under
+            # the bridge process cwd (agents often run with cwd=.../backend,
+            # which would swallow alias writes into backend/documents/...).
+            cwd_docs = os.path.normcase(os.path.normpath(os.path.join(os.getcwd(), "Documents")))
+            resolved_norm = os.path.normcase(os.path.normpath(resolved))
+            if resolved_norm == cwd_docs or resolved_norm.startswith(cwd_docs + os.sep):
+                try:
+                    sys.stderr.write(
+                        f"[Bridge] WARNING: alias '{target}' resolved under bridge cwd "
+                        f"({resolved}); remapping to ~/Documents.\n"
+                    )
+                except Exception:
+                    pass
+                rel = os.path.relpath(resolved, os.path.join(os.getcwd(), "Documents"))
+                resolved = os.path.normpath(os.path.join(os.path.expanduser("~"), "Documents", rel))
             try:
                 parent = os.path.dirname(resolved)
                 if parent and not os.path.exists(parent):
@@ -446,6 +465,11 @@ class WorkstationBridgeHandler(BaseHTTPRequestHandler):
                     "backup_path": backup_path,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
+                # Compact single-line log to the bridge console so host writes are auditable
+                try:
+                    print(f"[Bridge WRITE] {target} -> {resolved} ({sz} bytes)", flush=True)
+                except Exception:
+                    pass
                 self._set_cors_headers(200)
                 self.wfile.write(json.dumps(resp).encode("utf-8"))
                 return
@@ -523,4 +547,11 @@ def run_bridge(port=PORT):
 
 
 if __name__ == "__main__":
-    run_bridge()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Agent Ochuko Workstation Companion Bridge")
+    _parser.add_argument("--port", type=int, default=PORT)
+    _parser.add_argument("--host", default="127.0.0.1")
+    _args = _parser.parse_args()
+    PORT = _args.port
+    run_bridge(port=_args.port)

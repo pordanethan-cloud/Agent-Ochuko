@@ -131,8 +131,9 @@ class WorkstationMCP:
                     res = await client.post(url, json=json_body)
                 if res.status_code == 200:
                     return res.json()
-        except Exception:
-            pass
+                logger.debug(f"Workstation bridge {method} {endpoint} -> HTTP {res.status_code}")
+        except Exception as e:
+            logger.debug(f"Workstation bridge unreachable ({method} {endpoint}): {e}")
         return None
 
     def _resolve_safe_path(self, target_path: str) -> str:
@@ -154,6 +155,73 @@ class WorkstationMCP:
             return os.path.join(os.path.expanduser("~"), "Desktop")
         if lower in ("documents", "my documents"):
             return os.path.join(os.path.expanduser("~"), "Documents")
+
+        # 2b. Natural-language phrases: "books folder in documents", "books in documents"
+        # Mirrors workstation_bridge.resolve_local_path so the backend MCP
+        # resolves identically when the bridge is unreachable (e.g. Azure).
+        # NOTE: bare workspace-relative words ("BOOKS", "books") are NOT handled
+        # here — a relative dir in the agent workspace (sandbox/cwd) would
+        # shadow the host alias. Host alias happens only at step 2c, which
+        # runs AFTER the "relative to workspace" check below.
+        m_in = re.match(
+            r"(?:my\s+)?(.+?)(?:\s+folder|\s+directory)?\s+(?:in|under|inside)\s+(documents|downloads|desktop|home)\b",
+            lower,
+        )
+        if m_in:
+            sub_name = m_in.group(1).strip()
+            parent_alias = m_in.group(2).strip()
+            parent_dir = os.path.join(os.path.expanduser("~"), parent_alias.capitalize())
+            cand_in = os.path.normpath(os.path.join(parent_dir, sub_name))
+            if os.path.exists(cand_in):
+                return cand_in
+            if os.path.exists(parent_dir):
+                try:
+                    for entry in os.scandir(parent_dir):
+                        if entry.name.lower() == sub_name.lower():
+                            return os.path.normpath(entry.path)
+                except Exception:
+                    pass
+
+        # 2c. Friendly-alias prefix: "documents/BOOKS", "downloads/x.pdf"
+        # "documents/..." unambiguously names the HOST Documents folder, so the
+        # host path wins over a same-named relative dir in the agent workspace.
+        # EXCEPTION: an exact workspace-relative file (agent's own artifact)
+        # still wins for deeper paths like "documents/BOOKS/local.txt".
+        clean_slash = clean.replace("\\", "/")
+        alias_hit = None
+        alias_sub = None
+        for alias_name in ("documents", "downloads", "desktop", "home"):
+            if clean_slash.lower().startswith(f"{alias_name}/"):
+                alias_hit = alias_name
+                alias_sub = clean_slash[len(alias_name) + 1:]
+                break
+        if alias_hit:
+            home_dir = os.path.expanduser("~")
+            folder_map = {
+                "documents": os.path.join(home_dir, "Documents"),
+                "downloads": os.path.join(home_dir, "Downloads"),
+                "desktop": os.path.join(home_dir, "Desktop"),
+                "home": home_dir,
+            }
+            cand_alias = os.path.normpath(os.path.join(folder_map[alias_hit], alias_sub))
+            # Case-insensitive first-segment lookup ("documents/books/.." -> "~/Documents/BOOKS/..")
+            if not os.path.exists(cand_alias) and os.path.exists(folder_map[alias_hit]):
+                parts = alias_sub.replace("\\", "/").split("/")
+                try:
+                    for entry in os.scandir(folder_map[alias_hit]):
+                        if entry.name.lower() == parts[0].lower():
+                            cand_alias = os.path.normpath(os.path.join(entry.path, *parts[1:]))
+                            break
+                except Exception:
+                    pass
+            ws_exact = os.path.normpath(os.path.join(self.workspace_root, clean))
+            if os.path.exists(cand_alias):
+                return cand_alias
+            if os.path.exists(ws_exact):
+                return ws_exact
+            # Return the host path even when it doesn't exist yet — writes
+            # create missing parents (bridge is authority).
+            return cand_alias
 
         # 3. Absolute path rule
         if os.path.isabs(clean) or (len(clean) > 2 and clean[1] == ":" and clean[2] in ("\\", "/")):
@@ -200,6 +268,11 @@ class WorkstationMCP:
 
             if fuzzy_matches:
                 fuzzy_matches.sort(key=lambda x: x[0], reverse=True)
+                # Host standard folders outrank a bare same-named relative dir
+                # inside the agent workspace (e.g. poisoned "documents/books").
+                for _, p in fuzzy_matches:
+                    if p.startswith(os.path.join(home, "Documents")):
+                        return p
                 return fuzzy_matches[0][1]
 
         return candidate
@@ -334,8 +407,33 @@ class WorkstationMCP:
         except Exception:
             is_inside_workspace = False
 
-        is_host_absolute = not is_inside_workspace and (
-            (len(path) > 2 and path[1] == ":" and path[2] in ("\\", "/")) or path.startswith("~")
+        lower_p = (path or "").lower()
+        is_alias_path = (
+            lower_p in ("downloads", "download", "desktop", "documents")
+            or lower_p.startswith(("documents/", "documents\\", "downloads/", "downloads\\", "desktop/", "desktop\\", "home/", "home\\"))
+            or bool(
+                re.match(
+                    r"(?:my\s+)?(.+?)(?:\s+folder|\s+directory)?\s+(?:in|under|inside)\s+(documents|downloads|desktop|home)\b",
+                    lower_p,
+                )
+            )
+            # Bare single-word host folders ("BOOKS" lives in ~/Documents)
+            # Only when resolved OUTSIDE the agent workspace (workspace-local
+            # files like "app.py" must never route to the bridge).
+            or (
+                "/" not in lower_p
+                and "\\" not in lower_p
+                and len(lower_p) >= 3
+                and os.path.exists(safe_p)
+                and not is_inside_workspace
+            )
+        )
+        is_host_absolute = (not is_inside_workspace) and (
+            ((len(path) > 2 and path[1] == ":" and path[2] in ("\\", "/")) or path.startswith("~"))
+            # Alias / natural-language host paths always route via the bridge
+            # first (bridge is authority for host files, incl. new files that
+            # don't exist yet). Falls through to direct write if bridge down.
+            or is_alias_path
         )
 
         if is_host_absolute:
