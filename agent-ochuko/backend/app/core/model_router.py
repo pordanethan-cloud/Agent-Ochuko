@@ -65,9 +65,10 @@ _SIMPLE_PREFIX_RE = re.compile(
 # Live-data terms that must never be answered by the cheap tier without
 # grounded search — sports/scores (the confabulation class), weather, markets.
 _SPORTS_LIVE_RE = re.compile(
-    r"\b(score|scores|goal|goals|scorer|match|matches|game|games|standings|"
+    r"\b(score|scores|goal|goals|scorer|match|matches|match\s*activit\w+|game|games|standings|"
     r"fixtures?|playoff|tournament|league|brace|hat[\s-]?trick|highlights?|"
-    r"transfer|injur\w+|lineup|kickoff|weather|temperature)\b",
+    r"transfer|injur\w+|lineup|kickoff|weather|temperature|livescore|"
+    r"half[\s-]?time|full[\s-]?time)\b",
     re.IGNORECASE,
 )
 
@@ -135,7 +136,7 @@ def _is_simple_request(message_text: str) -> bool:
         return False
 
     # Live/current-data questions need search grounding — route to full model
-    if _LIVE_QUERY_RE.search(stripped):
+    if _LIVE_QUERY_RE.search(stripped) or _SPORTS_LIVE_RE.search(stripped):
         return False
 
     # Simple requests must be short (e.g. <= 90 characters)

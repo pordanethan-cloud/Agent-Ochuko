@@ -191,32 +191,38 @@ _BLOCKED_SOURCE_DOMAINS: set = {
 
 
 # ── Trusted-source ranking ────────────────────────────────────────────────────
-# Dedicated live score platforms & official league data (Tier 0 — ranks ABOVE everything else)
+# Dedicated live score platforms (Tier 0 — Real-time telemetry, ranks FIRST above all else)
 _SPORTS_PRIORITY_TIER_0: set = {
     "livescore.com", "livescores.com", "flashscore.com", "flashscore.co.uk",
-    "sofascore.com", "fotmob.com", "whoscored.com", "premierleague.com",
-    "uefa.com", "fifa.com", "bundesliga.com", "laliga.com", "legaseriea.it",
-    "rfeb.es", "nba.com", "nfl.com", "mlb.com", "nhl.com", "olympics.com",
+    "sofascore.com", "fotmob.com", "whoscored.com",
 }
 
-# Authoritative sports journalism & major broadcast desks (Tier 1)
+# Official leagues, tournaments & sanctioning federations (Tier 1)
 _SPORTS_PRIORITY_TIER_1: set = {
+    "premierleague.com", "uefa.com", "fifa.com", "bundesliga.com", "laliga.com",
+    "legaseriea.it", "rfeb.es", "nba.com", "nfl.com", "mlb.com", "nhl.com", "olympics.com",
+}
+
+# Authoritative sports journalism & major broadcast desks (Tier 2)
+_SPORTS_PRIORITY_TIER_2: set = {
     "skysports.com", "bbc.com", "bbc.co.uk", "espn.com", "espn.co.uk",
     "theathletic.com", "tntsports.co.uk", "reuters.com", "apnews.com",
 }
 
-# General sports news, transfer portals, and TV network blogs (Tier 2 — ranks below dedicated live scores)
-_SPORTS_PRIORITY_TIER_2: set = {
+# General sports news, transfer portals, and TV network blogs (Tier 3 — ranks below journalism)
+_SPORTS_PRIORITY_TIER_3: set = {
     "nbcsports.com", "cbssports.com", "foxsports.com", "transfermarkt.com",
     "dazn.com", "goal.com", "eurosport.com", "sportsnet.ca", "bleacherreport.com",
+    "abcnews.go.com", "abc.net.au", "abc.com", "go.com",
 }
 
 _TRUSTED_SOURCE_DOMAINS: Dict[str, set] = {
-    "sports": _SPORTS_PRIORITY_TIER_0 | _SPORTS_PRIORITY_TIER_1 | _SPORTS_PRIORITY_TIER_2,
+    "sports": _SPORTS_PRIORITY_TIER_0 | _SPORTS_PRIORITY_TIER_1 | _SPORTS_PRIORITY_TIER_2 | _SPORTS_PRIORITY_TIER_3,
     "news": {
         "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "aljazeera.com",
         "cnn.com", "nytimes.com", "theguardian.com", "washingtonpost.com",
         "dw.com", "france24.com", "economist.com", "ft.com", "bloomberg.com",
+        "abcnews.go.com", "abc.net.au", "abc.com", "go.com",
     },
     "business": {
         "bloomberg.com", "ft.com", "wsj.com", "forbes.com", "cnbc.com",
@@ -278,7 +284,7 @@ _SEARCH_CATEGORY_RES: Dict[str, "re.Pattern"] = {
 _MULTIPART_TLDS = {
     "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "co.za", "com.au",
     "com.br", "co.in", "com.ng", "co.ke", "com.mx", "co.kr", "com.tr",
-    "co.nz", "org.nz", "com.sg", "com.ar",
+    "co.nz", "org.nz", "com.sg", "com.ar", "net.au", "org.au",
 }
 
 
@@ -335,17 +341,19 @@ def rerank_results_by_trust(results: List[Dict[str, Any]], query: str, url_key: 
             return 99
         if "sports" in cats:
             if d in _SPORTS_PRIORITY_TIER_0:
-                return 0  # Dedicated live scores & official leagues (LiveScore, FlashScore)
+                return 0  # Dedicated real-time live score telemetry (LiveScore, FlashScore, Sofascore)
             if d in _SPORTS_PRIORITY_TIER_1:
-                return 1  # Sky Sports, BBC Sport, ESPN
+                return 1  # Official leagues & federations (Premier League, UEFA, FIFA)
             if d in _SPORTS_PRIORITY_TIER_2:
-                return 2  # NBC Sports, CBS Sports, TV blogs
+                return 2  # Sky Sports, BBC Sport, ESPN
+            if d in _SPORTS_PRIORITY_TIER_3:
+                return 3  # NBC Sports, CBS Sports, TV blogs
         for cat in cats:
             if d in _TRUSTED_SOURCE_DOMAINS.get(cat, set()):
-                return 3
+                return 4
         if d in _TRUSTED_SOURCE_DOMAINS.get("general", set()):
-            return 4
-        return 5
+            return 5
+        return 6
 
     def _rank(idx_item):
         idx, item = idx_item
@@ -355,23 +363,23 @@ def rerank_results_by_trust(results: List[Dict[str, Any]], query: str, url_key: 
     decorated = sorted(enumerate(valid_items), key=_rank)
     sorted_items = [item for _, item in decorated]
 
-    # For sports queries: if we have Tier 0 or Tier 1 authoritative sources,
-    # strictly prioritize them at the front and demote Tier 2
+    # For sports queries: if we have Tier 0, 1, or 2 authoritative sources,
+    # strictly prioritize them at the front and demote Tier 3
     if "sports" in cats:
-        tier_0_or_1 = [
+        authoritative = [
             it for it in sorted_items
-            if _domain_of(it.get(url_key, "")) in (_SPORTS_PRIORITY_TIER_0 | _SPORTS_PRIORITY_TIER_1)
+            if _domain_of(it.get(url_key, "")) in (_SPORTS_PRIORITY_TIER_0 | _SPORTS_PRIORITY_TIER_1 | _SPORTS_PRIORITY_TIER_2)
         ]
-        tier_2 = [
+        tier_3 = [
             it for it in sorted_items
-            if _domain_of(it.get(url_key, "")) in _SPORTS_PRIORITY_TIER_2
+            if _domain_of(it.get(url_key, "")) in _SPORTS_PRIORITY_TIER_3
         ]
         others = [
             it for it in sorted_items
-            if it not in tier_0_or_1 and it not in tier_2
+            if it not in authoritative and it not in tier_3
         ]
-        if tier_0_or_1:
-            sorted_items = tier_0_or_1 + others + tier_2
+        if authoritative:
+            sorted_items = authoritative + others + tier_3
 
     return sorted_items
 
@@ -753,7 +761,7 @@ async def _perform_google_search(
         if "sports" in _search_categories(query):
             sports_instruction = (
                 "\nSPORTS GROUNDING MANDATE:\n"
-                "- TARGET AUTHORITATIVE LIVE PLATFORMS: Prioritize dedicated live score platforms: livescore.com, flashscore.com, sofascore.com, fotmob.com, premierleague.com, bbc.com/sport, skysports.com.\n"
+                "- TARGET AUTHORITATIVE LIVE PLATFORMS: Prioritize dedicated live score platforms FIRST (livescore.com, flashscore.com, sofascore.com, fotmob.com) for real-time scores and active match clocks, followed by official leagues (premierleague.com, uefa.com) and broadcast desks (bbc.com/sport, skysports.com).\n"
                 "- STRICT DISREGARD FOR TABLOIDS & BLOGS: Disregard speculative blogs, tabloid content mills, and clickbait aggregators (e.g. thebiglead.com, sundayguardianlive.com, sportsmole.co.uk, caughtoffside.com).\n"
                 "- CRITICAL FOR GOALLESS MATCHES: If a match is in progress or completed and reported as 'goalless', 'deadlocked', or '0-0', the exact score IS 0 - 0. Never say 'score is unavailable' when a game is goalless.\n"
                 "- Extract exact home and away team names, numeric score (e.g. 0-0, 2-1), match clock/status, and all goal/card events."
@@ -3535,6 +3543,11 @@ async def stream_chat(
                 nano_turn_count = 0
             else:
                 if conv_res.data.get("user_id") != user_id:
+                    logger.warning(
+                        "403 conversation ownership mismatch on stream: "
+                        "conversation=%s row_owner=%s token_sub=%s",
+                        conversation_id, conv_res.data.get("user_id"), user_id,
+                    )
                     raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
 
                 db_mode = conv_res.data.get("mode")

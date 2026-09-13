@@ -156,6 +156,11 @@ async def load_message_history(
             raise HTTPException(status_code=404, detail="Conversation not found.")
 
         if conv_res.data.get("user_id") != user_id:
+            logger.warning(
+                "403 conversation ownership mismatch on messages load: "
+                "conversation=%s row_owner=%s token_sub=%s",
+                id, conv_res.data.get("user_id"), user_id,
+            )
             raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
 
         # 2. Fetch all messages sorted by created_at ascending
@@ -301,6 +306,11 @@ async def list_generated_files(
         if not conv_res.data:
             raise HTTPException(status_code=404, detail="Conversation not found.")
         if conv_res.data.get("user_id") != user_id:
+            logger.warning(
+                "403 conversation ownership mismatch on files list: "
+                "conversation=%s row_owner=%s token_sub=%s",
+                id, conv_res.data.get("user_id"), user_id,
+            )
             raise HTTPException(status_code=403, detail="Not authorized to access this conversation.")
 
         files_res = (

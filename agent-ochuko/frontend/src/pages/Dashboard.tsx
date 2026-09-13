@@ -3894,6 +3894,17 @@ export const Dashboard: React.FC = () => {
   // Stable ref holding the Supabase userId — set once on auth, used for cache key scoping.
   const userIdRef = useRef<string | null>(null)
   const [isFetchingHistory, setIsFetchingHistory] = useState(false)
+  // ── Session-identity guard (Fix 1) ──
+  // Set when the live Supabase session switches to a different user mid-session
+  // (e.g. a sign-in in another tab synced via shared localStorage, or an OAuth
+  // fragment re-auth). NON-DESTRUCTIVE: a modal asks the user what to do —
+  // nothing is auto-reset, so multi-tab use and in-progress work are preserved.
+  const [sessionSwitchPrompt, setSessionSwitchPrompt] = useState<{ newUserId: string; newEmail: string | null } | null>(null)
+  // ── Conversation access error (Fix 2) ──
+  // Shown as a non-destructive banner when loading a conversation's history is
+  // rejected (403 — typically the conversation belongs to another account that
+  // used this browser; 404 — deleted). Cached messages stay on screen.
+  const [convoAccessError, setConvoAccessError] = useState<{ convoId: string; reason: string } | null>(null)
   const [dynamicGreeting, setDynamicGreeting] = useState<string>('Agent Ochuko')
   const [isEditingNickname, setIsEditingNickname] = useState(false)
   const [nicknameInput, setNicknameInput] = useState('')
@@ -4063,7 +4074,7 @@ export const Dashboard: React.FC = () => {
     if (!activeConversationId || activeConversationId === '00000000-0000-0000-0000-000000000000') return
     setSharing(true)
     try {
-      const token = localStorage.getItem('supabase_token') || (await supabase.auth.getSession()).data.session?.access_token
+      const token = await getEffectiveToken()
       if (!token) return
 
       const res = await fetch(`${API_BASE}/v1/conversations/${activeConversationId}`, {
@@ -4817,6 +4828,26 @@ export const Dashboard: React.FC = () => {
 
       ])
 
+      // ── Explicit rejection handling (Fix 2) ──
+      // 403: the conversation belongs to a different account (commonly a second
+      // Google account used in this browser). 404: it was deleted. Surface a
+      // visible, non-destructive banner instead of failing silently — cached
+      // messages remain on screen and nothing is wiped.
+      if (msgRes.status === 403 || msgRes.status === 404) {
+        const reason = msgRes.status === 403
+          ? 'This conversation belongs to a different account signed in on this device.'
+          : 'This conversation no longer exists.'
+        setConvoAccessError({ convoId: id, reason })
+        showToast(
+          msgRes.status === 403 ? "Can't open this conversation — different account." : 'Conversation not found.',
+          'error'
+        )
+        return
+      }
+
+      // Successful (or non-403/404) load — clear any stale banner
+      setConvoAccessError(null)
+
       if (msgRes.ok) {
 
         const data = await msgRes.json()
@@ -5185,6 +5216,29 @@ export const Dashboard: React.FC = () => {
       console.warn('Supabase auth connection offline or closed:', err)
     })
 
+  }, [])
+
+  // ── Session-identity guard (Fix 1) ────────────────────────────────────────
+  // supabase-js syncs the session across tabs via shared localStorage, so a
+  // sign-in in another tab (or an OAuth #access_token fragment in this one) can
+  // silently replace the active user mid-session. React explicitly instead of
+  // letting ownership-checked API calls fail with opaque 403s.
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') return
+      // Only react once the boot-time identity is known AND the incoming
+      // session actually belongs to a different user. INITIAL_SESSION and
+      // routine TOKEN_REFRESHED events never change the user, so they no-op.
+      if (!session?.user) return
+      if (!userIdRef.current) return
+      if (session.user.id === userIdRef.current) return
+      console.warn('[Auth] Session identity changed:', userIdRef.current, '→', session.user.id)
+      setSessionSwitchPrompt({
+        newUserId: session.user.id,
+        newEmail: session.user.email ?? null,
+      })
+    })
+    return () => subscription.unsubscribe()
   }, [])
 
   // Auto-focus input on mount
@@ -9664,6 +9718,60 @@ export const Dashboard: React.FC = () => {
           </div>
         )
       })()}
+
+      {/* Conversation access error banner (Fix 2 — non-destructive, cache preserved) */}
+      {convoAccessError && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-40 w-[92%] max-w-md px-4 py-3 rounded-xl bg-red-950/90 border border-red-500/30 shadow-xl shadow-black/40 backdrop-blur-md" role="alert">
+          <p className="text-[13px] font-bold text-red-200 leading-snug">Can't open this conversation</p>
+          <p className="text-[12px] text-red-300/80 mt-0.5 leading-snug">{convoAccessError.reason}</p>
+          <div className="flex gap-2 mt-2.5">
+            <button
+              type="button"
+              onClick={() => { setConvoAccessError(null); handleNewSession() }}
+              className="px-3 py-1.5 rounded-lg bg-white text-black text-[11px] font-bold shadow transition hover:bg-[#f0f2f5] active:bg-[#e2e5eb] touch-manipulation"
+            >
+              Start new chat
+            </button>
+            <button
+              type="button"
+              onClick={() => setConvoAccessError(null)}
+              className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/15 text-white/80 text-[11px] font-semibold hover:bg-white/20 transition touch-manipulation"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Session identity changed modal (Fix 1 — non-destructive, user decides) */}
+      {sessionSwitchPrompt && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-[#0d0f11]/95 shadow-2xl shadow-black/60 p-5">
+            <p className="text-sm font-bold text-brand-text">Signed in as a different account</p>
+            <p className="mt-2 text-[13px] text-white/60 leading-snug">
+              This browser's session switched to{' '}
+              <span className="text-white/90 font-semibold break-words">{sessionSwitchPrompt.newEmail || 'another account'}</span>.
+              Open conversations belong to the previous account and may fail to load until you reload.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="min-h-[40px] px-4 rounded-lg bg-white text-black text-xs font-bold shadow transition hover:bg-[#f0f2f5] active:bg-[#e2e5eb]"
+              >
+                Reload app
+              </button>
+              <button
+                type="button"
+                onClick={() => setSessionSwitchPrompt(null)}
+                className="min-h-[40px] px-4 rounded-lg bg-white/10 border border-white/15 text-white/80 text-xs font-semibold hover:bg-white/20 transition"
+              >
+                Continue anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast notification container — top-right, non-blocking */}
 

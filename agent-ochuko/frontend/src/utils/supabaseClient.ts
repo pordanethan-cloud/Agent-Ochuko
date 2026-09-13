@@ -32,24 +32,21 @@ const isTokenValid = (token: string): boolean => {
 }
 
 /**
- * Robust token getter that handles clock skew, validates expiration, and falls back across storage layers.
+ * Robust token getter. The LIVE Supabase session is the authoritative source
+ * of the current identity; persisted copies are consulted only as fallbacks.
+ *
+ * Ordering rationale: after a mid-session account switch (multi-tab session
+ * sync, OAuth callback, etc.), a previously cached `supabase_token` may belong
+ * to a *different* user than the active session. Preferring the live session
+ * prevents API calls from silently carrying a foreign identity, which the
+ * backend rejects with 403 on ownership-checked endpoints.
  */
 export const getEffectiveToken = async (): Promise<string | null> => {
-  // 1. Direct local storage token check with expiration validation
-  const directToken = localStorage.getItem('supabase_token')
-  if (directToken) {
-    if (isTokenValid(directToken)) {
-      return directToken
-    } else {
-      // Purge stale expired token
-      localStorage.removeItem('supabase_token')
-    }
-  }
-
-  // 2. Standard Supabase session check
+  // 1. Live Supabase session (source of truth for the current identity)
   try {
     const { data: { session } } = await supabase.auth.getSession()
     if (session?.access_token && isTokenValid(session.access_token)) {
+      // Keep the mirror copy in sync so fallback #3 stays usable if the live session is lost
       localStorage.setItem('supabase_token', session.access_token)
       return session.access_token
     }
@@ -57,7 +54,7 @@ export const getEffectiveToken = async (): Promise<string | null> => {
     console.warn('[SupabaseClient] getSession error:', e)
   }
 
-  // 3. Raw Supabase localStorage key check
+  // 2. Raw Supabase SDK storage key (recovers from corrupted in-memory client state)
   try {
     if (supabaseUrl) {
       const host = new URL(supabaseUrl).hostname.split('.')[0]
@@ -72,6 +69,16 @@ export const getEffectiveToken = async (): Promise<string | null> => {
       }
     }
   } catch (e) {}
+
+  // 3. Mirror copy written by this helper / AuthCallback (last resort)
+  const directToken = localStorage.getItem('supabase_token')
+  if (directToken) {
+    if (isTokenValid(directToken)) {
+      return directToken
+    }
+    // Purge stale expired token
+    localStorage.removeItem('supabase_token')
+  }
 
   return null
 }

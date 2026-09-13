@@ -44,9 +44,9 @@ def test_trusted_sources_promoted_to_front():
     ]
     ranked = rerank_results_by_trust(results, "Olise goals champions league")
 
-    # Trusted on-topic domains first (stable: skysports before uefa, engine order)
-    assert ranked[0]["url"] == "https://www.skysports.com/football/news/olise"
-    assert ranked[1]["url"] == "https://www.uefa.com/uefachampionsleague/news/"
+    # Trusted on-topic domains first (Tier 0 official league/source uefa before Tier 1 skysports)
+    assert ranked[0]["url"] == "https://www.uefa.com/uefachampionsleague/news/"
+    assert ranked[1]["url"] == "https://www.skysports.com/football/news/olise"
     # Untrusted keep their original relative order after the promoted block
     untrusted = [r["url"] for r in ranked[2:]]
     assert untrusted == [
@@ -54,6 +54,25 @@ def test_trusted_sources_promoted_to_front():
         "https://reddit.com/r/fcbayern/comments/x",
         "https://some-aggregator.net/goals",
     ]
+
+
+def test_livescore_ranked_first_for_live_matches():
+    results = [
+        {"title": "ABC News", "url": "https://abcnews.go.com/Sports/story?id=999"},
+        {"title": "BBC Sport", "url": "https://www.bbc.com/sport/football/live/123"},
+        {"title": "UEFA Official", "url": "https://www.uefa.com/match/456"},
+        {"title": "LiveScore", "url": "https://www.livescore.com/en/football/2026-09-12/arsenal-vs-chelsea/"},
+        {"title": "Sky Sports", "url": "https://www.skysports.com/football/arsenal-vs-chelsea"},
+        {"title": "Goal Blog", "url": "https://www.goal.com/en/news/live/789"},
+    ]
+    ranked = rerank_results_by_trust(results, "Arsenal vs Chelsea live score")
+    # LiveScore (Tier 0) must be promoted strictly ahead of official leagues (Tier 1), journalism (Tier 2), and broadcast blogs like ABC (Tier 3)
+    assert ranked[0]["url"] == "https://www.livescore.com/en/football/2026-09-12/arsenal-vs-chelsea/"
+    assert ranked[1]["url"] == "https://www.uefa.com/match/456"
+    assert ranked[2]["url"] == "https://www.bbc.com/sport/football/live/123"
+    assert ranked[3]["url"] == "https://www.skysports.com/football/arsenal-vs-chelsea"
+    assert ranked[4]["url"] == "https://abcnews.go.com/Sports/story?id=999"
+    assert ranked[5]["url"] == "https://www.goal.com/en/news/live/789"
 
 
 def test_off_topic_trusted_not_promoted():
