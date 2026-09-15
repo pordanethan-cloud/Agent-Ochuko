@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 import { wakeBackend } from '../utils/wakeBackend'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Eye, Code2, Folder, FolderPlus } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Eye, Code2, Folder, FolderPlus, Terminal } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -4268,9 +4268,31 @@ export const Dashboard: React.FC = () => {
       setIsWorkstationAccessEnabled(isNowAgent)
       localStorage.setItem('ochuko_workstation_access_enabled', isNowAgent ? 'true' : 'false')
       window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+      if (!isNowAgent) {
+        // Pattern B: Proactively shut down bridge daemon on mode exit to preserve laptop battery
+        fetch('http://127.0.0.1:3920/shutdown', { method: 'POST', mode: 'no-cors' }).catch(() => {})
+      }
       prevModeRef.current = mode
     }
   }, [mode])
+
+  const handleLaunchBridge = () => {
+    window.location.href = 'ochuko://start'
+    showToast('Launching Workstation Bridge on-demand (Pattern A)...', 'info')
+    let attempts = 0
+    const interval = setInterval(async () => {
+      attempts++
+      try {
+        const res = await fetch('http://127.0.0.1:3920/health', { signal: AbortSignal.timeout(800) })
+        if (res.ok) {
+          clearInterval(interval)
+          showToast('Workstation Bridge connected on port 3920!', 'info')
+          window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+        }
+      } catch {}
+      if (attempts >= 10) clearInterval(interval)
+    }, 600)
+  }
 
   useEffect(() => {
     const handleStorageChange = () => {
@@ -4291,15 +4313,10 @@ export const Dashboard: React.FC = () => {
     retrievePersistedDirHandle().then(async (handle) => {
       if (handle) {
         try {
-          // Verify permission if available
-          if (typeof handle.queryPermission === 'function') {
-            const perm = await handle.queryPermission({ mode: 'readwrite' })
-            if (perm === 'granted' || perm === 'prompt') {
-              ;(window as any)._ochuko_dir_handle = handle
-              setMountedFolderName(handle.name)
-              localStorage.setItem('ochuko_mounted_folder_name', handle.name)
-            }
-          } else {
+          // Chromium (the only engine that can persist directory handles) always
+          // exposes queryPermission — restore when access is granted or re-promptable.
+          const perm = await handle.queryPermission({ mode: 'readwrite' })
+          if (perm === 'granted' || perm === 'prompt') {
             ;(window as any)._ochuko_dir_handle = handle
             setMountedFolderName(handle.name)
             localStorage.setItem('ochuko_mounted_folder_name', handle.name)
@@ -6393,10 +6410,12 @@ export const Dashboard: React.FC = () => {
               const rootEntries: any[] = []
               let totalFolderItems = 0
               for await (const [eName, h] of (mountedHandle as any).entries()) {
-                if (eName.startsWith('.') && eName !== '.env') continue
                 totalFolderItems++
-                if (totalFolderItems <= 100) {
-                  const isDir = h.kind === 'directory'
+                if (totalFolderItems <= 120) {
+                  let isDir = false
+                  try {
+                    isDir = h.kind === 'directory'
+                  } catch {}
                   let sz = 0
                   let mt = Date.now()
                   if (!isDir) {
@@ -8447,6 +8466,17 @@ export const Dashboard: React.FC = () => {
                 ) : (
                   <FolderPlus className="w-2.5 h-2.5 text-[#8e95a2] ml-0.5" />
                 )}
+              </button>
+            )}
+            {mode === 'agent' && (
+              <button
+                type="button"
+                onClick={handleLaunchBridge}
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border transition active:scale-95 cursor-pointer select-none bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
+                title="Launch Workstation Bridge on-demand (Pattern A: ochuko://start). Shuts down automatically when idle (Pattern B)."
+              >
+                <Terminal className="w-3 h-3 text-indigo-400 shrink-0" />
+                <span>Bridge</span>
               </button>
             )}
           </div>

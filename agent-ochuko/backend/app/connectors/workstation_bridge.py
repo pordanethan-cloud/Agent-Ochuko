@@ -17,12 +17,25 @@ import shutil
 import getpass
 import platform
 import subprocess
+import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone
 from typing import Optional
 
 PORT = 3920
+LAST_ACTIVITY = time.time()
+
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
 
 _PROMPT_INJECTION_RE = re.compile(
     r"(?i)\b(ignore\s+(?:all\s+)?previous\s+instructions|"
@@ -228,6 +241,8 @@ class WorkstationBridgeHandler(BaseHTTPRequestHandler):
     """HTTP Request Handler for Workstation Bridge."""
 
     def _set_cors_headers(self, status=200, content_type="application/json"):
+        global LAST_ACTIVITY
+        LAST_ACTIVITY = time.time()
         self.send_response(status)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -261,6 +276,13 @@ class WorkstationBridgeHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data, indent=2).encode("utf-8"))
             return
 
+        # 1b. Proactive shutdown endpoint (Pattern B - Battery Saver)
+        elif path in ("/shutdown", "/stop"):
+            self._set_cors_headers(200)
+            self.wfile.write(json.dumps({"status": "shutting_down", "message": "Workstation bridge shutting down to preserve battery."}).encode("utf-8"))
+            threading.Thread(target=lambda: (time.sleep(0.3), os._exit(0)), daemon=True).start()
+            return
+
         # 2. List directory (compact token-efficient listing, max 25 items sorted newest first)
         elif path == "/list":
             target = params.get("path", ["."])[0]
@@ -279,39 +301,46 @@ class WorkstationBridgeHandler(BaseHTTPRequestHandler):
             try:
                 raw_entries = []
                 for item in os.scandir(resolved):
-                    if item.name.startswith(".") and item.name not in (".env", ".dockerignore", ".gitignore"):
-                        continue
-                    # Skip bloat dependency & build directories unless explicitly requested in pattern
-                    if item.is_dir() and item.name.lower() in _BLOAT_DIRS:
-                        if not pattern or item.name.lower() not in pattern:
-                            continue
-                    if pattern and pattern not in item.name.lower():
-                        continue
-                    is_d = item.is_dir()
                     try:
-                        st = item.stat()
-                        st_mtime = st.st_mtime
-                        size = st.st_size if not is_d else 0
-                        mtime_str = datetime.fromtimestamp(st_mtime).strftime("%Y-%m-%d %H:%M")
-                        rel_time = _format_relative_time(st_mtime)
-                        size_fmt = _format_size(size) if not is_d else "<DIR>"
-                    except Exception:
-                        st_mtime = 0
-                        size = 0
-                        mtime_str = ""
-                        rel_time = ""
-                        size_fmt = "<DIR>" if is_d else "0B"
+                        is_d = False
+                        try:
+                            is_d = item.is_dir()
+                        except Exception:
+                            pass
 
-                    raw_entries.append({
-                        "mtime_epoch": st_mtime,
-                        "name": item.name,
-                        "path": os.path.join(resolved, item.name),
-                        "is_dir": is_d,
-                        "size": size,
-                        "size_formatted": size_fmt,
-                        "modified": mtime_str,
-                        "relative_time": rel_time,
-                    })
+                        # Skip bloat dependency & build directories unless explicitly requested in pattern
+                        if is_d and item.name.lower() in _BLOAT_DIRS:
+                            if not pattern or item.name.lower() not in pattern:
+                                continue
+                        if pattern and pattern not in item.name.lower():
+                            continue
+
+                        try:
+                            st = item.stat()
+                            st_mtime = st.st_mtime
+                            size = st.st_size if not is_d else 0
+                            mtime_str = datetime.fromtimestamp(st_mtime).strftime("%Y-%m-%d %H:%M")
+                            rel_time = _format_relative_time(st_mtime)
+                            size_fmt = _format_size(size) if not is_d else "<DIR>"
+                        except Exception:
+                            st_mtime = 0
+                            size = 0
+                            mtime_str = ""
+                            rel_time = ""
+                            size_fmt = "<DIR>" if is_d else "0B"
+
+                        raw_entries.append({
+                            "mtime_epoch": st_mtime,
+                            "name": item.name,
+                            "path": os.path.join(resolved, item.name),
+                            "is_dir": is_d,
+                            "size": size,
+                            "size_formatted": size_fmt,
+                            "modified": mtime_str,
+                            "relative_time": rel_time,
+                        })
+                    except Exception:
+                        continue
 
                 # Sort by modification time descending (newest items first)
                 raw_entries.sort(key=lambda e: e["mtime_epoch"], reverse=True)
@@ -413,7 +442,22 @@ class WorkstationBridgeHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        content_length = int(self.headers.get("Content-Length", 0))
+        # 0. Proactive shutdown endpoint (Pattern B - Battery Saver)
+        if path in ("/shutdown", "/stop"):
+            self._set_cors_headers(200)
+            self.wfile.write(json.dumps({"status": "shutting_down", "message": "Workstation bridge shutting down to preserve battery."}).encode("utf-8"))
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
+            threading.Thread(target=lambda: (time.sleep(0.3), os._exit(0)), daemon=True).start()
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length") or 0)
+        except (ValueError, TypeError):
+            content_length = 0
+
         body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
         try:
             payload = json.loads(body)
@@ -523,11 +567,35 @@ class WorkstationBridgeHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         # Clean custom logging without spam
-        sys.stderr.write(f"[{datetime.now().strftime('%H:%M:%S')}] WorkstationBridge: {format % args}\n")
+        try:
+            if sys.stderr:
+                sys.stderr.write(f"[{datetime.now().strftime('%H:%M:%S')}] WorkstationBridge: {format % args}\n")
+        except Exception:
+            pass
 
 
-def run_bridge(port=PORT):
-    server = HTTPServer(("127.0.0.1", port), WorkstationBridgeHandler)
+def run_bridge(port=PORT, idle_timeout=900):
+    # Pattern B Idle Watchdog: Auto-terminate after 15m of zero requests to preserve battery
+    def _idle_watchdog():
+        while True:
+            time.sleep(30)
+            idle_seconds = time.time() - LAST_ACTIVITY
+            if idle_seconds > idle_timeout:
+                sys.stderr.write(
+                    f"\n[{datetime.now().strftime('%H:%M:%S')}] WorkstationBridge: Idle for {int(idle_seconds)}s "
+                    f"(limit: {idle_timeout}s). Auto-shutting down to preserve battery.\n"
+                )
+                os._exit(0)
+
+    watchdog = threading.Thread(target=_idle_watchdog, daemon=True)
+    watchdog.start()
+
+    try:
+        server = HTTPServer(("127.0.0.1", port), WorkstationBridgeHandler)
+    except OSError as e:
+        sys.stderr.write(f"[{datetime.now().strftime('%H:%M:%S')}] WorkstationBridge: Port {port} already bound ({e}). Existing instance active.\n")
+        return
+
     folders = get_standard_user_folders()
     print("=" * 60)
     print(" AGENT OCHUKO WORKSTATION COMPANION BRIDGE")
@@ -536,6 +604,7 @@ def run_bridge(port=PORT):
     print(f"Host:   {platform.node()} ({platform.system()} {platform.release()})")
     print(f"User:   {getpass.getuser()}")
     print(f"Downloads: {folders['downloads']}")
+    print(f"Battery Saver: Active (auto-exits after {idle_timeout // 60}m idle)")
     print("-" * 60)
     print("Agent Ochuko now has secure local read, write, and terminal access to your workstation.")
     print("Press Ctrl+C to stop.\n")
@@ -550,8 +619,21 @@ if __name__ == "__main__":
     import argparse
 
     _parser = argparse.ArgumentParser(description="Agent Ochuko Workstation Companion Bridge")
+    _parser.add_argument("uri", nargs="?", default="", help="Optional protocol URI (e.g. ochuko://start)")
     _parser.add_argument("--port", type=int, default=PORT)
     _parser.add_argument("--host", default="127.0.0.1")
-    _args = _parser.parse_args()
+    _args, _ = _parser.parse_known_args()
     PORT = _args.port
+
+    # If invoked via ochuko://stop or ochuko://shutdown, trigger shutdown of running bridge
+    if _args.uri and any(k in _args.uri.lower() for k in ("stop", "shutdown")):
+        import urllib.request
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{PORT}/shutdown", data=b"{}", headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=2)
+            sys.stderr.write("Workstation bridge shutdown signal sent.\n")
+        except Exception:
+            pass
+        sys.exit(0)
+
     run_bridge(port=_args.port)
