@@ -859,14 +859,32 @@ class AgentTaskManager:
                     arguments=args,
                     conversation_id=self.task.conversation_id,
                 )
-                is_err = str(output).startswith("Error") or "Invalid MCP" in str(output)
+                out_str = str(output)
+                # A "Workstation Notice" is an ACCESS FAILURE, not a result.
+                # Previously it returned success=True, hiding real failures from
+                # the mini-OODA stall detector, replan, and scratchpad (soft
+                # fake-success — Think-vs-Agent root cause #5).
+                ws_notice = out_str.startswith("Workstation Notice")
+                is_err = out_str.startswith("Error") or "Invalid MCP" in out_str or ws_notice
+                summary = out_str[:500]
+                if ws_notice:
+                    ws_enabled = bool(self.config.get("workstation_access_enabled", False))
+                    blocker = "Companion Bridge daemon not reachable"
+                    if not ws_enabled:
+                        blocker = "Workstation Access toggle is OFF and the Companion Bridge daemon is not reachable"
+                    summary = f"Workstation access blocked for step {step.index} ({blocker}). {out_str}"[:500]
+                    self._write_note(
+                        "decision",
+                        f"Workstation tool '{step.tool_name}' blocked: {blocker}. Path: {args.get('path', 'n/a')}",
+                        step_index=step.index,
+                    )
                 return StepResult(
                     success=not is_err,
-                    summary=str(output)[:500],
+                    summary=summary,
                     artifacts=[],
                     token_spend=120,
-                    raw_length=len(str(output)),
-                    error=str(output) if is_err else None,
+                    raw_length=len(out_str),
+                    error=out_str if is_err else None,
                 )
 
             elif step.tool_name in ("gmail_search", "gmail_read", "gmail_send"):
@@ -1160,6 +1178,24 @@ class AgentTaskManager:
                     fname = os.path.basename(target_path.replace("\\", "/"))
                     res_str = await sandbox_read_file(self.task.conversation_id or "default", fname)
                 is_err = not res_str or "sandbox_read error" in res_str
+                if is_err and len(target_path) > 2 and target_path[1] == ":":
+                    # Host-path read with bridge unreachable: actionable notice
+                    # (mirrors WorkstationMCP.read_file) + scratchpad decision.
+                    from app.connectors.workstation_mcp import _workstation_unreachable_notice
+                    notice = _workstation_unreachable_notice(target_path)
+                    self._write_note(
+                        "decision",
+                        f"Workstation read blocked (bridge unreachable): {target_path}",
+                        step_index=step.index,
+                    )
+                    return StepResult(
+                        success=False,
+                        summary=notice[:400],
+                        artifacts=[],
+                        token_spend=80,
+                        raw_length=len(res_str),
+                        error=notice,
+                    )
                 return StepResult(
                     success=not is_err,
                     summary=res_str[:400] if not is_err else f"Could not read workstation file {target_path}",

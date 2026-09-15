@@ -102,6 +102,27 @@ def _backup_file(filepath: str) -> Optional[str]:
         return None
 
 
+def _workstation_unreachable_notice(path: str) -> str:
+    """
+    Distinct, actionable notice fired when a host path cannot be accessed
+    because the local Companion Bridge (http://127.0.0.1:3920) returned no
+    data AND the path does not exist on the backend's own filesystem.
+
+    The leading 'Workstation Notice:' marker is a cross-module contract:
+    AgentTaskManager._execute_single_step classifies any output starting
+    with it as a step FAILURE (not a success) so mini-OODA, replan, and the
+    Phase 9 scratchpad can react to it.
+    """
+    return (
+        f"Workstation Notice: '{path}' is on your physical computer, but the local "
+        f"Companion Bridge (http://127.0.0.1:3920) is unreachable from this server. "
+        f"Fix: (1) keep Workstation Access toggled ON in Settings; "
+        f"(2) start the Companion Bridge daemon on your PC (run backend/app/connectors/workstation_bridge.py); "
+        f"(3) if the backend runs in the cloud, it cannot reach a loopback-only bridge — run the backend "
+        f"locally (co-located with this PC) or use a bridge relay, then retry."
+    )
+
+
 class WorkstationMCP:
     """
     Model Context Protocol (MCP) server for Local Workstation Computer Access.
@@ -343,10 +364,7 @@ class WorkstationMCP:
 
             if not os.path.exists(safe_p):
                 if (len(path) > 2 and path[1] == ":") or "downloads" in path.lower() or "desktop" in path.lower():
-                    return (
-                        f"Workstation Notice: '{path}' is located on your physical computer. "
-                        f"To access it, please ensure Workstation Access is toggled ON in Settings."
-                    )
+                    return _workstation_unreachable_notice(path)
                 return f"Error: File '{path}' does not exist on workstation."
             if os.path.isdir(safe_p):
                 return f"Error: '{path}' is a directory, not a file. Use workstation_list_directory instead."
@@ -537,10 +555,7 @@ class WorkstationMCP:
                                 pass
 
                 if (len(path) > 2 and path[1] == ":") or "downloads" in path.lower() or "desktop" in path.lower():
-                    return (
-                        f"Workstation Notice: '{path}' is located on your physical computer. "
-                        f"To access it, please ensure Workstation Access is toggled ON in Settings."
-                    )
+                    return _workstation_unreachable_notice(path)
                 return f"Error: Directory '{path}' does not exist."
             if not os.path.isdir(safe_p):
                 return f"Error: '{path}' is a file, not a directory. Use workstation_read_file instead."

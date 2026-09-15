@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 import { wakeBackend } from '../utils/wakeBackend'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Eye, Code2 } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Eye, Code2, Folder, FolderPlus } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -3948,6 +3948,54 @@ const saveConvoCache = (userId: string | null, id: string, messages: Message[], 
   }
 }
 
+// ── IndexedDB Directory Handle Persistence ──────────────────────────────────
+const IDB_FS_NAME = 'ochuko_fs_store'
+const IDB_FS_STORE = 'handles'
+const IDB_FS_KEY = 'mounted_dir_handle'
+
+function openDirHandleDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_FS_NAME, 1)
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(IDB_FS_STORE)
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function persistDirHandle(handle: any): Promise<void> {
+  try {
+    const db = await openDirHandleDB()
+    const tx = db.transaction(IDB_FS_STORE, 'readwrite')
+    tx.objectStore(IDB_FS_STORE).put(handle, IDB_FS_KEY)
+  } catch (err) {
+    console.warn('Could not persist dir handle to IndexedDB:', err)
+  }
+}
+
+async function retrievePersistedDirHandle(): Promise<any | null> {
+  try {
+    const db = await openDirHandleDB()
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_FS_STORE, 'readonly')
+      const req = tx.objectStore(IDB_FS_STORE).get(IDB_FS_KEY)
+      req.onsuccess = () => resolve(req.result || null)
+      req.onerror = () => resolve(null)
+    })
+  } catch {
+    return null
+  }
+}
+
+async function clearPersistedDirHandle(): Promise<void> {
+  try {
+    const db = await openDirHandleDB()
+    const tx = db.transaction(IDB_FS_STORE, 'readwrite')
+    tx.objectStore(IDB_FS_STORE).delete(IDB_FS_KEY)
+  } catch {}
+}
+
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -4206,19 +4254,104 @@ export const Dashboard: React.FC = () => {
   const [isWorkstationAccessEnabled, setIsWorkstationAccessEnabled] = useState<boolean>(() => {
     return localStorage.getItem('ochuko_workstation_access_enabled') === 'true'
   })
+  const [mountedFolderName, setMountedFolderName] = useState<string | null>(() => {
+    return localStorage.getItem('ochuko_mounted_folder_name')
+  })
   const headerSettingsRef = useRef<HTMLDivElement>(null)
+
+  // Auto-sync Workstation Access with mode transitions:
+  // Automatically turns ON in Agent Mode, and turns OFF when switching to Think/Solve/Discuss.
+  const prevModeRef = useRef(mode)
+  useEffect(() => {
+    if (prevModeRef.current !== mode) {
+      const isNowAgent = mode === 'agent'
+      setIsWorkstationAccessEnabled(isNowAgent)
+      localStorage.setItem('ochuko_workstation_access_enabled', isNowAgent ? 'true' : 'false')
+      window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+      prevModeRef.current = mode
+    }
+  }, [mode])
 
   useEffect(() => {
     const handleStorageChange = () => {
       setIsWorkstationAccessEnabled(localStorage.getItem('ochuko_workstation_access_enabled') === 'true')
     }
+    const handleFolderMounted = (e: any) => {
+      setMountedFolderName(e.detail?.folderName || localStorage.getItem('ochuko_mounted_folder_name'))
+    }
+    const handleFolderUnmounted = () => {
+      setMountedFolderName(null)
+    }
     window.addEventListener('storage', handleStorageChange)
     window.addEventListener('ochuko_workstation_access_changed', handleStorageChange)
+    window.addEventListener('ochuko_folder_mounted', handleFolderMounted)
+    window.addEventListener('ochuko_folder_unmounted', handleFolderUnmounted)
+
+    // Restore persisted folder handle from IndexedDB on page reload
+    retrievePersistedDirHandle().then(async (handle) => {
+      if (handle) {
+        try {
+          // Verify permission if available
+          if (typeof handle.queryPermission === 'function') {
+            const perm = await handle.queryPermission({ mode: 'readwrite' })
+            if (perm === 'granted' || perm === 'prompt') {
+              ;(window as any)._ochuko_dir_handle = handle
+              setMountedFolderName(handle.name)
+              localStorage.setItem('ochuko_mounted_folder_name', handle.name)
+            }
+          } else {
+            ;(window as any)._ochuko_dir_handle = handle
+            setMountedFolderName(handle.name)
+            localStorage.setItem('ochuko_mounted_folder_name', handle.name)
+          }
+        } catch {
+          // Handle expired or browser permission revoked
+        }
+      }
+    })
+
     return () => {
       window.removeEventListener('storage', handleStorageChange)
       window.removeEventListener('ochuko_workstation_access_changed', handleStorageChange)
+      window.removeEventListener('ochuko_folder_mounted', handleFolderMounted)
+      window.removeEventListener('ochuko_folder_unmounted', handleFolderUnmounted)
     }
   }, [])
+
+  const handleMountFolder = async () => {
+    try {
+      if (!('showDirectoryPicker' in window)) {
+        showToast('File System Access API is not supported in this browser. Please use Chrome, Edge, or Brave.', 'error')
+        return
+      }
+      const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' })
+      if (dirHandle) {
+        ;(window as any)._ochuko_dir_handle = dirHandle
+        const folderName = dirHandle.name
+        setMountedFolderName(folderName)
+        localStorage.setItem('ochuko_mounted_folder_name', folderName)
+        await persistDirHandle(dirHandle)
+        window.dispatchEvent(
+          new CustomEvent('ochuko_folder_mounted', { detail: { folderName, dirHandle } })
+        )
+        showToast(`Full PC directory access granted: '${folderName}'`, 'info')
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('Failed to mount folder:', err)
+        showToast('Could not mount folder', 'error')
+      }
+    }
+  }
+
+  const handleUnmountFolder = async () => {
+    delete (window as any)._ochuko_dir_handle
+    setMountedFolderName(null)
+    localStorage.removeItem('ochuko_mounted_folder_name')
+    await clearPersistedDirHandle()
+    window.dispatchEvent(new Event('ochuko_folder_unmounted'))
+    showToast('Local folder unmounted', 'info')
+  }
 
   useEffect(() => {
     if (!isHeaderSettingsOpen) return
@@ -6252,6 +6385,72 @@ export const Dashboard: React.FC = () => {
 
           const candidatePaths = Array.from(new Set([...quotedMatches, ...rawPathMatches, ...aliasMatches]))
 
+          // ── Tier 1: HTML5 File System Access API (window.showDirectoryPicker) ──
+          // Directly read from user's mounted folder handle in the browser (Zero local python daemon needed)
+          const mountedHandle = (window as any)._ochuko_dir_handle
+          if (mountedHandle) {
+            try {
+              const rootEntries: any[] = []
+              let totalFolderItems = 0
+              for await (const [eName, h] of (mountedHandle as any).entries()) {
+                if (eName.startsWith('.') && eName !== '.env') continue
+                totalFolderItems++
+                if (totalFolderItems <= 100) {
+                  const isDir = h.kind === 'directory'
+                  let sz = 0
+                  let mt = Date.now()
+                  if (!isDir) {
+                    try {
+                      const f = await h.getFile()
+                      sz = f.size
+                      mt = f.lastModified
+                    } catch {}
+                  }
+                  rootEntries.push({
+                    name: eName,
+                    is_dir: isDir,
+                    size: sz,
+                    modified: new Date(mt).toISOString(),
+                    relative_time: 'local disk',
+                    size_formatted: sz < 1024 ? `${sz}B` : sz < 1024 * 1024 ? `${Math.round(sz / 1024)}KB` : `${(sz / (1024 * 1024)).toFixed(1)}MB`,
+                  })
+                }
+              }
+              workstationDirs.push({
+                path: mountedHandle.name,
+                resolved_path: `[Mounted Local Folder] ${mountedHandle.name}`,
+                total_count: totalFolderItems,
+                entries: rootEntries,
+              })
+              const entryLines = rootEntries.map((e: any) => {
+                const prefix = e.is_dir ? '[DIR]' : '[FILE]'
+                return `${prefix} ${e.name} (${e.size_formatted}, modified: ${e.modified})`
+              }).join('\n')
+              const countNotice = totalFolderItems > 100 ? ` (showing 100 of ${totalFolderItems} items)` : ` (${totalFolderItems} items)`
+              workstationFiles.push({
+                path: `workstation_folder_inventory.txt`,
+                content: `=== WORKSTATION DIRECTORY INVENTORY: ${mountedHandle.name} (HTML5 File System Access API) ===\nTotal items: ${totalFolderItems}${countNotice}\n\n${entryLines}`,
+              })
+
+              // If candidate paths or referenced filenames match any file in mountedHandle, read content directly
+              for (const candPath of candidatePaths) {
+                const cleanBase = candPath.split(/[\\/]/).pop()?.trim()
+                if (cleanBase) {
+                  try {
+                    const fh = await mountedHandle.getFileHandle(cleanBase)
+                    const f = await fh.getFile()
+                    if (f.size <= 500000) { // Max 500KB text pre-fetch
+                      const txt = await f.text()
+                      workstationFiles.push({ path: cleanBase, content: txt })
+                    }
+                  } catch {}
+                }
+              }
+            } catch (mErr) {
+              console.warn('Mounted folder handle read error:', mErr)
+            }
+          }
+
           if (candidatePaths.length > 0) {
             for (const candPath of candidatePaths.slice(0, 6)) {
               try {
@@ -6301,6 +6500,45 @@ export const Dashboard: React.FC = () => {
               } catch {
                 // Bridge not reachable or timeout — non-blocking
               }
+            }
+          }
+
+          // ── Persistent Full PC Access on Toggle ──
+          // If Workstation Access is active and no specific directory was queried yet,
+          // automatically probe the bridge for the user's primary folders (Documents, Downloads, Desktop)
+          // so the agent ALWAYS has full visibility into the PC file structure.
+          if (workstationDirs.length === 0) {
+            try {
+              const hCtrl = new AbortController()
+              const hTimeout = setTimeout(() => hCtrl.abort(), 1200)
+              const hRes = await fetch('http://127.0.0.1:3920/health', { signal: hCtrl.signal })
+              clearTimeout(hTimeout)
+              if (hRes.ok) {
+                const bInfo = await hRes.json()
+                // Fetch Documents overview by default
+                const dRes = await fetch('http://127.0.0.1:3920/list?path=documents', { signal: AbortSignal.timeout(1800) })
+                if (dRes.ok) {
+                  const dJson = await dRes.json()
+                  if (dJson && dJson.success && Array.isArray(dJson.entries)) {
+                    workstationDirs.push({
+                      path: 'documents',
+                      resolved_path: dJson.resolved_path,
+                      total_count: dJson.total_count || dJson.entries.length,
+                      entries: dJson.entries,
+                    })
+                    const entryLines = dJson.entries.map((e: any) => {
+                      const prefix = e.is_dir ? '[DIR]' : '[FILE]'
+                      return `${prefix} ${e.name} (${e.size_formatted || e.size + 'B'}, modified: ${e.relative_time || e.modified})`
+                    }).join('\n')
+                    workstationFiles.push({
+                      path: `workstation_folder_inventory.txt`,
+                      content: `=== WORKSTATION DIRECTORY INVENTORY: ${dJson.resolved_path} (Host PC Documents Root) ===\nTotal items: ${dJson.total_count || dJson.entries.length}\nPlatform: ${bInfo.platform || 'Host'} | User: ${bInfo.username || 'Current'}\n\n${entryLines}`,
+                    })
+                  }
+                }
+              }
+            } catch {
+              // Bridge not reachable or timeout — non-blocking
             }
           }
         } catch {
@@ -8189,6 +8427,28 @@ export const Dashboard: React.FC = () => {
                 )
               })}
             </div>
+            {mode === 'agent' && (
+              <button
+                type="button"
+                onClick={mountedFolderName ? handleUnmountFolder : handleMountFolder}
+                className={`hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border transition active:scale-95 cursor-pointer select-none ${
+                  mountedFolderName
+                    ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300 shadow-sm shadow-cyan-500/20'
+                    : 'bg-white/[0.05] border-white/[0.1] text-[#8e95a2] hover:text-white hover:bg-white/[0.08]'
+                }`}
+                title={mountedFolderName ? `Mounted: ${mountedFolderName}. Click to unmount.` : "Mount local folder via HTML5 File System Access API (Zero setup)"}
+              >
+                <Folder className="w-3 h-3 text-cyan-400 shrink-0" />
+                <span className="truncate max-w-[110px]">
+                  {mountedFolderName || 'Mount Folder'}
+                </span>
+                {mountedFolderName ? (
+                  <X className="w-2.5 h-2.5 text-cyan-400/70 hover:text-white ml-0.5" />
+                ) : (
+                  <FolderPlus className="w-2.5 h-2.5 text-[#8e95a2] ml-0.5" />
+                )}
+              </button>
+            )}
           </div>
 
           {/* Right Side: Stop/Send Actions */}

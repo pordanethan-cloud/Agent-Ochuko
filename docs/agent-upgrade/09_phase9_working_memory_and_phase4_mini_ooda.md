@@ -91,3 +91,27 @@ The rigidity constraint: *information loss between steps*. `step_results` keeps 
 3. **Stall breaker skips hopeless re-execution**: forced closure feeds the replan path instead of burning the final attempt on the same failing tool.
 4. **Scratchpad notes**: new prompt sections (`WORKING MEMORY`) appear in step + synthesis payloads when the board is non-empty — additive; empty boards produce byte-identical prompts.
 
+## 6. Addendum — live validation finding: workstation notice soft fake-success (root cause #5)
+
+The planned live validation ("Look up my books folder") failed in the field. Diagnosis pinned down by direct code audit + live probes:
+
+1. **Companion Bridge daemon was not running** (`http://127.0.0.1:3920/health` refused). The browser pre-fetch relay (`Dashboard.tsx` → bridge → `workstation_dirs`/`workstation_folder_inventory.txt` cached into the backend workspace, `chat.py`) therefore contributed **zero** cache files.
+2. The executing backend **could not see `C:\Users` on its own filesystem** (the "Workstation Notice" fires only when the resolved path doesn't exist locally) → the backend was the **remote deployment**. Architectural fact: `WorkstationMCP._query_bridge` targets `127.0.0.1:3920` **of the backend server**; a loopback-bound bridge on the user's PC is unreachable from a cloud backend even when running.
+3. **Soft fake-success**: `agent_task_manager.py` generic `mcp_*` dispatch classified errors via `str(output).startswith("Error")` — the output starts with `"Workstation Notice:"`, so the blocked step returned **`success=True`**. Mini-OODA stall detection, replan, and the Phase 9 scratchpad never saw the failure (validating the audit-trail design: nothing to capture, because the step *looked* successful).
+4. **Misleading copy**: the notice said "ensure Workstation Access is toggled ON in Settings" while the toggle was on — three distinct failure modes (toggle off / bridge daemon down / bridge unreachable from remote backend) collapsed into one wrong instruction.
+
+**Fixes shipped (this batch):**
+
+- `workstation_mcp.py`: `_workstation_unreachable_notice(path)` — distinct, actionable copy at both sites (`read_file`, `list_directory`); names the Companion Bridge, the daemon start command, and the backend co-location constraint. The `"Workstation Notice:"` prefix is now a **documented cross-module contract**.
+- `agent_task_manager.py`: both workstation dispatch paths (generic `mcp_*` branch and dedicated `mcp_workstation_read` branch) classify the notice as a step **failure**, surface blocker copy (`Companion Bridge daemon not reachable` vs `toggle is OFF and …`), and write a scratchpad `decision` note (new 8th/9th capture points).
+- `tests/test_workstation_notice.py`: 4 tests pinning notice copy, failure classification, scratchpad capture, and toggle-state blocker copy.
+
+**Recorded follow-ups (Phase C, architecture):** browser-relayed reads or a bridge dial-out/tunnel so a cloud backend can serve Workstation Access; plus the pre-existing executor-roster gap (§2 root cause #1 — missing dispatch branches for `fetch_url`, `memory_save/recall/edit`, `terminal`, `generate_image`, `fetch_stock_image`).
+
+**Additional latent bugs found during this batch (recorded, not fixed):**
+
+- `MCPRegistry` is a process-wide **singleton** (`__new__` + `_initialized` guard) whose `__init__` silently ignores `workspace_root` on every construction after the first — any caller passing a different workspace root gets the first caller's root. Manager tests now patch the whole class to avoid instantiating it.
+- The dedicated `mcp_workstation_read`/`workstation_read` dispatch branch in `_execute_single_step` is **unreachable**: the earlier generic `mcp_*`/`workstation_*` `startswith` branch catches every such name first. The branch's new notice handling is defense-in-depth only; the classification fix lives in the generic branch.
+
+**Live validation runbook (Phase B, user actions):** run migration `030` in Supabase; start the Companion Bridge daemon on the PC; run the **backend locally** (co-located); re-run "Look up my books folder" in Agent Mode and confirm: steps dispatch through the bridge, scratchpad entries accumulate (incl. any `decision` notes), persist via `save_state`, and appear in step prompts + synthesis.
+

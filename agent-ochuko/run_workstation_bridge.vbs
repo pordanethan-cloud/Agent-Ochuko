@@ -15,5 +15,11 @@ Else
 End If
 
 ' Run Python workstation bridge hidden (0 = hide window, False = do not wait)
-cmd = "cmd /c python -m app.connectors.workstation_bridge"
+venvPy = backendDir & "\.venv\Scripts\python.exe"
+If fso.FileExists(venvPy) Then
+    cmd = """" & venvPy & """ -m app.connectors.workstation_bridge"
+Else
+    cmd = "cmd /c python -m app.connectors.workstation_bridge"
+End If
+
 WshShell.Run cmd, 0, False
