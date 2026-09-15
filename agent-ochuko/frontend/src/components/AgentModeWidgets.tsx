@@ -55,6 +55,12 @@ export interface PlanStepItem {
   error?: string
   adapted_reasoning?: string
   previous_tool?: string
+  // Phase 4: per-step mini-OODA stream (agent_step_ooda SSE)
+  ooda_attempts?: number
+  ooda_extensions?: number
+  ooda_pivot?: boolean
+  ooda_stall_breaker?: boolean
+  ooda_reasoning?: string
 }
 
 export interface AgentTaskData {
@@ -369,7 +375,7 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
           const isRunning = step.status === 'running' || (!isDone && !isFailed && !isSkipped && step.index === currentStep && task.state === 'executing')
           const isExpanded = expandedSteps.has(step.index)
           const phase = oodaPhase(step)
-          const hasDetail = !!(step.result_summary || step.adapted_reasoning)
+          const hasDetail = !!(step.result_summary || step.adapted_reasoning || step.ooda_reasoning)
 
           return (
             <div
@@ -412,6 +418,19 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
                       Adapted: {step.previous_tool || 'tool'} → {step.tool_name}
                     </span>
                   )}
+                  {(step.ooda_attempts ?? 0) > 1 && (
+                    <span
+                      className={`ml-2 inline-flex items-center text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                        step.ooda_stall_breaker
+                          ? 'text-brand-err/80 bg-brand-err/[0.06] border-brand-err/20'
+                          : 'text-white/55 bg-white/[0.04] border-brand-border'
+                      }`}
+                    >
+                      OODA ×{step.ooda_attempts}
+                      {(step.ooda_extensions ?? 0) > 0 ? ` +${step.ooda_extensions}` : ''}
+                      {step.ooda_stall_breaker ? ' · stalled' : ''}
+                    </span>
+                  )}
                 </p>
 
                 {/* Right: duration + chevron */}
@@ -434,6 +453,15 @@ export const AgentExecutionStepper: React.FC<AgentExecutionStepperProps> = ({
                     <div className="text-[11px] text-white/70 leading-relaxed border-l-2 border-brand-accent/35 pl-2.5 ml-[7px] bg-white/[0.02] py-1 pr-2 rounded-r">
                       <span className="font-semibold text-brand-accent/85">Adapted — </span>
                       {step.adapted_reasoning}
+                    </div>
+                  )}
+                  {step.ooda_reasoning && (
+                    <div className="text-[11px] text-white/60 leading-relaxed border-l-2 border-brand-border pl-2.5 ml-[7px] bg-white/[0.02] py-1 pr-2 rounded-r">
+                      <span className="font-semibold text-white/75">
+                        OODA attempt {step.ooda_attempts ?? '—'}
+                        {step.ooda_pivot ? ' (pivot)' : ''} —{' '}
+                      </span>
+                      {step.ooda_reasoning}
                     </div>
                   )}
                   {step.result_summary && (
@@ -850,15 +878,7 @@ function buildAgentFileTree(items: AgentArtifactItem[]): AgentFileNode[] {
 export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifacts, onOpen }) => {
   const [expanded, setExpanded] = useState(false)
 
-  const files = artifacts.filter((a) => a.filename)
-  if (files.length === 0) return null
-
-  const formatSize = (bytes?: number): string => {
-    if (!bytes || bytes <= 0) return ''
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }
+  const files = useMemo(() => artifacts.filter((a) => a.filename), [artifacts])
 
   const tree = useMemo(() => buildAgentFileTree(files), [files])
 
@@ -883,6 +903,15 @@ export const AgentFileChangesCard: React.FC<AgentFileChangesProps> = ({ artifact
   useEffect(() => {
     setOpenFolders(new Set(allFolderPaths))
   }, [allFolderPaths])
+
+  if (files.length === 0) return null
+
+  const formatSize = (bytes?: number): string => {
+    if (!bytes || bytes <= 0) return ''
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
 
   const toggleFolder = (p: string) => {
     setOpenFolders((prev) => {

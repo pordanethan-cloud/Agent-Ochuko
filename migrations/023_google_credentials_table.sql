@@ -1,4 +1,4 @@
--- scripts/023_google_credentials_table.sql
+-- migrations/023_google_credentials_table.sql
 -- Creates the user_google_credentials table and sync trigger to store OAuth refresh tokens.
 
 create table if not exists public.user_google_credentials (

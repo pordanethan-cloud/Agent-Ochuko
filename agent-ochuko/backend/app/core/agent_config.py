@@ -8,11 +8,20 @@ without a redeploy.
 
 Settings exposed:
   AGENT_LOOP_ENABLED         Feature flag — disables agentic loop globally if "false"
-  MAX_AGENT_ITERATIONS       Hard cap on OODA loop iterations (default: 10)
-  MAX_AGENT_ITERS_THINK      Per-mode cap for THINK mode (default: 10)
+  MAX_AGENT_ITERATIONS       Hard cap on OODA loop iterations (default: 25)
+  MAX_AGENT_ITERS_THINK      Per-mode cap for THINK mode (default: 25 — Phase 2 raise)
   MAX_AGENT_ITERS_SOLVE      Per-mode cap for SOLVE mode  (default: 6)
   MAX_AGENT_ITERS_DISCUSS    Per-mode cap for DISCUSS mode (default: 1)
   AGENT_STEP_TIMEOUT_SECS    Per-iteration timeout in seconds (default: 90)
+
+OODA soft-cap dynamics (Phase 2, Claude-parity):
+  OODA_GRACE_ITERS           Iterations granted per budget extension while the
+                             loop keeps making tool-call progress (default 3)
+  OODA_HARD_CEIL_MULT        Hard ceiling = nominal cap × multiplier (default 2);
+                             forced tool_choice="none" fires only at this backstop
+                             or on a stall, never while progress continues
+  OODA_STALL_LIMIT           Consecutive failed-tool iterations before the stall
+                             circuit breaker forces a synthesis turn (default 2)
 
 Agent Mode Settings:
   AGENT_MODE_ENABLED         Feature flag for autonomous Agent Mode (default: true)
@@ -70,6 +79,32 @@ async def is_agent_loop_enabled() -> bool:
     return val.lower() != "false"
 
 
+async def get_native_toolloop_enabled() -> bool:
+    """
+    Phase 1a: when True (default), the conversational OODA loop preserves the
+    model's tool calls as native Responses API `function_call` items and feeds
+    results back as `function_call_output` items (call_id-paired) instead of
+    flattening both to text. Claude-parity tool_use/tool_result shape.
+    Set AGENT_NATIVE_TOOLLOOP='false' to restore the legacy text flattening.
+    """
+    raw = await get_config("AGENT_NATIVE_TOOLLOOP", "true")
+    return str(raw).strip().lower() not in ("false", "0", "off", "no")
+
+
+async def get_stateful_chain_enabled() -> bool:
+    """
+    Phase 1b: when True, loop iterations after the first chain off the prior
+    response via previous_response_id and send ONLY the new function_call_output
+    items, instead of replaying the full transcript every iteration. Requires
+    the native toolloop (AGENT_NATIVE_TOOLLOOP) and server-side response
+    storage. Default ON — shipped to production after live validation; a
+    one-shot degrade to full-transcript replay is built into the loop for any
+    rejected chained call. Set AGENT_STATEFUL_CHAIN='false' to disable.
+    """
+    raw = await get_config("AGENT_STATEFUL_CHAIN", "true")
+    return str(raw).strip().lower() not in ("false", "0", "off", "no")
+
+
 async def get_max_iterations(mode: str = "think") -> int:
     """
     Returns the max OODA loop iterations for the given routing mode.
@@ -82,7 +117,7 @@ async def get_max_iterations(mode: str = "think") -> int:
         global_cap = 10
 
     mode_key_map = {
-        "think":   ("MAX_AGENT_ITERS_THINK",  str(global_cap)),
+        "think":   ("MAX_AGENT_ITERS_THINK",  "25"),  # Phase 2: 10 → 25
         "solve":   ("MAX_AGENT_ITERS_SOLVE",  "6"),
         "discuss": ("MAX_AGENT_ITERS_DISCUSS", "3"),
         "nano":    ("MAX_AGENT_ITERS_DISCUSS", "3"),
@@ -101,6 +136,30 @@ async def get_max_iterations(mode: str = "think") -> int:
     # Phase 5: "0" means UNLIMITED (agent mode never capped on steps).
     # Callers treat 0 as unbounded (see chat_stream_generator).
     return 0 if parsed == 0 else max(1, parsed)
+
+
+async def get_ooda_dynamics() -> Dict[str, int]:
+    """
+    Phase 2 soft-cap dynamics — all runtime-tunable via App Config:
+      OODA_GRACE_ITERS    grace iterations granted per budget extension while
+                          the loop keeps making tool-call progress (default 3)
+      OODA_HARD_CEIL_MULT hard ceiling = nominal cap × multiplier (default 2);
+                          forced tool_choice="none" fires only at this backstop
+                          or on a stall — never while progress continues
+      OODA_STALL_LIMIT    consecutive failed-tool iterations before the stall
+                          breaker forces a synthesis turn (default 2)
+    """
+    async def _int(key: str, default: int, lo: int) -> int:
+        raw = await get_config(key, str(default))
+        try:
+            return max(lo, int(raw))
+        except (ValueError, TypeError):
+            return default
+
+    grace = await _int("OODA_GRACE_ITERS", 3, 1)
+    mult = await _int("OODA_HARD_CEIL_MULT", 2, 1)
+    stall = await _int("OODA_STALL_LIMIT", 2, 1)
+    return {"grace_iters": grace, "hard_ceil_mult": mult, "stall_limit": stall}
 
 
 async def get_terminal_timeout() -> int:

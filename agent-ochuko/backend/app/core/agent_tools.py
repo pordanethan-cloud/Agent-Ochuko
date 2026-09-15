@@ -32,6 +32,47 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
     *WIDGET_TOOLS,
     {
         "type": "function",
+        "name": "update_todo",
+        "description": (
+            "Maintain a visible task checklist while working (Claude Code-style "
+            "TodoWrite). Call this to (re)state your working plan as a list of "
+            "todo items with statuses. Rules:\n"
+            "- Send the FULL list every time (it replaces the previous one).\n"
+            "- Mark items 'completed' ONLY after the work is verified done.\n"
+            "- Keep exactly ONE item 'in_progress' at a time; everything else is "
+            "'pending' or 'completed'.\n"
+            "- Items must be concrete, actionable steps (not vague categories).\n"
+            "- Call again whenever the plan changes or an item completes, so the "
+            "user always sees live progress."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "description": "The complete task list in execution order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Imperative, specific step description (e.g. 'Fetch weather data for Seattle').",
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed"],
+                                "description": "Item state: pending | in_progress | completed.",
+                            },
+                        },
+                        "required": ["content", "status"],
+                    },
+                }
+            },
+            "required": ["todos"],
+        },
+    },
+    {
+        "type": "function",
         "name": "search_web",
         "description": (
             "Search the web for current, real-time information. "

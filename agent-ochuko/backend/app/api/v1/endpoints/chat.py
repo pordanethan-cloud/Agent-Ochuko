@@ -30,6 +30,14 @@ from app.core.circuit_breaker import create_turn_circuit_breaker
 from app.core.prompt_defense import prompt_defense
 from app.core.reflexion_engine import create_reflexion_engine
 from app.core.agent_tools import AGENT_TOOLS
+from app.core.agent_ooda import (
+    OODASoftCap,
+    OODATurnTelemetry,
+    build_observations,
+    normalize_todo_list,
+    todo_summary,
+    tool_output_failed,
+)
 from app.core.category_gate import route_tools as _route_tools
 from app.core.memory_guard import check_pii, apply_memory_edit, describe_memory_version_conflict
 
@@ -1057,6 +1065,11 @@ def normalize_responses_message(msg: Dict[str, Any]) -> Dict[str, Any]:
       - Converts legacy 'type': 'text' -> 'input_text' / collapsed string.
       - Converts legacy 'type': 'image_url' -> 'input_image'.
     """
+    # Phase 1a: native tool-protocol items pass through untouched — they are
+    # already valid Responses API input items (a function_call pairs with its
+    # function_call_output via call_id).
+    if msg.get("type") in ("function_call", "function_call_output"):
+        return msg
     role = msg.get("role", "user")
     if role not in ("user", "assistant", "system", "developer"):
         role = "user"
@@ -1719,6 +1732,20 @@ async def chat_stream_generator(
         # uses a large sentinel so duration, not step count, is the ceiling.
         effective_max_iterations = max_iterations if max_iterations > 0 else 100000
         output_budget = await get_max_output_tokens(routing_mode)
+        # Phase 1a/1b: native tool protocol + stateful chaining flags.
+        from app.core.agent_config import (
+            get_native_toolloop_enabled,
+            get_stateful_chain_enabled,
+        )
+        from app.core.agent_tool_protocol import (
+            collect_chain_batch,
+            text_mirror_history,
+        )
+        native_toolloop = await get_native_toolloop_enabled()
+        stateful_chain = native_toolloop and await get_stateful_chain_enabled()
+        chain_degraded = False    # flips True after a failed chained attempt
+        chain_retry_used = False  # one-shot degrade per turn
+        chain_cursor = 0          # index into local_messages acknowledged by the server
         logger.info(
             "Agent loop budget: mode=%s iterations=%s output_tokens=%s",
             routing_mode,
@@ -1728,6 +1755,26 @@ async def chat_stream_generator(
         circuit_breaker = create_turn_circuit_breaker(max_steps=effective_max_iterations)
         reflexion = create_reflexion_engine(max_attempts=max_iterations if max_iterations > 0 else 3)
         active_tool_step = 0
+
+        # ── Phase 2: soft-cap dynamics (Claude-parity) ──────────────────────
+        # The loop keeps running while the model makes tool-call progress.
+        # Forced tool_choice="none" is a BACKSTOP: it fires only at the hard
+        # ceiling (nominal cap × OODA_HARD_CEIL_MULT) or when the stall
+        # breaker trips (OODA_STALL_LIMIT consecutive failed iterations).
+        from app.core.agent_config import get_ooda_dynamics
+        _dyn = await get_ooda_dynamics()
+        ooda_cap = OODASoftCap(
+            nominal_cap=effective_max_iterations,
+            hard_ceiling=max(
+                effective_max_iterations,
+                effective_max_iterations * _dyn["hard_ceil_mult"],
+            ),
+            grace_iters=_dyn["grace_iters"],
+            stall_limit=_dyn["stall_limit"],
+        )
+        # Phase 4: phase telemetry lives in the shared OODATurnTelemetry
+        # recorder (extracted from this loop into app.core.agent_ooda).
+        ooda_telemetry = OODATurnTelemetry()
 
         while iteration < effective_max_iterations:
             current_tool_calls = []
@@ -1785,15 +1832,36 @@ async def chat_stream_generator(
                 stream_kwargs["tool_choice"] = "auto"
 
             # We use stateful multi-turn only on iteration 0 when previous_response_id is set
+            chain_attempt_active = False
             if iteration == 0 and previous_response_id:
                 stream_kwargs["previous_response_id"] = previous_response_id
                 user_messages = [m for m in messages if m.get("role") == "user"]
                 target_msgs = user_messages[-1:] if user_messages else messages
                 stream_kwargs["input"] = [normalize_responses_message(m) for m in target_msgs]
+                chain_cursor = len(local_messages)
+            elif (
+                stateful_chain
+                and not chain_degraded
+                and iteration > 0
+                and response_id
+            ):
+                # Phase 1b: stateful chaining — the server already holds every
+                # item through chain_cursor via previous_response_id; send ONLY
+                # the new function_call_output items produced since the last
+                # call (assistant text + function_call items were generated
+                # server-side and are already part of the stored response).
+                chain_attempt_active = True
+                stream_kwargs["previous_response_id"] = response_id
+                stream_kwargs["input"] = [
+                    normalize_responses_message(m)
+                    for m in collect_chain_batch(local_messages, chain_cursor)
+                ]
+                chain_cursor = len(local_messages)
             else:
                 # Send full accumulated messages for loop turns
                 raw_input_list = [{"role": "system", "content": full_system}] + local_messages
                 stream_kwargs["input"] = [normalize_responses_message(m) for m in raw_input_list]
+                chain_cursor = len(local_messages)
 
             try:
                 async with client.responses.stream(**stream_kwargs) as stream:
@@ -1888,10 +1956,12 @@ async def chat_stream_generator(
                                 item = getattr(event, "item", None)
                                 if item is not None and getattr(item, "type", None) == "function_call":
                                     t_id = getattr(item, "id", None) or f"call_{len(current_tool_calls)}_{iteration}"
+                                    t_call_id = getattr(item, "call_id", None) or t_id
                                     t_name = getattr(item, "name", None)
                                     t_args = getattr(item, "arguments", "{}")
                                     current_tool_calls.append({
                                         "id": t_id,
+                                        "call_id": t_call_id,
                                         "name": t_name,
                                         "arguments": t_args
                                     })
@@ -1982,6 +2052,17 @@ async def chat_stream_generator(
                                 current_error_message = str(final_err)
 
             except Exception as stream_init_err:
+                if chain_attempt_active and not chain_retry_used:
+                    # Phase 1b one-shot degrade: a rejected chained call (input
+                    # mixing rules, stale response_id, storage disabled) falls
+                    # back to a full-transcript replay for the rest of the turn.
+                    chain_retry_used = True
+                    chain_degraded = True
+                    logger.warning(
+                        "Stateful chained call rejected at stream init — degrading to full transcript replay: %s",
+                        stream_init_err,
+                    )
+                    continue
                 # One-shot degradation: a 400 rejecting the reasoning effort
                 # parameter surfaces at stream init before any content — retry
                 # the same iteration without the parameter.
@@ -2010,15 +2091,33 @@ async def chat_stream_generator(
 
             # If the model generated tool calls, execute them and continue the loop!
             if current_tool_calls:
-                # Add assistant message with tool calls to local history
-                tool_calls_desc = "".join(
-                    f"\n\n[Executed Tool: {tc['name']} with arguments: {tc['arguments']}]"
-                    for tc in current_tool_calls
-                )
-                local_messages.append({
-                    "role": "assistant",
-                    "content": (assistant_content or "") + tool_calls_desc
-                })
+                if native_toolloop:
+                    # Phase 1a: native tool protocol — preserve the assistant
+                    # turn and each call as first-class Responses API items so
+                    # the model sees its own tool-use structure on the next
+                    # iteration (Claude-parity tool_use/tool_result shape).
+                    if assistant_content:
+                        local_messages.append({
+                            "role": "assistant",
+                            "content": assistant_content,
+                        })
+                    for tc in current_tool_calls:
+                        local_messages.append({
+                            "type": "function_call",
+                            "call_id": tc.get("call_id") or tc["id"],
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        })
+                else:
+                    # Add assistant message with tool calls to local history
+                    tool_calls_desc = "".join(
+                        f"\n\n[Executed Tool: {tc['name']} with arguments: {tc['arguments']}]"
+                        for tc in current_tool_calls
+                    )
+                    local_messages.append({
+                        "role": "assistant",
+                        "content": (assistant_content or "") + tool_calls_desc
+                    })
 
                 # Execute all tool calls in this turn
                 tool_outputs = []
@@ -2080,6 +2179,8 @@ async def chat_stream_generator(
                         elif t_name == "weather_fetch":
                             loc = args.get("location", "")
                             step_label = f"Checking weather for {loc[:40]}..." if loc else "Checking weather..."
+                        elif t_name == "update_todo":
+                            step_label = "Updating task checklist..."
                         elif t_name == "ask_user_input":
                             step_label = "Requesting user input options..."
                         elif t_name == "end_conversation":
@@ -2100,6 +2201,34 @@ async def chat_stream_generator(
                         + "\n\n"
                     )
 
+                    # ── Phase 3: update_todo (TodoWrite analog) — client-side
+                    # checklist tool. Emits the live task list to the UI and
+                    # feeds a confirmation back to the model; no dispatch. ──
+                    if t_name == "update_todo":
+                        _todo_raw = args.get("todos") if isinstance(args, dict) else None
+                        todos = normalize_todo_list(_todo_raw)
+                        if todos:
+                            yield (
+                                "data: "
+                                + json.dumps({
+                                    "type": "agent_todo",
+                                    "step": active_tool_step,
+                                    "todos": todos,
+                                })
+                                + "\n\n"
+                            )
+                            tool_outputs.append(todo_summary(todos))
+                            # "todo" phase record rides on the shared
+                            # telemetry recorder (tail-20 summary includes it).
+                            ooda_telemetry.phases.append(
+                                {"phase": "todo", "iteration": iteration, "todos": todos}
+                            )
+                            continue
+                        tool_outputs.append(
+                            "update_todo error: a non-empty 'todos' list is required."
+                        )
+                        continue
+
                     if t_name == "search_web":
                         try:
                             args = json.loads(t_args_str or "{}")
@@ -2117,7 +2246,7 @@ async def chat_stream_generator(
                                 search_result = await _perform_google_search(
                                     query,
                                     synthesis_deployment=deployment,
-                                    history=local_messages,
+                                    history=text_mirror_history(local_messages),
                                     return_raw=True,
                                 )
                                 sources = search_result.get("sources", [])
@@ -2179,7 +2308,7 @@ async def chat_stream_generator(
                                 research_result = await _perform_parallel_searches(
                                     sub_queries,
                                     deployment=deployment,
-                                    history=local_messages,
+                                    history=text_mirror_history(local_messages),
                                 )
                                 merged_ctx = research_result.get("merged_context", "")
                                 all_sources = research_result.get("sources", [])
@@ -3162,11 +3291,69 @@ async def chat_stream_generator(
                         )
 
                 # Add tool response messages to local history
-                for tc, t_out in zip(current_tool_calls, tool_outputs):
-                    local_messages.append({
-                        "role": "system",
-                        "content": f"[Tool Output for {tc['name']}]:\n{t_out}"
+                if native_toolloop:
+                    # Phase 1a: native function_call_output items keyed by
+                    # call_id — parallel-call-safe, protocol-correct feedback.
+                    for tc, t_out in zip(current_tool_calls, tool_outputs):
+                        local_messages.append({
+                            "type": "function_call_output",
+                            "call_id": tc.get("call_id") or tc["id"],
+                            "output": t_out if isinstance(t_out, str) else str(t_out),
+                        })
+                else:
+                    for tc, t_out in zip(current_tool_calls, tool_outputs):
+                        local_messages.append({
+                            "role": "system",
+                            "content": f"[Tool Output for {tc['name']}]:\n{t_out}"
+                        })
+
+                # ── Phase 2: per-iteration Observe block ────────────────────
+                # Distill this iteration's results into an orient record and
+                # stream it to the UI (agent_orient SSE), then update the
+                # soft-cap state machine (progress / stall / extension).
+                _observations = build_observations(current_tool_calls, tool_outputs)
+                _progressed = ooda_cap.note_iteration(tool_outputs)
+                ooda_telemetry.record_observe(iteration, _progressed, _observations)
+                yield (
+                    "data: "
+                    + json.dumps({
+                        "type": "agent_orient",
+                        "iteration": iteration,
+                        "step": active_tool_step,
+                        "progressed": _progressed,
+                        "observations": _observations,
                     })
+                    + "\n\n"
+                )
+
+                if ooda_cap.forced_close:
+                    # Stall circuit breaker: consecutive failed iterations —
+                    # pin the budget so the next pass is a forced
+                    # tool_choice="none" synthesis turn (the backstop).
+                    logger.info(
+                        "OODA stall breaker tripped at iteration %d — forcing closure",
+                        iteration,
+                    )
+                    effective_max_iterations = min(effective_max_iterations, iteration + 1)
+                else:
+                    _new_cap = ooda_cap.propose_extension(iteration, effective_max_iterations)
+                    if _new_cap is not None:
+                        logger.info(
+                            "OODA soft-cap extension: %d → %d (tool-call progress continues)",
+                            effective_max_iterations,
+                            _new_cap,
+                        )
+                        effective_max_iterations = _new_cap
+                        yield (
+                            "data: "
+                            + json.dumps({
+                                "type": "agent_orient",
+                                "status": "cap_extended",
+                                "iteration": iteration,
+                                "effective_max_iterations": _new_cap,
+                            })
+                            + "\n\n"
+                        )
 
                 if paused_for_user_input:
                     logger.info("Halting conversational OODA loop to await user interactive input.")
@@ -3176,6 +3363,27 @@ async def chat_stream_generator(
                 continue
 
             break
+
+        # ── Phase 5: OODA-phase telemetry summary ───────────────────────────
+        if ooda_telemetry.phases:
+            try:
+                _telemetry_payload = ooda_telemetry.summary(routing_mode, iteration, ooda_cap)
+                logger.info(
+                    "OODA telemetry: mode=%s iterations_run=%d tool_iterations=%d "
+                    "cap_extensions=%d stall_breaker=%s",
+                    routing_mode,
+                    iteration,
+                    _telemetry_payload["tool_iterations"],
+                    ooda_cap.extensions_granted,
+                    ooda_cap.forced_close,
+                )
+                yield (
+                    "data: "
+                    + json.dumps({"type": "agent_telemetry", **_telemetry_payload})
+                    + "\n\n"
+                )
+            except Exception as tel_err:
+                logger.debug("OODA telemetry emit failed: %s", tel_err)
 
         # Think/Solve Mode Fallback: if reasoning occurred but no final answer was emitted, auto-synthesize the response
         if (

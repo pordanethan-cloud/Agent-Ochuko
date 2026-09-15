@@ -23,6 +23,7 @@ from app.core.agent_task_models import (
     StepStatus,
     RiskLevel,
     StepResult,
+    append_scratchpad_entry,
 )
 from app.core.agent_planner import generate_structured_plan, refine_plan, replan_remaining, check_premise_divergence
 from app.core.hitl_gates import HITLGate
@@ -30,6 +31,7 @@ from app.core.skills import AGENT_CONDUCT, ULTRA_IDENTITY
 from app.core.sub_agent_pool import SubAgentPool
 from app.core.circuit_breaker import create_turn_circuit_breaker, ActionBudgetExceeded, CircuitBreakerOpen
 from app.core.reflexion_engine import create_reflexion_engine
+from app.core.agent_ooda import OODASoftCap
 from app.services.supabase_admin import get_supabase_admin
 from app.services.hybrid_memory import AgentContextCompressor
 
@@ -166,6 +168,8 @@ class AgentTaskManager:
                 "current_step": self.task.current_step,
                 "replan_count": self.task.replan_count,
                 "step_results": self.task.step_results,
+                # Phase 9: persist blackboard working memory with the task.
+                "scratchpad": self.task.scratchpad,
                 "artifacts": self.task.artifacts,
                 "total_token_spend": self.task.total_token_spend,
                 "max_duration_seconds": self.task.max_duration_seconds,
@@ -187,6 +191,20 @@ class AgentTaskManager:
             )
         except Exception as e:
             logger.debug(f"Could not persist agent task state: {e}")
+
+    def _write_note(self, kind: str, content: str, step_index: Optional[int] = None):
+        """
+        Phase 9: append a capped blackboard entry to the task scratchpad.
+
+        Called on: step completion (fact), mini-OODA pivot/stall decisions
+        (decision), premise-divergence or failure replans (discovery), and
+        artifact creation (artifact_ref). Injected back into step prompts
+        and the final synthesis via AgentContextCompressor.
+        """
+        try:
+            append_scratchpad_entry(self.task.scratchpad, kind, content, step_index)
+        except Exception as note_err:
+            logger.debug(f"Scratchpad note skipped: {note_err}")
 
     async def execute_plan_stream(
         self,
@@ -274,25 +292,130 @@ class AgentTaskManager:
             self.task.total_token_spend += step_result.token_spend
             self.circuit_breaker.record_token_spend(step_result.token_spend)
 
-            # 5. AI-Level Cognitive Tool Loop:
+            # 5. AI-Level Cognitive Tool Loop (Phase 4: per-step mini-OODA):
             # If the tool failed or was blocked, feed the feedback directly to the AI model.
-            # The AI inspects the obstacle, formulates an aim, and selects the best alternative tool.
+            # The AI inspects the obstacle (Orient), and selects the best
+            # alternative tool (Decide) — now governed by the same soft-cap
+            # dynamics as the conversational OODA loop (OODASoftCap):
+            #   - Nominal budget: 2 adaptation attempts (default path unchanged).
+            #   - Progress = orient pivots to a NEW tool → grants +1 grace
+            #     attempt, hard ceiling 4 (nominal × 2).
+            #   - Stall = repeating the same failing tool; 3 consecutive
+            #     non-pivot decisions trip the stall breaker → forced closure
+            #     into the Phase 8 replan path below. Limit is 3 (not 2) so a
+            #     transient failure still gets its second identical-retry roll.
+            # Every decision is streamed via agent_step_ooda SSE events.
+            mini_cap = OODASoftCap(
+                nominal_cap=2, grace_iters=1, hard_ceiling=4, stall_limit=3,
+            )
+            mini_ooda_phases: List[Dict[str, Any]] = []
             attempt = 0
-            max_ai_retries = 2
-            while not step_result.success and attempt < max_ai_retries:
+            effective_attempts = 2
+            while not step_result.success and attempt < effective_attempts:
                 attempt += 1
                 ai_adaptation = await self._ai_resolve_feedback_and_adapt(
                     step=step,
                     error_feedback=step_result.error or "Step produced no successful output",
                     attempt_num=attempt,
+                    attempt_budget=effective_attempts,
                 )
                 if not ai_adaptation or ai_adaptation.get("action") != "retry_tool":
                     # AI concluded it should proceed or alternatives are exhausted
+                    _decision = (ai_adaptation or {}).get("action", "proceed")
+                    _reasoning = (ai_adaptation or {}).get("reasoning", "")
+                    mini_ooda_phases.append({
+                        "phase": "orient", "attempt": attempt,
+                        "decision": _decision, "progressed": False,
+                        "reasoning": _reasoning,
+                    })
+                    yield (
+                        "data: "
+                        + json.dumps({
+                            "type": "agent_step_ooda",
+                            "task_id": self.task.id,
+                            "step_index": step.index,
+                            "attempt": attempt,
+                            "decision": _decision,
+                            "progressed": False,
+                            "reasoning": _reasoning,
+                            "stall_breaker": mini_cap.forced_close,
+                            "effective_attempts": effective_attempts,
+                        })
+                        + "\n\n"
+                    )
                     break
 
                 new_tool = ai_adaptation.get("tool_name")
                 new_desc = ai_adaptation.get("description") or step.description
                 reasoning = ai_adaptation.get("reasoning", "AI adapting tool based on feedback")
+                _pivot = new_tool != step.tool_name
+
+                # Cap dynamics: pivoting to a NEW tool is orientation
+                # progress; repeating the same failing tool is a stall.
+                _progressed = mini_cap.note_iteration(
+                    [f"{new_tool}: pivot accepted"] if _pivot else [None]
+                )
+                mini_ooda_phases.append({
+                    "phase": "orient", "attempt": attempt,
+                    "decision": "retry_tool", "tool_name": new_tool,
+                    "pivot": _pivot, "progressed": _progressed,
+                    "reasoning": reasoning,
+                })
+                yield (
+                    "data: "
+                    + json.dumps({
+                        "type": "agent_step_ooda",
+                        "task_id": self.task.id,
+                        "step_index": step.index,
+                        "attempt": attempt,
+                        "decision": "retry_tool",
+                        "tool_name": new_tool,
+                        "pivot": _pivot,
+                        "progressed": _progressed,
+                        "reasoning": reasoning,
+                        "stall_breaker": mini_cap.forced_close,
+                        "effective_attempts": effective_attempts,
+                    })
+                    + "\n\n"
+                )
+
+                if mini_cap.forced_close:
+                    # Stall circuit breaker: consecutive same-tool thrash —
+                    # stop adapting; the replan path below takes over.
+                    self._write_note(
+                        "decision",
+                        f"Step {step.index}: mini-OODA stall breaker tripped after "
+                        f"{mini_cap.stall_count} non-pivot decisions — handing off to replan",
+                        step.index,
+                    )
+                    logger.info(
+                        "Mini-OODA stall breaker tripped on step %s after %d "
+                        "non-pivot decisions — forcing closure",
+                        step.index, mini_cap.stall_count,
+                    )
+                    break
+
+                if _progressed and attempt >= effective_attempts:
+                    _new_attempts = mini_cap.propose_extension(attempt, effective_attempts)
+                    if _new_attempts is not None:
+                        logger.info(
+                            "Mini-OODA soft-cap extension on step %s: %d → %d "
+                            "(pivot progress continues)",
+                            step.index, effective_attempts, _new_attempts,
+                        )
+                        effective_attempts = _new_attempts
+                        yield (
+                            "data: "
+                            + json.dumps({
+                                "type": "agent_step_ooda",
+                                "task_id": self.task.id,
+                                "step_index": step.index,
+                                "attempt": attempt,
+                                "status": "cap_extended",
+                                "effective_attempts": _new_attempts,
+                            })
+                            + "\n\n"
+                        )
 
                 logger.info(
                     "AI dynamically adapted step %s from %s to %s. Reasoning: %s",
@@ -301,6 +424,14 @@ class AgentTaskManager:
 
                 # Emit real-time cognitive adaptation event
                 yield f"data: {json.dumps({'type': 'agent_step_adapted', 'task_id': self.task.id, 'step_index': step.index, 'previous_tool': step.tool_name, 'tool_name': new_tool, 'description': new_desc, 'reasoning': reasoning, 'status': 'running'})}\n\n"
+
+                # Phase 9: record WHY the orientation changed for later steps.
+                self._write_note(
+                    "decision",
+                    f"Step {step.index} retry #{attempt}: "
+                    f"{'pivot' if _pivot else 'stall'} to {new_tool} — {reasoning[:200]}",
+                    step.index,
+                )
 
                 step.tool_name = new_tool
                 step.description = new_desc
@@ -334,9 +465,22 @@ class AgentTaskManager:
                     "artifacts": step_result.artifacts,
                     "duration_ms": step_duration_ms,
                 })
+                # Phase 9: blackboard fact + artifact refs visible to ALL later steps.
+                if step_result.summary:
+                    self._write_note(
+                        "fact",
+                        f"Step {step.index} ({step.tool_name or 'analysis'}): {step_result.summary[:300]}",
+                        step.index,
+                    )
+                for art in step_result.artifacts:
+                    self._write_note(
+                        "artifact_ref",
+                        f"Step {step.index} produced artifact: {art.get('filename')}",
+                        step.index,
+                    )
                 self.circuit_breaker.record_success()
 
-                yield f"data: {json.dumps({'type': 'agent_step_complete', 'task_id': self.task.id, 'step_index': step.index, 'result_summary': step.result_summary, 'artifacts': step.artifacts, 'duration_ms': step_duration_ms, 'token_spend': step.token_spend})}\n\n"
+                yield f"data: {json.dumps({'type': 'agent_step_complete', 'task_id': self.task.id, 'step_index': step.index, 'result_summary': step.result_summary, 'artifacts': step.artifacts, 'duration_ms': step_duration_ms, 'token_spend': step.token_spend, 'ooda': {'attempts': attempt, 'extensions': mini_cap.extensions_granted, 'stall_breaker': mini_cap.forced_close, 'phases': mini_ooda_phases[-10:]}})}\n\n"
                 # Phase 8.1: Proactive premise-divergence re-orientation.
                 # A step can SUCCEED yet reveal facts that invalidate later steps
                 # (e.g. "repo uses bun, not npm"). The heuristic gate below is
@@ -360,6 +504,12 @@ class AgentTaskManager:
                         if reoriented_tail:
                             self.task.replan_count += 1
                             self.task.plan = self.task.plan[: i + 1] + reoriented_tail
+                            # Phase 9: the discovery that reshaped the plan is working memory.
+                            self._write_note(
+                                "discovery",
+                                f"Premise divergence at step {step.index}: {divergence}",
+                                step.index,
+                            )
                             yield (
                                 f"data: {json.dumps({'type': 'agent_plan_reoriented', 'task_id': self.task.id, 'replan_count': self.task.replan_count, 'trigger': 'discovery', 'reason': divergence, 'plan': [s.model_dump() for s in self.task.plan]})}\n\n"
                             )
@@ -381,8 +531,14 @@ class AgentTaskManager:
                     "artifacts": [],
                     "duration_ms": step_duration_ms,
                 })
+                # Phase 9: remember why this path failed so replanned steps avoid it.
+                self._write_note(
+                    "decision",
+                    f"Step {step.index} failed after mini-OODA ({attempt} attempt(s))",
+                    step.index,
+                )
 
-                yield f"data: {json.dumps({'type': 'agent_step_complete', 'task_id': self.task.id, 'step_index': step.index, 'status': 'failed', 'error': step.error, 'duration_ms': step_duration_ms})}\n\n"
+                yield f"data: {json.dumps({'type': 'agent_step_complete', 'task_id': self.task.id, 'step_index': step.index, 'status': 'failed', 'error': step.error, 'duration_ms': step_duration_ms, 'ooda': {'attempts': attempt, 'extensions': mini_cap.extensions_granted, 'stall_breaker': mini_cap.forced_close, 'phases': mini_ooda_phases[-10:]}})}\n\n"
 
             await self.save_state()
 
@@ -398,6 +554,12 @@ class AgentTaskManager:
                 if reoriented_tail:
                     self.task.replan_count += 1
                     self.task.plan = self.task.plan[: i + 1] + reoriented_tail
+                    # Phase 9: failure-driven re-orientation is working memory too.
+                    self._write_note(
+                        "discovery",
+                        f"Plan re-oriented after step {step.index} failure: {(step.error or '')[:300]}",
+                        step.index,
+                    )
                     yield f"data: {json.dumps({'type': 'agent_plan_reoriented', 'task_id': self.task.id, 'replan_count': self.task.replan_count, 'plan': [s.model_dump() for s in self.task.plan]})}\n\n"
                     logger.info(
                         "Agent task %s re-oriented plan after step %s failure (replan #%s)",
@@ -1189,6 +1351,7 @@ class AgentTaskManager:
         step: PlanStep,
         error_feedback: str,
         attempt_num: int,
+        attempt_budget: int = 2,
     ) -> Optional[Dict[str, Any]]:
         """
         AI-level cognitive feedback evaluation.
@@ -1231,7 +1394,7 @@ class AgentTaskManager:
                     f"Current Step #{step.index}: {step.description}\n"
                     f"Tool Used: {step.tool_name}\n"
                     f"Failure Feedback / Error: {error_feedback}\n"
-                    f"Attempt #{attempt_num} of 2.\n"
+                    f"Attempt #{attempt_num} of {attempt_budget}.\n"
                     "Evaluate the feedback and decide the next move."
                 ),
             },

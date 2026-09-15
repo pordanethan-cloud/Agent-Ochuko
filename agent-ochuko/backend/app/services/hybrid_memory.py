@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
-from app.core.agent_task_models import AgentTask, StepStatus
+from app.core.agent_task_models import AgentTask, StepStatus, scratchpad_digest
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +75,19 @@ class AgentContextCompressor:
             summary = last_completed.result_summary or "Completed."
             prev_result_section = f"\nPREVIOUS STEP RESULT (Step {last_completed.index}):\n{summary}\n"
 
+        # Phase 9: blackboard working memory — facts/decisions from ALL
+        # earlier steps, not just the immediately preceding one.
+        scratchpad_text = scratchpad_digest(task.scratchpad)
+        scratchpad_section = f"\n{scratchpad_text}\n" if scratchpad_text else ""
+
         target_step = next((s for s in task.plan if s.index == step_index), None)
         target_desc = target_step.description if target_step else f"Execute step {step_index}"
 
         return (
             f"OVERALL GOAL: {task.goal}\n\n"
             f"EXECUTION PLAN STATUS:\n{plan_text}\n"
-            f"{prev_result_section}\n"
+            f"{prev_result_section}"
+            f"{scratchpad_section}\n"
             f"YOUR CURRENT TARGET -> STEP {step_index}: {target_desc}\n"
             f"Execute this step directly using the appropriate tool."
         )
@@ -97,6 +103,11 @@ class AgentContextCompressor:
             results_lines.append(f"- Step {s.index} ({s.description}): {summary}")
 
         results_text = "\n".join(results_lines)
+
+        # Phase 9: blackboard working memory feeds the final synthesis too.
+        scratchpad_text = scratchpad_digest(task.scratchpad)
+        scratchpad_section = f"\n\n{scratchpad_text}" if scratchpad_text else ""
+
         if task.artifacts:
             artifacts_text = "\n\nGENERATED ARTIFACTS / DELIVERABLES:\n" + "\n".join(
                 f"- {a.get('filename')}: {a.get('download_url')}" for a in task.artifacts
@@ -107,6 +118,7 @@ class AgentContextCompressor:
         return (
             f"ORIGINAL GOAL: {task.goal}\n\n"
             f"ALL EXECUTED STEP RESULTS:\n{results_text}"
+            f"{scratchpad_section}"
             f"{artifacts_text}\n\n"
             f"Synthesize an authoritative, thorough, beautifully structured final answer that directly fulfills the user's goal.\n"
             f"Provide complete technical explanations, architecture details, and setup/execution guidance. You may include concise code blocks or configuration snippets to clearly guide the user.\n"

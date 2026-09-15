@@ -307,6 +307,13 @@ export const RepositoryDeliverableCard: React.FC<RepositoryDeliverableCardProps>
     }
 
     // Client-side dynamic ZIP bundling with JSZip
+    // iOS Safari jettisons tabs that allocate too much memory; bundling a huge
+    // project in-browser would blank the page. Cap client-side zipping.
+    const MAX_CLIENT_ZIP_BYTES = 50 * 1024 * 1024
+    if (totalSizeBytes > MAX_CLIENT_ZIP_BYTES) {
+      throw new Error('Project exceeds 50 MB — too large for in-browser ZIP. Download individual files instead.')
+    }
+
     setZipping(true)
     try {
       const zip = new JSZip()
@@ -333,7 +340,9 @@ export const RepositoryDeliverableCard: React.FC<RepositoryDeliverableCardProps>
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
-      URL.revokeObjectURL(blobUrl)
+      // iOS Safari aborts blob downloads if the URL is revoked synchronously
+      // after click(); delay the revoke so the download can start.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000)
     } catch (err) {
       console.error('Error generating project ZIP:', err)
     } finally {

@@ -5,7 +5,7 @@
 > `failed_step`, `openai_client`, and `nano_deployment` parameters (§3.1); the
 > re-orientation chip shows `Plan re-oriented ×N` (replan budget counter) rather
 > than per-plan `reasoning`, which the re-plan call does not emit (§3.6).
-> Migration: `scripts/029_agent_task_replan_count.sql` must be applied before deploy.
+> Migration: `migrations/029_agent_task_replan_count.sql` must be applied before deploy.
 >
 > Related: `06_tools_architecture_claude_parity_and_ooda_loop.md` (per-turn tool loop),
 > `01_phase1_foundation.md` (structured planner, refine_plan, HITL gates).

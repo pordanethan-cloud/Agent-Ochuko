@@ -57,7 +57,7 @@ _CATEGORY_TOOLS: Dict[str, set] = {
         "weather_fetch",
     },
     "agency": {
-        "ask_user_input", "end_conversation",
+        "ask_user_input", "end_conversation", "update_todo",
     },
 }
 

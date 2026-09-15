@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { supabase, getEffectiveToken } from '../utils/supabaseClient'
 import { wakeBackend } from '../utils/wakeBackend'
 
-import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Eye } from 'lucide-react'
+import { LogOut, Send, Square, Brain, Cpu, MessageSquare, Menu, Copy, Check, Globe, Pencil, Trash, Paperclip, FileText, Loader2, X, ChevronDown, ChevronUp, Search, Lock, Download, Share2, Settings, Maximize2, Minimize2, ExternalLink, KeyRound, Unlock, Plus, Minus, Mic, MoreVertical, Bot, Eye, Code2 } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AppLock } from '../components/AppLock'
@@ -24,6 +24,8 @@ import { RepositoryDeliverableCard } from '../components/RepositoryDeliverableCa
 import { SportsMatchCard } from '../components/SportsMatchCard'
 import { OptionsCard } from '../components/OptionsCard'
 import { ZipAppPreviewer } from '../components/ZipAppPreviewer'
+import { ErrorBoundary } from '../components/ErrorBoundary'
+import { safeRandomUUID } from '../utils/safeRandom'
 
 
 
@@ -337,6 +339,10 @@ interface Message {
 
   agentLabel?: string
 
+  agentTodos?: { content: string; status: string }[]
+
+  agentOrient?: { iteration: number; progressed?: boolean; observations?: { name: string; status: string; summary: string }[] }
+
   widgetData?: { code: string; title: string; loadingMessages?: string[]; widgetType?: string; widgetLoading?: boolean }[]
 
   displayCards?: { card_type: string; payload: any; summary?: string }[]
@@ -397,7 +403,9 @@ const triggerDirectDownload = async (url: string, fallbackFilename: string) => {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    URL.revokeObjectURL(blobUrl)
+    // iOS Safari aborts blob downloads if the URL is revoked synchronously
+    // after click(); delay the revoke so the download has time to start.
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000)
   } catch (err) {
     console.error("Direct download failed, falling back to window.open:", err)
     try {
@@ -506,13 +514,17 @@ function FileDownloadCard({
   size_bytes: number
   onView?: () => void
 }) {
-  const ext = filename.split('.').pop()?.toLowerCase() || ''
+  // Guards: backend SSE payloads occasionally omit filename/size_bytes — a
+  // throw here (e.g. undefined.split) would crash the whole app at render time.
+  const safeName = filename || 'Unnamed file'
+  const ext = safeName.split('.').pop()?.toLowerCase() || ''
   const extLabel = ext.toUpperCase() || 'FILE'
-  const sizeLabel = size_bytes > 1024 * 1024
-    ? `${(size_bytes / (1024 * 1024)).toFixed(1)} MB`
-    : size_bytes > 1024
-    ? `${(size_bytes / 1024).toFixed(1)} KB`
-    : size_bytes > 0 ? `${size_bytes} B` : ''
+  const size = size_bytes || 0
+  const sizeLabel = size > 1024 * 1024
+    ? `${(size / (1024 * 1024)).toFixed(1)} MB`
+    : size > 1024
+    ? `${(size / 1024).toFixed(1)} KB`
+    : size > 0 ? `${size} B` : ''
 
   // Two-colour discipline: one neutral tile for every file type.
   const hasUrl = download_url && !download_url.startsWith('sandbox:') && !download_url.includes('/mnt/data/')
@@ -526,7 +538,7 @@ function FileDownloadCard({
 
       {/* File info */}
       <div className="flex-1 min-w-0">
-        <p className="text-[12.5px] font-semibold text-brand-text truncate leading-tight">{filename}</p>
+        <p className="text-[12.5px] font-semibold text-brand-text truncate leading-tight">{safeName}</p>
         {sizeLabel && <p className="text-[10px] text-[#8e95a2] mt-0.5">{sizeLabel}</p>}
         {!hasUrl && (
           <p className="text-[10px] text-white/40 mt-0.5">Sandbox file — ask me to resend it for a download link</p>
@@ -552,7 +564,7 @@ function FileDownloadCard({
               triggerDirectDownload(download_url, filename)
             }}
             className="w-8 h-8 rounded-lg flex items-center justify-center border border-[#ffffff]/15 hover:border-[#ffffff]/40 bg-[#ffffff]/5 hover:bg-[#ffffff]/10 text-[#8e95a2] hover:text-brand-text transition duration-150"
-            title={`Download ${filename}`}
+            title={`Download ${safeName}`}
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -1261,6 +1273,8 @@ function MermaidBlock({ code }: { code: string }) {
 
       setTimeout(() => setCopied(false), 1500)
 
+    }).catch(() => {
+      // Safari rejects clipboard writes outside user gestures / secure contexts
     })
 
   }
@@ -1531,6 +1545,8 @@ function SvgBlock({ svg }: { svg: string }) {
     navigator.clipboard.writeText(svg).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {
+      // Safari rejects clipboard writes outside user gestures / secure contexts
     })
   }
 
@@ -3567,11 +3583,12 @@ function getFriendlyErrorMessage(message: string): string {
 
 }
 
-const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: string; isComplete?: boolean }> = ({ step, maxSteps, label, isComplete }) => {
+// Phase 2 — uncapped OODA UI: "Step N" only. The loop budget self-extends
+// while the model keeps making tool-call progress, so there is no meaningful
+// "of M" ceiling to display. Progress track is indeterminate (pulsing) while
+// running and snaps full on completion.
+const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: string; isComplete?: boolean }> = ({ step, label, isComplete }) => {
   const currentStep = Math.max(1, step || 1)
-  const hasKnownMax = typeof maxSteps === 'number' && maxSteps > 0
-  const totalSteps = hasKnownMax ? Math.max(currentStep, maxSteps) : currentStep
-  const percent = Math.min(100, Math.round((currentStep / totalSteps) * 100))
 
   return (
     <div className="w-full max-w-full min-w-0 my-2 px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-[#0c0d10]/95 border border-white/[0.08] shadow-md backdrop-blur-xl select-none animate-fadeIn flex flex-col gap-1.5 box-border overflow-hidden">
@@ -3582,9 +3599,9 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: st
             <span className={`w-1.5 h-1.5 rounded-full ${isComplete ? 'bg-[#8e95a2]' : 'bg-[#a0a6b2] animate-pulse'}`} />
           </div>
 
-          {/* Monospace Badge */}
+          {/* Monospace Badge — uncapped: no "of M" suffix */}
           <span className="px-1.5 sm:px-2 py-0.5 rounded bg-[#16181d] border border-white/10 text-[9px] sm:text-[9.5px] font-mono font-medium text-[#a0a6b2] tracking-wider uppercase shrink-0">
-            {hasKnownMax ? `STEP ${currentStep}/${totalSteps}` : `STEP ${currentStep}`}
+            {`STEP ${currentStep}`}
           </span>
 
           {/* Action Label — responsive truncation */}
@@ -3598,20 +3615,53 @@ const AgentStepIndicator: React.FC<{ step: number; maxSteps?: number; label?: st
             </span>
           )}
         </div>
-
-        {/* Monospace Percentage */}
-        <span className="text-[10px] font-mono font-medium text-[#717784] tracking-wider shrink-0 tabular-nums ml-1">
-          {isComplete ? '100%' : `${percent}%`}
-        </span>
       </div>
 
-      {/* Razor-thin Progress Track */}
+      {/* Razor-thin Indeterminate Progress Track */}
       <div className="w-full h-[1.5px] sm:h-[2px] bg-white/[0.08] rounded-full overflow-hidden">
         <div
-          className="h-full bg-[#8e95a2] transition-all duration-300 ease-out rounded-full opacity-80"
-          style={{ width: isComplete ? '100%' : `${percent}%` }}
+          className={`h-full bg-[#8e95a2] transition-all duration-300 ease-out rounded-full opacity-80 ${isComplete ? '' : 'animate-pulse'}`}
+          style={{ width: isComplete ? '100%' : '35%' }}
         />
       </div>
+    </div>
+  )
+}
+
+// Phase 3 — live task checklist (update_todo / agent_todo SSE). Claude Code-style
+// TodoWrite rendering: checkbox states, strike-through on completion, highlight
+// on the single in-progress item.
+const AgentTodoChecklist: React.FC<{ todos: { content: string; status: string }[] }> = ({ todos }) => {
+  if (!todos || todos.length === 0) return null
+  const done = todos.filter(t => t.status === 'completed').length
+  return (
+    <div className="w-full max-w-full min-w-0 my-2 px-2.5 sm:px-3.5 py-2 rounded-xl bg-[#0c0d10]/95 border border-white/[0.08] shadow-md backdrop-blur-xl select-none animate-fadeIn flex flex-col gap-1 box-border overflow-hidden">
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="px-1.5 sm:px-2 py-0.5 rounded bg-[#16181d] border border-white/10 text-[9px] sm:text-[9.5px] font-mono font-medium text-[#a0a6b2] tracking-wider uppercase shrink-0">
+          {`TASKS ${done}/${todos.length}`}
+        </span>
+        <span className="text-[10px] font-mono text-[#717784] tracking-wider shrink-0 tabular-nums ml-auto">
+          {`${Math.round((done / todos.length) * 100)}%`}
+        </span>
+      </div>
+      <ul className="flex flex-col gap-1 mt-1">
+        {todos.map((t, i) => {
+          const isDone = t.status === 'completed'
+          const isActive = t.status === 'in_progress'
+          return (
+            <li key={i} className="flex items-start gap-2 min-w-0">
+              <span className={`mt-[5px] w-3 h-3 shrink-0 rounded-[4px] border flex items-center justify-center text-[8px] leading-none ${isDone ? 'bg-[#8e95a2] border-[#8e95a2] text-[#0c0d10]' : isActive ? 'border-[#a0a6b2]' : 'border-white/20'}`}>
+                {isDone ? '✓' : ''}
+              </span>
+              <span
+                className={`text-[11.5px] leading-snug min-w-0 break-words ${isDone ? 'text-[#717784] line-through' : isActive ? 'text-[#e5e9f0] font-medium' : 'text-[#cbd5e1]'}`}
+              >
+                {t.content}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
@@ -3844,7 +3894,21 @@ const LazyMessage: React.FC<{
   turnIndex?: number
 }> = ({ children, turnIndex }) => {
   // Anchor div doubles as the TurnTracker scroll target for this turn.
-  return <div data-turn-anchor={turnIndex}>{children}</div>
+  // Per-message ErrorBoundary: one malformed message can no longer blank the
+  // whole chat — only that message degrades to a small error notice.
+  return (
+    <div data-turn-anchor={turnIndex}>
+      <ErrorBoundary
+        fallback={
+          <div className="my-2 rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-3 text-[12px] text-red-300/80">
+            This message hit a rendering error. Other messages are unaffected.
+          </div>
+        }
+      >
+        {children}
+      </ErrorBoundary>
+    </div>
+  )
 }
 
 
@@ -3911,7 +3975,10 @@ export const Dashboard: React.FC = () => {
   const [isLocked, setIsLocked] = useState(() => !!localStorage.getItem('app_lock_pin'))
   const [lockMode, setLockMode] = useState<'unlock' | 'setup' | 'change' | 'disable' | null>(null)
 
-  const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024)
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia('(min-width: 1024px)').matches
+  })
   const [viewportHeight, setViewportHeight] = useState<number | null>(() => {
     return typeof window !== 'undefined' && window.visualViewport ? window.visualViewport.height : null
   })
@@ -3941,6 +4008,9 @@ export const Dashboard: React.FC = () => {
     return Math.max(220, Math.min(480, defaultWidth))
   })
   const [pageZoom, setPageZoom] = useState(() => {
+    if (typeof window === 'undefined') return 1.0
+    const isDesk = window.matchMedia('(min-width: 1024px)').matches
+    if (!isDesk) return 1.0
     const saved = localStorage.getItem('page_zoom')
     return saved ? parseFloat(saved) : 1.0
   })
@@ -3949,7 +4019,7 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     const handleResize = () => {
-      const newIsDesktop = window.innerWidth >= 1024
+      const newIsDesktop = window.matchMedia('(min-width: 1024px)').matches
       setIsDesktop(newIsDesktop)
       if (!newIsDesktop) {
         setIsSidebarOpen(false)
@@ -3970,11 +4040,21 @@ export const Dashboard: React.FC = () => {
     setDynamicGreeting(greeting)
   }, [preferredName, userEmail])
 
-  // Apply zoom to document
+  // Apply zoom to document (Desktop only: never zoom root on mobile, as CSS zoom forces Chromium/WebKit into desktop viewport scaling)
   useEffect(() => {
-    document.documentElement.style.zoom = pageZoom.toString()
-    localStorage.setItem('page_zoom', pageZoom.toString())
-  }, [pageZoom])
+    if (isDesktop && pageZoom !== 1.0) {
+      document.documentElement.style.zoom = pageZoom.toString()
+      try { localStorage.setItem('page_zoom', pageZoom.toString()) } catch {}
+    } else {
+      document.documentElement.style.zoom = ''
+      if (!isDesktop) {
+        try { localStorage.removeItem('page_zoom') } catch {}
+      }
+    }
+    return () => {
+      document.documentElement.style.zoom = ''
+    }
+  }, [pageZoom, isDesktop])
 
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -4036,16 +4116,28 @@ export const Dashboard: React.FC = () => {
 
   const [input, setInput] = useState('')
 
+  // Capability-page handoff tracking: when Capabilities navigates here with
+  // /?prompt=...&mode=..., the auth-hydration effect below must NOT clobber
+  // the URL-provided mode (it defaults fresh sessions to 'discuss') nor
+  // hydrate a stale cached conversation under the new prompt.
+  const urlModeRef = useRef<'think' | 'solve' | 'discuss' | 'agent' | null>(null)
+  const capabilityHandoffRef = useRef(false)
+
   // Read prompt and mode from URL parameter (e.g., from capabilities page play buttons)
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search)
     const promptParam = searchParams.get('prompt')
     const modeParam = searchParams.get('mode')
     if (modeParam && ['think', 'solve', 'discuss', 'agent'].includes(modeParam)) {
+      urlModeRef.current = modeParam as 'think' | 'solve' | 'discuss' | 'agent'
       setMode(modeParam as any)
     }
     if (promptParam) {
+      capabilityHandoffRef.current = true
       setInput(decodeURIComponent(promptParam))
+      // Capability prompts always start a fresh chat — never resume the cached one
+      setActiveConversationId('00000000-0000-0000-0000-000000000000')
+      setMessages([])
       // Clear the URL parameter to prevent re-triggering
       window.history.replaceState({}, '', window.location.pathname)
       // Focus on input so user can easily send
@@ -4200,7 +4292,9 @@ export const Dashboard: React.FC = () => {
 
   const [, setAgentStep] = useState<number>(0)
 
-  const [agentMaxSteps, setAgentMaxSteps] = useState<number>(0)
+  // agentMaxSteps is intentionally write-only: the OODA loop is uncapped and
+  // per-message, so the UI never renders a global "of M" ceiling.
+  const [, setAgentMaxSteps] = useState<number>(0)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -4246,6 +4340,8 @@ export const Dashboard: React.FC = () => {
 
   const [loadedPreviewContent, setLoadedPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  // Markdown files open in rendered Preview mode; user can switch to Raw source
+  const [previewView, setPreviewView] = useState<'preview' | 'raw'>('preview')
 
   useEffect(() => {
     const handleOpenPreview = (e: Event) => {
@@ -4256,7 +4352,53 @@ export const Dashboard: React.FC = () => {
     return () => window.removeEventListener('open-file-preview', handleOpenPreview)
   }, [])
 
+  // Re-poll image_gen jobs that were still pending when history was hydrated.
+  // Without this, a page refresh during generation left an infinite shimmer -
+  // the job completes server-side but nothing was listening for it anymore.
+  const rePolledImageJobsRef = useRef<Set<string>>(new Set())
   useEffect(() => {
+    messages.forEach((m) => {
+      if (!m.imagePending || !m.imageJobId || rePolledImageJobsRef.current.has(m.imageJobId)) return
+      rePolledImageJobsRef.current.add(m.imageJobId)
+      const staleJobId = m.imageJobId
+      const stalePoll = setInterval(async () => {
+        try {
+          const session = await supabase.auth.getSession()
+          const token = session.data.session?.access_token
+          if (!token) return
+          const response = await fetch(`${API_BASE}/v1/agents/job/${staleJobId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (!response.ok) return
+          const jobData = await response.json()
+          if (jobData.status === 'done' && jobData.result_blob_url) {
+            setMessages((prev) =>
+              prev.map((mm) =>
+                mm.imagePending && mm.imageJobId === staleJobId
+                  ? { ...mm, imagePending: false, imageUrl: jobData.result_blob_url, imageJobId: undefined }
+                  : mm
+              )
+            )
+            clearInterval(stalePoll)
+          } else if (jobData.status === 'failed') {
+            setMessages((prev) =>
+              prev.map((mm) =>
+                mm.imagePending && mm.imageJobId === staleJobId
+                  ? { ...mm, imagePending: false, imageJobId: undefined, content: mm.content + `\n\nImage generation failed: ${jobData.error_message || 'Please try again.'}` }
+                  : mm
+              )
+            )
+            clearInterval(stalePoll)
+          }
+        } catch {
+          // transient network error - keep polling
+        }
+      }, 5000)
+    })
+  }, [messages])
+
+  useEffect(() => {
+    setPreviewView('preview')
     if (!previewingFile) {
       setLoadedPreviewContent(null)
       setPreviewLoading(false)
@@ -4276,7 +4418,7 @@ export const Dashboard: React.FC = () => {
       (previewingFile.siblingFiles && previewingFile.siblingFiles.length > 1) ||
       previewingFile.projectFiles
     )
-    const isImage = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
+    const isImage = (previewingFile.type || '').startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
     const isPdf = previewingFile.type === 'application/pdf' || nameLower.endsWith('.pdf')
     const isBinaryDoc = /\.(docx?|xlsx?|pptx?|zip|rar|tar|gz|7z|exe|bin)$/i.test(nameLower)
 
@@ -4435,7 +4577,8 @@ export const Dashboard: React.FC = () => {
     ]
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
     if (!allowedExts.includes(ext)) {
-      alert(`Unsupported file type. Allowed extensions: ${allowedExts.join(', ')}`)
+      // alert() is suppressed/silent in iOS standalone PWA mode — use the toast.
+      showToast(`Unsupported file type. Allowed extensions: ${allowedExts.join(', ')}`, 'error')
       return
     }
 
@@ -4448,7 +4591,8 @@ export const Dashboard: React.FC = () => {
 
       let convoId = activeConversationId
       if (!convoId || convoId === '00000000-0000-0000-0000-000000000000') {
-        convoId = crypto.randomUUID()
+        // safeRandomUUID: crypto.randomUUID is undefined on older iOS/non-HTTPS
+        convoId = safeRandomUUID()
       }
 
       // 1. Get secure presigned SAS upload URL from backend
@@ -4526,7 +4670,8 @@ export const Dashboard: React.FC = () => {
       ])
     } catch (err: any) {
       console.error('File upload error:', err)
-      alert(`File upload failed: ${err.message || err}`)
+      // alert() is suppressed/silent in iOS standalone PWA mode — use the toast.
+      showToast(`File upload failed: ${err.message || err}`, 'error')
     } finally {
       setUploading(false)
       setUploadProgress(null)
@@ -4574,7 +4719,7 @@ export const Dashboard: React.FC = () => {
       setPastedSnippets(prev => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: safeRandomUUID(),
           content: text,
           name: title,
           sizeBytes: new Blob([text]).size,
@@ -4905,19 +5050,21 @@ export const Dashboard: React.FC = () => {
 
             routing_reason: m.routing_reason,
 
-            sources: m.content_parts?.sources || undefined,
+            sources: Array.isArray(m.content_parts?.sources) ? m.content_parts.sources : undefined,
 
             imageUrl: m.content_parts?.image_jobs?.[0]?.image_url || undefined,
 
             imagePrompt: m.content_parts?.image_jobs?.[0]?.prompt || undefined,
 
+            imageJobId: m.content_parts?.image_jobs?.[0]?.job_id || undefined,
+
             imagePending: m.content_parts?.image_jobs?.[0]?.status === 'pending' || undefined,
 
             thinkingContent: m.content_parts?.thinking_content || undefined,
 
-            generatedFiles: m.content_parts?.generated_files || undefined,
+            generatedFiles: Array.isArray(m.content_parts?.generated_files) ? m.content_parts.generated_files : undefined,
 
-            widgetData: m.content_parts?.widgets ? m.content_parts.widgets.map((w: any) => ({
+            widgetData: Array.isArray(m.content_parts?.widgets) ? m.content_parts.widgets.map((w: any) => ({
 
               code: w.code,
 
@@ -4928,7 +5075,7 @@ export const Dashboard: React.FC = () => {
               widgetLoading: false,
 
             })) : undefined,
-            displayCards: m.content_parts?.display_cards || undefined,
+            displayCards: Array.isArray(m.content_parts?.display_cards) ? m.content_parts.display_cards : undefined,
 
           }
 
@@ -5176,6 +5323,25 @@ export const Dashboard: React.FC = () => {
         const name = metadata.preferred_name || metadata.full_name || metadata.name || user.email?.split('@')[0] || 'User'
         setPreferredName(name)
 
+        // ── Capability-page handoff: honor /?prompt=&mode= without overrides ──
+        // Runs AFTER the URL-param effect, so without this early return the
+        // hydration below would reset mode to 'discuss' (or to the previous
+        // conversation's mode) and load the cached conversation's messages,
+        // burying the capability prompt inside a stale chat.
+        if (capabilityHandoffRef.current) {
+          sessionStorage.setItem('session_started', 'true')
+          localStorage.setItem(userCacheKey(uid, 'active_conversation_id'), '00000000-0000-0000-0000-000000000000')
+          setActiveConversationId('00000000-0000-0000-0000-000000000000')
+          setMessages([])
+          // Still hydrate the sidebar list from cache for instant load
+          try {
+            const cachedConvos = localStorage.getItem(userCacheKey(uid, 'local_conversations'))
+            if (cachedConvos) setConversations(JSON.parse(cachedConvos))
+          } catch {}
+          fetchConversations()
+          return
+        }
+
         // Clear active conversation cache if this is a brand new login/tab session
         const isFreshSession = !sessionStorage.getItem('session_started')
         const pendingConvoId = sessionStorage.getItem('pending_active_convo_id') || localStorage.getItem('pending_active_convo_id')
@@ -5211,10 +5377,11 @@ export const Dashboard: React.FC = () => {
             // Trigger background sync to verify history matches database
             handleSelectConversation(cachedId, hydratedConvoMode)
           } else {
-            // Start fresh session by default on new login
+            // Start fresh session by default on new login.
+            // Keep the URL-provided mode if the capabilities page handed one off.
             setActiveConversationId('00000000-0000-0000-0000-000000000000')
             setMessages([])
-            setMode('discuss')
+            if (!urlModeRef.current) setMode('discuss')
           }
           // Also hydrate sidebar conversations from cache for instant load
           try {
@@ -5610,6 +5777,48 @@ export const Dashboard: React.FC = () => {
         }
         return updated
       })
+    } else if (data.type === 'agent_step_ooda') {
+      // Phase 4: per-step mini-OODA orient stream from the task manager.
+      if (data.status === 'cap_extended') {
+        setMessages((prev) => {
+          const updated = [...prev]
+          const targetIdx = findTargetIndex(updated)
+          if (targetIdx >= 0) {
+            const targetMsg = { ...updated[targetIdx] }
+            if (targetMsg.agentTaskData) {
+              const plan = [...(targetMsg.agentTaskData.plan || [])]
+              const step = plan.find((s) => s.index === data.step_index)
+              if (step) {
+                step.ooda_extensions = (step.ooda_extensions || 0) + 1
+              }
+              targetMsg.agentTaskData = { ...targetMsg.agentTaskData, plan }
+              updated[targetIdx] = targetMsg
+            }
+          }
+          return updated
+        })
+      } else {
+        setMessages((prev) => {
+          const updated = [...prev]
+          const targetIdx = findTargetIndex(updated)
+          if (targetIdx >= 0) {
+            const targetMsg = { ...updated[targetIdx] }
+            if (targetMsg.agentTaskData) {
+              const plan = [...(targetMsg.agentTaskData.plan || [])]
+              const step = plan.find((s) => s.index === data.step_index)
+              if (step) {
+                step.ooda_attempts = data.attempt
+                if (data.reasoning) step.ooda_reasoning = data.reasoning
+                if (typeof data.pivot === 'boolean') step.ooda_pivot = data.pivot
+                step.ooda_stall_breaker = !!data.stall_breaker
+              }
+              targetMsg.agentTaskData = { ...targetMsg.agentTaskData, plan }
+              updated[targetIdx] = targetMsg
+            }
+          }
+          return updated
+        })
+      }
     } else if (data.type === 'agent_step_complete') {
       // Auto-open newly produced step artifact in the ArtifactPanel
       if (data.artifacts && data.artifacts.length > 0) {
@@ -5648,6 +5857,12 @@ export const Dashboard: React.FC = () => {
               step.result_summary = data.result_summary || step.result_summary || null
               step.duration_ms = data.duration_ms || step.duration_ms
               step.token_spend = data.token_spend || step.token_spend
+              // Phase 4: persist final mini-OODA record onto the step card
+              if (data.ooda && typeof data.ooda === 'object') {
+                step.ooda_attempts = data.ooda.attempts ?? step.ooda_attempts
+                step.ooda_extensions = data.ooda.extensions ?? step.ooda_extensions
+                step.ooda_stall_breaker = !!data.ooda.stall_breaker
+              }
               if (data.artifacts) {
                 step.artifacts = data.artifacts
               }
@@ -6011,9 +6226,9 @@ export const Dashboard: React.FC = () => {
           const combinedMsgContext = `${userMsgStr}\n${historyText}`
 
           // 1. Quoted paths (single, double, backticks)
-          const quotedMatches = Array.from(combinedMsgContext.matchAll(/["'`]((?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^"'`\n\r]+)["'`]/g)).map((m) => m[1].trim())
+          const quotedMatches = Array.from(combinedMsgContext.matchAll(/["'`]((?:[A-Za-z]:[\\/]|\/(?:Users|home)[\\/])[^"'`\n\r]+)["'`]/g)).map((m) => m[1].trim())
           // 2. Unquoted paths (Windows or Unix paths, allowing spaces in directory names)
-          const rawPathMatches = Array.from(combinedMsgContext.matchAll(/(?:[A-Za-z]:[\\\/]|\/(?:Users|home)[\\\/])[^<>:"|?*\n\r`']+/g)).map((m) => m[0].trim().replace(/[.,;!?)\]]+$/, ''))
+          const rawPathMatches = Array.from(combinedMsgContext.matchAll(/(?:[A-Za-z]:[\\/]|\/(?:Users|home)[\\/])[^<>:"|?*\n\r`']+/g)).map((m) => m[0].trim().replace(/[.,;!?)\]]+$/, ''))
           // 3. Folder aliases and natural phrases
           const aliasMatches: string[] = []
           if (/\b(?:my\s+)?downloads\b/i.test(combinedMsgContext)) aliasMatches.push('downloads')
@@ -6030,7 +6245,7 @@ export const Dashboard: React.FC = () => {
           }
 
           // Extract patterns like "<name> folder" or "folder <name>"
-          const namedFolderMatches = Array.from(combinedMsgContext.matchAll(/(?:my\s+)?([a-zA-Z0-9_\-]{2,25})\s+(?:folder|directory)\b/gi))
+          const namedFolderMatches = Array.from(combinedMsgContext.matchAll(/(?:my\s+)?([a-zA-Z0-9_-]{2,25})\s+(?:folder|directory)\b/gi))
           for (const m of namedFolderMatches) {
             aliasMatches.push(m[1].trim())
           }
@@ -6715,11 +6930,18 @@ export const Dashboard: React.FC = () => {
 
                 clearTimeout(stallTimeout)
 
+                clearTimeout(hardTimeout)
+
                 imgChannel.unsubscribe()
 
               }
 
-              // 90s stall guard timeout
+              // Stall handling - FLUX on HuggingFace routinely takes 2-5 minutes
+              // (120s per-request timeout across a fallback model chain), so the
+              // old 90s guard declared "timed out" and CANCELLED polling while the
+              // job was still running - the finished image landed in the DB with no
+              // way to reach the UI. Now: soft notice at 2 min (polling + Realtime
+              // stay active so the image still arrives), hard give-up at 10 min.
 
               const stallTimeout = setTimeout(() => {
 
@@ -6729,7 +6951,25 @@ export const Dashboard: React.FC = () => {
 
                     m.imagePending && (m.imageJobId === imgJobId || m.imagePrompt === imgPrompt)
 
-                      ? { ...m, imagePending: false, imageJobId: undefined, content: m.content + '\n\nImage generation timed out. Please try again.' }
+                      ? { ...m, content: m.content + '\n\nStill generating - image models can take a few minutes. The image will appear here automatically.' }
+
+                      : m
+
+                  )
+
+                )
+
+              }, 120_000)
+
+              const hardTimeout = setTimeout(() => {
+
+                setMessages((prev) =>
+
+                  prev.map((m) =>
+
+                    m.imagePending && (m.imageJobId === imgJobId || m.imagePrompt === imgPrompt)
+
+                      ? { ...m, imagePending: false, imageJobId: undefined, content: m.content + '\n\nImage generation timed out after 10 minutes. Please try again.' }
 
                       : m
 
@@ -6739,7 +6979,7 @@ export const Dashboard: React.FC = () => {
 
                 cleanupJob()
 
-              }, 90_000)
+              }, 600_000)
 
             } else if (data.type === 'agent_step') {
 
@@ -6772,6 +7012,67 @@ export const Dashboard: React.FC = () => {
                 return updated
 
               })
+
+            } else if (data.type === 'agent_todo') {
+
+              // Phase 3: live checklist (TodoWrite analog) — attach to the
+              // streaming assistant message; AgentTodoChecklist renders it.
+              setMessages((prev) => {
+
+                const updated = [...prev]
+
+                if (updated.length > 0) {
+
+                  updated[updated.length - 1] = {
+
+                    ...updated[updated.length - 1],
+
+                    agentTodos: Array.isArray(data.todos) ? data.todos : undefined,
+
+                  }
+
+                }
+
+                return updated
+
+              })
+
+            } else if (data.type === 'agent_orient') {
+
+              // Phase 2: per-iteration Observe block. cap_extended notices
+              // carry no observations — the soft cap self-extends silently;
+              // ordinary orient records replace the message's orient state.
+              if (data.status !== 'cap_extended') {
+
+                setMessages((prev) => {
+
+                  const updated = [...prev]
+
+                  if (updated.length > 0) {
+
+                    updated[updated.length - 1] = {
+
+                      ...updated[updated.length - 1],
+
+                      agentOrient: {
+
+                        iteration: data.iteration,
+
+                        progressed: data.progressed,
+
+                        observations: Array.isArray(data.observations) ? data.observations : [],
+
+                      },
+
+                    }
+
+                  }
+
+                  return updated
+
+                })
+
+              }
 
             } else if (data.type === 'widget_loading') {
 
@@ -7238,7 +7539,7 @@ export const Dashboard: React.FC = () => {
 
     if (isNewConvo) {
 
-      convoId = crypto.randomUUID()
+      convoId = safeRandomUUID()
 
       setActiveConversationId(convoId)
 
@@ -8559,28 +8860,30 @@ export const Dashboard: React.FC = () => {
               <span className="truncate">Capabilities</span>
             </button>
 
-            {/* Compact Zoom Controls */}
-            <div className="flex items-center justify-between px-1 bg-white/[0.03] rounded-lg border border-white/10 min-h-[34px]">
-              <button
-                type="button"
-                onClick={() => setPageZoom(prev => Math.max(0.5, prev - 0.1))}
-                className="w-7 h-7 flex items-center justify-center text-brand-muted hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
-                title="Zoom out"
-                aria-label="Zoom out"
-              >
-                <Minus className="w-3 h-3" />
-              </button>
-              <span className="text-[10px] text-brand-text font-mono select-none">{Math.round(pageZoom * 100)}%</span>
-              <button
-                type="button"
-                onClick={() => setPageZoom(prev => Math.min(1.5, prev + 0.1))}
-                className="w-7 h-7 flex items-center justify-center text-brand-muted hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
-                title="Zoom in"
-                aria-label="Zoom in"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-            </div>
+            {/* Compact Zoom Controls (Desktop only) */}
+            {isDesktop && (
+              <div className="flex items-center justify-between px-1 bg-white/[0.03] rounded-lg border border-white/10 min-h-[34px]">
+                <button
+                  type="button"
+                  onClick={() => setPageZoom(prev => Math.max(0.5, prev - 0.1))}
+                  className="w-7 h-7 flex items-center justify-center text-brand-muted hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
+                  title="Zoom out"
+                  aria-label="Zoom out"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <span className="text-[10px] text-brand-text font-mono select-none">{Math.round(pageZoom * 100)}%</span>
+                <button
+                  type="button"
+                  onClick={() => setPageZoom(prev => Math.min(1.5, prev + 0.1))}
+                  className="w-7 h-7 flex items-center justify-center text-brand-muted hover:text-white hover:bg-white/10 rounded transition cursor-pointer"
+                  title="Zoom in"
+                  aria-label="Zoom in"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Resizing Handle */}
@@ -8873,7 +9176,7 @@ export const Dashboard: React.FC = () => {
 
           ) : (
 
-            <div className="max-w-3xl mx-auto space-y-4 sm:space-y-5 px-1 sm:px-2">
+            <div className="max-w-none sm:max-w-3xl mx-auto space-y-4 sm:space-y-5 px-1 sm:px-2">
 
               {(() => {
                 const getArchivedForMarker = (index: number) => {
@@ -8973,7 +9276,7 @@ export const Dashboard: React.FC = () => {
                                             </div>
                                           )}
                                           <p className="whitespace-pre-wrap leading-relaxed">{archivedMsg.content}</p>
-                                          {archivedMsg.generatedFiles && archivedMsg.generatedFiles.length > 0 && (
+                                          {Array.isArray(archivedMsg.generatedFiles) && archivedMsg.generatedFiles.length > 0 && (
                                             <div className="mt-2 space-y-1">
                                               {archivedMsg.generatedFiles.map((f, fIdx) => (
                                                 <div key={fIdx} className="flex items-center gap-1.5 text-[10px] text-brand-accent/80">
@@ -9004,7 +9307,7 @@ export const Dashboard: React.FC = () => {
 
                   {msg.role !== 'user' && (
 
-                    <div className="w-6 h-6 rounded-md border border-white/10 bg-brand-surface/40 flex items-center justify-center shrink-0 overflow-hidden mt-1 select-none">
+                    <div className="hidden sm:flex w-6 h-6 rounded-md border border-white/10 bg-brand-surface/40 items-center justify-center shrink-0 overflow-hidden mt-1 select-none">
 
                       <img
 
@@ -9022,7 +9325,7 @@ export const Dashboard: React.FC = () => {
 
                   {/* Right/Left side container: Bubble + Actions */}
 
-                  <div className={`flex flex-col gap-1.5 ${msg.role === 'user' ? 'max-w-[80%] items-end' : 'flex-1 min-w-0 max-w-[820px]'}`}>
+                  <div className={`flex flex-col gap-1.5 ${msg.role === 'user' ? 'max-w-[85%] sm:max-w-[80%] items-end' : 'flex-1 min-w-0 w-full max-w-full sm:max-w-[820px]'}`}>
 
                     {/* Bubble */}
 
@@ -9107,7 +9410,7 @@ export const Dashboard: React.FC = () => {
 
                               )}
 
-                              {msg.fileAttachments && msg.fileAttachments.map((attachment, idx) => (
+                              {Array.isArray(msg.fileAttachments) && msg.fileAttachments.map((attachment, idx) => (
 
                                 <FileAttachmentChip key={idx} attachment={attachment} />
 
@@ -9176,7 +9479,7 @@ export const Dashboard: React.FC = () => {
                                               type="button"
                                               onClick={(e) => {
                                                 e.stopPropagation()
-                                                navigator.clipboard.writeText(item.content || '')
+                                                navigator.clipboard.writeText(item.content || '').catch(() => {})
                                                 setCopiedPastedKey(itemKey)
                                                 setTimeout(() => setCopiedPastedKey(null), 2000)
                                               }}
@@ -9234,9 +9537,9 @@ export const Dashboard: React.FC = () => {
                           {msg.agentStep && msg.agentStep > 0 ? (
                             /* OODA loop active — show step counter */
                             <div className="w-full min-w-0 max-w-full py-0.5">
+                              <AgentTodoChecklist todos={msg.agentTodos || []} />
                               <AgentStepIndicator
                                 step={msg.agentStep}
-                                maxSteps={msg.agentMaxSteps || agentMaxSteps}
                                 label={msg.agentLabel || (webSearchStatus === 'searching' ? activityLabel : undefined)}
                               />
                             </div>
@@ -9293,9 +9596,9 @@ export const Dashboard: React.FC = () => {
 
                           {msg.role === 'assistant' && (msg.agentStep ?? 0) > 1 && msg.content && msg.content.trim().length > 0 && (
                             <div className="w-full min-w-0 max-w-full">
+                              <AgentTodoChecklist todos={msg.agentTodos || []} />
                               <AgentStepIndicator
                                 step={msg.agentStep!}
-                                maxSteps={msg.agentMaxSteps || agentMaxSteps}
                                 label={msg.agentLabel || (webSearchStatus === 'searching' && i === messages.length - 1 ? activityLabel : undefined)}
                                 isComplete={!isStreaming || i !== messages.length - 1}
                               />
@@ -9435,7 +9738,7 @@ export const Dashboard: React.FC = () => {
 
                             // If generatedFiles was not explicitly attached, synthesize from markdown links in content
                             if (filesToRender.length === 0 && msg.content) {
-                              const matches = Array.from((msg.content || '').matchAll(/\[(.*?)\]\((https?:\/\/[^\s\)]+)\)/g))
+                              const matches = Array.from((msg.content || '').matchAll(/\[(.*?)\]\((https?:\/\/[^\s)]+)\)/g))
                               const synthetic: any[] = []
                               for (const m of matches) {
                                 const lbl = m[1] || 'deliverable'
@@ -9556,7 +9859,7 @@ export const Dashboard: React.FC = () => {
                           )}
 
                           {/* Structured Display Cards (e.g. sports match card) */}
-                          {msg.displayCards && msg.displayCards.length > 0 && (
+                          {Array.isArray(msg.displayCards) && msg.displayCards.length > 0 && (
                             <div className="mt-3 space-y-3">
                               {msg.displayCards.map((card, cIdx) => {
                                 if (card.card_type === 'render_sports_card') {
@@ -9861,8 +10164,13 @@ export const Dashboard: React.FC = () => {
                     />
                     <button
                       onClick={async () => {
-                        await navigator.clipboard.writeText(shareUrl)
-                        showToast('Link copied to clipboard!', 'info')
+                        try {
+                          await navigator.clipboard.writeText(shareUrl)
+                          showToast('Link copied to clipboard!', 'info')
+                        } catch {
+                          // Safari rejects clipboard writes outside user gestures
+                          showToast('Could not copy — long-press the link to copy it.', 'info')
+                        }
                       }}
                       className="min-h-[38px] px-4 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 active:bg-white/30 border border-white/15 text-xs font-bold text-white transition-all shrink-0 flex items-center gap-1.5 touch-manipulation"
                     >
@@ -10178,8 +10486,25 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* Unified File/Text Preview — Ochuko dock for text artifacts, modal for media */}
-      {previewingFile && (() => {
-        const pn = previewingFile.name.toLowerCase()
+      {previewingFile && (
+        <ErrorBoundary
+          fallback={
+            <div
+              className="fixed inset-0 bg-[#07080a]/95 z-[100] flex flex-col items-center justify-center gap-4 p-6"
+              onClick={() => setPreviewingFile(null)}
+            >
+              <p className="text-white/80 text-sm text-center">This preview hit an error and could not be rendered.</p>
+              <button
+                className="min-h-[44px] px-5 rounded-lg bg-white/10 border border-white/20 text-white text-sm font-semibold active:bg-white/20"
+                onClick={(e) => { e.stopPropagation(); setPreviewingFile(null) }}
+              >
+                Close preview
+              </button>
+            </div>
+          }
+        >
+        {(() => {
+        const pn = (previewingFile.name || '').toLowerCase()
         if (pn.endsWith('.zip')) {
           return (
             <ZipAppPreviewer
@@ -10198,7 +10523,7 @@ export const Dashboard: React.FC = () => {
           previewingFile.projectFiles ||
           (allRecentFiles && allRecentFiles.length > 1)
         )
-        const pIsImg = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(pn)
+        const pIsImg = (previewingFile.type || '').startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(pn)
         const pIsPdf = previewingFile.type === 'application/pdf' || pn.endsWith('.pdf')
         const pIsBin = /\.(docx?|xlsx?|pptx?|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(pn)
         if (!pIsPdf && (!pIsBin || hasRepoContext) && (!pIsImg || hasRepoContext || pn.endsWith('.svg'))) {
@@ -10322,6 +10647,32 @@ export const Dashboard: React.FC = () => {
                   <span>{copiedModalPreview ? 'Copied' : 'Copy'}</span>
                 </button>
               )}
+              {previewingFile && ((previewingFile.name || '').toLowerCase().endsWith('.md') || previewingFile.type === 'text/markdown' || previewingFile.type === 'markdown') && (
+                <div className="flex items-center rounded-lg border border-[#ffffff]/10 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewView('preview')}
+                    className={`px-3 py-1.5 text-[11px] font-bold flex items-center gap-1.5 transition ${
+                      previewView === 'preview' ? 'bg-white/10 text-white' : 'text-brand-muted hover:text-brand-text'
+                    }`}
+                    title="Rendered markdown preview"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>Preview</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewView('raw')}
+                    className={`px-3 py-1.5 text-[11px] font-bold flex items-center gap-1.5 transition ${
+                      previewView === 'raw' ? 'bg-white/10 text-white' : 'text-brand-muted hover:text-brand-text'
+                    }`}
+                    title="Raw markdown source"
+                  >
+                    <Code2 className="w-3.5 h-3.5" />
+                    <span>Raw</span>
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={async () => {
@@ -10386,8 +10737,8 @@ export const Dashboard: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           >
             {(() => {
-              const nameLower = previewingFile.name.toLowerCase()
-              const isImg = previewingFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
+              const nameLower = (previewingFile.name || '').toLowerCase()
+              const isImg = (previewingFile.type || '').startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(nameLower)
               const isHtml = previewingFile.type === 'text/html' || previewingFile.type === 'html' || nameLower.endsWith('.html')
               const isPdf = previewingFile.type === 'application/pdf' || nameLower.endsWith('.pdf')
               const isBinary = /\.(docx?|xlsx?|pptx?|rar|tar|gz|7z|exe|bin|iso|dmg)$/i.test(nameLower)
@@ -10483,7 +10834,34 @@ export const Dashboard: React.FC = () => {
                 )
               }
 
-              // Text / Code / Markdown / JSON / etc.
+              // Markdown: rendered Preview (default) or Raw source via header toggle
+              const isMd = nameLower.endsWith('.md') || previewingFile.type === 'text/markdown' || previewingFile.type === 'markdown'
+              const mdText = loadedPreviewContent || previewingFile.content || ''
+
+              if (isMd) {
+                if (previewLoading) {
+                  return (
+                    <div className="flex flex-col items-center justify-center p-12 gap-3 text-white/70">
+                      <Loader2 className="w-7 h-7 animate-spin text-white/80" />
+                      <span className="text-xs font-mono">Loading file contents...</span>
+                    </div>
+                  )
+                }
+                if (previewView === 'raw') {
+                  return (
+                    <pre className="w-full h-full max-h-[85vh] bg-[#0b0c0f] border border-[#1e2025] rounded-lg p-6 text-[#c9d1d9] font-mono text-[13px] overflow-auto whitespace-pre-wrap select-text leading-relaxed shadow-inner">
+                      {mdText || "No text content available to display."}
+                    </pre>
+                  )
+                }
+                return (
+                  <div className="w-full h-full max-h-[85vh] overflow-auto bg-[#0b0c0f] border border-[#1e2025] rounded-lg p-4 sm:p-6 select-text leading-relaxed shadow-inner">
+                    {mdText ? renderMarkdown(mdText) : <p className="text-white/40 text-sm">No text content available to display.</p>}
+                  </div>
+                )
+              }
+
+              // Text / Code / JSON / etc.
               return previewLoading ? (
                 <div className="flex flex-col items-center justify-center p-12 gap-3 text-white/70">
                   <Loader2 className="w-7 h-7 animate-spin text-white/80" />
@@ -10504,7 +10882,9 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
         )
-      })()}
+        })()}
+        </ErrorBoundary>
+      )}
 
     </div>
 
