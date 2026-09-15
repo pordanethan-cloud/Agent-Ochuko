@@ -4276,6 +4276,23 @@ export const Dashboard: React.FC = () => {
     }
   }, [mode])
 
+  const [bridgeOnline, setBridgeOnline] = useState<boolean | null>(null)
+
+  const checkBridgeStatus = useCallback(async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:3920/health', { signal: AbortSignal.timeout(600) })
+      setBridgeOnline(res.ok)
+    } catch {
+      setBridgeOnline(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isHeaderSettingsOpen) {
+      checkBridgeStatus()
+    }
+  }, [isHeaderSettingsOpen, checkBridgeStatus])
+
   const handleLaunchBridge = () => {
     window.location.href = 'ochuko://start'
     showToast('Launching Workstation Bridge on-demand (Pattern A)...', 'info')
@@ -4286,12 +4303,24 @@ export const Dashboard: React.FC = () => {
         const res = await fetch('http://127.0.0.1:3920/health', { signal: AbortSignal.timeout(800) })
         if (res.ok) {
           clearInterval(interval)
+          setBridgeOnline(true)
           showToast('Workstation Bridge connected on port 3920!', 'info')
           window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
         }
       } catch {}
       if (attempts >= 10) clearInterval(interval)
     }, 600)
+  }
+
+  const handleStopBridge = async () => {
+    try {
+      await fetch('http://127.0.0.1:3920/shutdown', { method: 'POST', mode: 'no-cors' })
+      setBridgeOnline(false)
+      showToast('Workstation Bridge stopped (Pattern B: battery saved).', 'info')
+      window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+    } catch {
+      setBridgeOnline(false)
+    }
   }
 
   useEffect(() => {
@@ -8446,39 +8475,6 @@ export const Dashboard: React.FC = () => {
                 )
               })}
             </div>
-            {mode === 'agent' && (
-              <button
-                type="button"
-                onClick={mountedFolderName ? handleUnmountFolder : handleMountFolder}
-                className={`hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border transition active:scale-95 cursor-pointer select-none ${
-                  mountedFolderName
-                    ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300 shadow-sm shadow-cyan-500/20'
-                    : 'bg-white/[0.05] border-white/[0.1] text-[#8e95a2] hover:text-white hover:bg-white/[0.08]'
-                }`}
-                title={mountedFolderName ? `Mounted: ${mountedFolderName}. Click to unmount.` : "Mount local folder via HTML5 File System Access API (Zero setup)"}
-              >
-                <Folder className="w-3 h-3 text-cyan-400 shrink-0" />
-                <span className="truncate max-w-[110px]">
-                  {mountedFolderName || 'Mount Folder'}
-                </span>
-                {mountedFolderName ? (
-                  <X className="w-2.5 h-2.5 text-cyan-400/70 hover:text-white ml-0.5" />
-                ) : (
-                  <FolderPlus className="w-2.5 h-2.5 text-[#8e95a2] ml-0.5" />
-                )}
-              </button>
-            )}
-            {mode === 'agent' && (
-              <button
-                type="button"
-                onClick={handleLaunchBridge}
-                className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border transition active:scale-95 cursor-pointer select-none bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
-                title="Launch Workstation Bridge on-demand (Pattern A: ochuko://start). Shuts down automatically when idle (Pattern B)."
-              >
-                <Terminal className="w-3 h-3 text-indigo-400 shrink-0" />
-                <span>Bridge</span>
-              </button>
-            )}
           </div>
 
           {/* Right Side: Stop/Send Actions */}
@@ -8534,6 +8530,231 @@ export const Dashboard: React.FC = () => {
           Beyond the prompt lies the pattern.
         </p>
       </div>
+    </div>
+  )
+
+  const renderSettingsBody = (isMobile: boolean) => (
+    <div className={isMobile ? 'space-y-3.5' : 'space-y-2.5 p-1'}>
+      {/* Section 1: Workstation & PC Access */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 px-1">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+            <Cpu className="w-3.5 h-3.5" /> Workstation Access
+          </span>
+          {mode !== 'agent' ? (
+            <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 font-medium">
+              Requires Agent Mode
+            </span>
+          ) : (
+            <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-medium">
+              Active
+            </span>
+          )}
+        </div>
+
+        {/* Workstation Access Switch */}
+        <div
+          role="switch"
+          aria-checked={isWorkstationAccessEnabled}
+          aria-label="Toggle Workstation Access"
+          onClick={() => {
+            const val = !isWorkstationAccessEnabled
+            setIsWorkstationAccessEnabled(val)
+            localStorage.setItem('ochuko_workstation_access_enabled', val ? 'true' : 'false')
+            window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
+            showToast(val ? 'Workstation Access enabled' : 'Workstation Access disabled', 'info')
+          }}
+          className={`p-3 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition select-none ${
+            isWorkstationAccessEnabled
+              ? 'bg-cyan-500/[0.08] border-cyan-500/30 hover:bg-cyan-500/[0.12]'
+              : 'bg-white/[0.03] border-white/[0.08] hover:bg-white/[0.06]'
+          }`}
+        >
+          <div className="flex flex-col min-w-0 pointer-events-none">
+            <span className="text-white text-xs sm:text-[11px] font-semibold">Enable PC Access</span>
+            <span className="text-[10.5px] sm:text-[9.5px] text-brand-muted">Read/write files on this physical machine</span>
+          </div>
+          <div
+            className={`relative inline-flex h-6 w-11 sm:h-5 sm:w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out pointer-events-none ${
+              isWorkstationAccessEnabled ? 'bg-cyan-500 shadow-sm shadow-cyan-500/30' : 'bg-white/[0.15]'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 sm:h-4 sm:w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                isWorkstationAccessEnabled ? 'translate-x-5 sm:translate-x-4' : 'translate-x-0'
+              }`}
+            />
+          </div>
+        </div>
+
+        {/* Local Folder Mount (HTML5 File System Access) */}
+        <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Folder className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="text-xs sm:text-[11.5px] font-semibold text-white truncate max-w-[170px] sm:max-w-[150px]">
+                {mountedFolderName || 'Local Folder Mount'}
+              </span>
+            </div>
+            {mountedFolderName ? (
+              <span className="text-[9.5px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
+                Mounted
+              </span>
+            ) : (
+              <span className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-white/10 text-white/50 shrink-0">
+                Not Mounted
+              </span>
+            )}
+          </div>
+          <p className="text-[10.5px] sm:text-[9.5px] text-brand-muted mb-2.5">
+            {mountedFolderName
+              ? 'Direct browser folder handle. Read and written directly via HTML5 File System API with 0% battery drain.'
+              : 'Direct browser folder access via W3C File System Access API. Zero daemons, 0% idle battery drain.'}
+          </p>
+          {mountedFolderName ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleMountFolder}
+                className="flex-1 min-h-[38px] sm:min-h-[32px] flex items-center justify-center gap-1.5 text-xs sm:text-[11px] font-semibold rounded-lg bg-white/10 hover:bg-white/15 active:bg-white/20 text-white transition cursor-pointer touch-manipulation"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+                <span>Change Folder</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleUnmountFolder}
+                className="min-h-[38px] sm:min-h-[32px] px-3 flex items-center justify-center gap-1 text-xs sm:text-[11px] font-semibold rounded-lg bg-red-500/15 hover:bg-red-500/25 active:bg-red-500/30 text-red-300 border border-red-500/30 transition cursor-pointer touch-manipulation"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Unmount</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleMountFolder}
+              className="w-full min-h-[42px] sm:min-h-[34px] flex items-center justify-center gap-2 text-xs sm:text-[11px] font-semibold rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 active:bg-cyan-500/40 text-cyan-300 border border-cyan-500/40 transition cursor-pointer touch-manipulation shadow-sm"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span>Mount Local Folder</span>
+            </button>
+          )}
+        </div>
+
+        {/* Workstation Companion Bridge (Pattern A & B) */}
+        <div className="p-3 rounded-xl bg-indigo-500/[0.08] border border-indigo-500/25">
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Terminal className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span className="text-xs sm:text-[11.5px] font-semibold text-white truncate">Companion Bridge</span>
+            </div>
+            {bridgeOnline ? (
+              <span className="flex items-center gap-1 text-[9.5px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Online :3920
+              </span>
+            ) : (
+              <span className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-white/10 text-white/50 shrink-0">
+                Standby (0% battery)
+              </span>
+            )}
+          </div>
+          <p className="text-[10.5px] sm:text-[9.5px] text-indigo-200/75 mb-2.5">
+            Full OS terminal & local process bridge. Pattern A starts on-demand (ochuko://start), Pattern B auto-shuts down after 15m idle.
+          </p>
+          {bridgeOnline ? (
+            <button
+              type="button"
+              onClick={handleStopBridge}
+              className="w-full min-h-[38px] sm:min-h-[32px] flex items-center justify-center gap-1.5 text-xs sm:text-[11px] font-semibold rounded-lg bg-red-500/15 hover:bg-red-500/25 active:bg-red-500/30 text-red-300 border border-red-500/30 transition cursor-pointer touch-manipulation"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Stop Bridge (Preserve Battery)</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleLaunchBridge}
+              className="w-full min-h-[42px] sm:min-h-[34px] flex items-center justify-center gap-2 text-xs sm:text-[11px] font-semibold rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 active:bg-indigo-500/40 text-indigo-300 border border-indigo-500/40 transition cursor-pointer touch-manipulation shadow-sm"
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              <span>Launch Bridge (Pattern A)</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Section 2: Security & App Lock */}
+      <div className="border-t border-white/10 my-2" />
+      <div className="space-y-1">
+        <div className="px-1 text-[10px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+          Security & Privacy
+        </div>
+        {localStorage.getItem('app_lock_pin') ? (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setIsLocked(true)
+                setIsHeaderSettingsOpen(false)
+              }}
+              className="w-full text-left px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-[36px] text-xs sm:text-[11px] text-brand-text hover:bg-white/5 active:bg-white/10 rounded-lg transition flex items-center gap-2.5 font-semibold cursor-pointer touch-manipulation"
+            >
+              <Lock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
+              <span>Lock App</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLockMode('change')
+                setIsHeaderSettingsOpen(false)
+              }}
+              className="w-full text-left px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-[36px] text-xs sm:text-[11px] text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10 rounded-lg transition flex items-center gap-2.5 font-semibold cursor-pointer touch-manipulation"
+            >
+              <KeyRound className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
+              <span>Change PIN</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLockMode('disable')
+                setIsHeaderSettingsOpen(false)
+              }}
+              className="w-full text-left px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-[36px] text-xs sm:text-[11px] text-red-400/80 hover:text-red-400 hover:bg-red-950/15 active:bg-red-950/25 rounded-lg transition flex items-center gap-2.5 font-semibold cursor-pointer touch-manipulation"
+            >
+              <Unlock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-red-400/60 shrink-0" />
+              <span>Disable PIN Lock</span>
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setLockMode('setup')
+              setIsHeaderSettingsOpen(false)
+            }}
+            className="w-full text-left px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-[36px] text-xs sm:text-[11px] text-brand-text hover:bg-white/5 active:bg-white/10 rounded-lg transition flex items-center gap-2.5 font-semibold cursor-pointer touch-manipulation"
+          >
+            <Lock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
+            <span>Setup PIN Lock</span>
+          </button>
+        )}
+      </div>
+
+      {/* Section 3: Session Management */}
+      <div className="border-t border-white/10 my-2" />
+      <button
+        type="button"
+        onClick={() => {
+          handleSignOut()
+          setIsHeaderSettingsOpen(false)
+        }}
+        className="w-full text-left px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-[36px] text-xs sm:text-[11px] text-red-400 hover:text-red-300 hover:bg-red-950/15 active:bg-red-950/25 rounded-lg transition flex items-center gap-2.5 font-semibold cursor-pointer touch-manipulation"
+      >
+        <LogOut className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
+        <span>Terminate Session</span>
+      </button>
     </div>
   )
 
@@ -9256,104 +9477,53 @@ export const Dashboard: React.FC = () => {
               <button
                 onClick={() => setIsHeaderSettingsOpen(o => !o)}
                 className="min-h-[44px] min-w-[44px] w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl text-white/75 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.14] transition duration-150 active:scale-95 cursor-pointer shrink-0 touch-manipulation"
-                title="Settings & security"
+                title="Settings & workstation"
               >
                 <Settings className="w-5 h-5 sm:w-4 sm:h-4" />
               </button>
               {isHeaderSettingsOpen && (
-                <div className="absolute right-0 mt-1.5 w-60 sm:w-56 max-h-[calc(100dvh-70px)] sm:max-h-[calc(100vh-80px)] overflow-y-auto rounded-xl border border-brand-border bg-brand-card/95 backdrop-blur-md shadow-2xl z-50 py-1.5 select-none touch-manipulation">
-                  {mode === 'agent' && (
-                    <>
-                      <div
-                        role="switch"
-                        aria-checked={isWorkstationAccessEnabled}
-                        aria-label="Toggle Workstation Access"
-                        onClick={() => {
-                          const val = !isWorkstationAccessEnabled
-                          setIsWorkstationAccessEnabled(val)
-                          localStorage.setItem('ochuko_workstation_access_enabled', val ? 'true' : 'false')
-                          window.dispatchEvent(new Event('ochuko_workstation_access_changed'))
-                          showToast(val ? 'Workstation Access enabled (Agent Mode)' : 'Workstation Access disabled', 'info')
-                        }}
-                        className="px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-[40px] flex items-center justify-between gap-3 cursor-pointer hover:bg-white/5 active:bg-white/10 transition-colors select-none"
-                      >
-                        <div className="flex flex-col min-w-0 pointer-events-none">
-                          <span className="text-brand-text text-xs sm:text-[11px] font-semibold flex items-center gap-1.5 truncate">
-                            <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" /> Workstation Access
-                          </span>
-                          <span className="text-[10px] sm:text-[9.5px] text-cyan-400/80 font-medium pl-5">Direct PC File Access</span>
-                        </div>
+                <>
+                  {/* Mobile Slide-Up Bottom Sheet (Rendered via Portal to escape any ancestor overflow/clipping) */}
+                  {typeof document !== 'undefined' &&
+                    createPortal(
+                      <div className="sm:hidden fixed inset-0 z-[9999] flex flex-col justify-end">
+                        {/* Dim Backdrop */}
                         <div
-                          className={`relative inline-flex h-6 w-11 sm:h-5 sm:w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out pointer-events-none ${
-                            isWorkstationAccessEnabled ? 'bg-cyan-500 shadow-sm shadow-cyan-500/30' : 'bg-white/[0.15]'
-                          }`}
-                        >
-                          <span
-                            className={`pointer-events-none inline-block h-5 w-5 sm:h-4 sm:w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                              isWorkstationAccessEnabled ? 'translate-x-5 sm:translate-x-4' : 'translate-x-0'
-                            }`}
-                          />
+                          className="fixed inset-0 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+                          onClick={() => setIsHeaderSettingsOpen(false)}
+                        />
+                        {/* Native-style Slide-Up Sheet */}
+                        <div className="relative z-10 w-full max-h-[85dvh] overflow-y-auto rounded-t-3xl border-t border-white/15 bg-[#0c0e14] shadow-2xl p-4 pb-8 animate-in slide-in-from-bottom duration-200 select-none touch-manipulation">
+                          <div className="w-12 h-1.5 rounded-full bg-white/20 mx-auto mb-3" />
+                          <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-white/10">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-lg bg-cyan-500/15 flex items-center justify-center border border-cyan-500/30">
+                                <Settings className="w-4 h-4 text-cyan-400" />
+                              </div>
+                              <div>
+                                <h3 className="text-sm font-bold text-white leading-tight">Settings & Workstation</h3>
+                                <p className="text-[10px] text-brand-muted leading-tight">Device mounting, bridge & security</p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setIsHeaderSettingsOpen(false)}
+                              className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white cursor-pointer active:scale-95 transition"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                          {renderSettingsBody(true)}
                         </div>
-                      </div>
-                      <div className="border-t border-[#1e2025]/50 my-1" />
-                    </>
-                  )}
-                  {localStorage.getItem('app_lock_pin') ? (
-                    <>
-                      <button
-                        onClick={() => {
-                          setIsLocked(true)
-                          setIsHeaderSettingsOpen(false)
-                        }}
-                        className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-brand-text hover:bg-white/5 active:bg-white/10 transition flex items-center gap-2 font-semibold"
-                      >
-                        <Lock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
-                        <span>Lock App</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setLockMode('change')
-                          setIsHeaderSettingsOpen(false)
-                        }}
-                        className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-brand-muted hover:text-brand-text hover:bg-white/5 active:bg-white/10 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
-                      >
-                        <KeyRound className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
-                        <span>Change PIN</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setLockMode('disable')
-                          setIsHeaderSettingsOpen(false)
-                        }}
-                        className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-red-400/70 hover:text-red-400 hover:bg-red-950/10 active:bg-red-950/20 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]/50"
-                      >
-                        <Unlock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-red-400/50 shrink-0" />
-                        <span>Disable PIN</span>
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setLockMode('setup')
-                        setIsHeaderSettingsOpen(false)
-                      }}
-                      className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-brand-text hover:bg-white/5 active:bg-white/10 transition flex items-center gap-2 font-semibold"
-                    >
-                      <Lock className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-brand-muted shrink-0" />
-                      <span>Setup PIN Lock</span>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      handleSignOut()
-                      setIsHeaderSettingsOpen(false)
-                    }}
-                    className="w-full text-left px-4 py-3 sm:py-2.5 min-h-[44px] text-xs sm:text-[11px] text-red-400/75 hover:text-red-450 hover:bg-red-950/15 active:bg-red-950/25 transition flex items-center gap-2 font-semibold border-t border-[#1e2025]"
-                  >
-                    <LogOut className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
-                    <span>Terminate Session</span>
-                  </button>
-                </div>
+                      </div>,
+                      document.body
+                    )}
+
+                  {/* Desktop Popover Menu (Anchored under settings button) */}
+                  <div className="hidden sm:block absolute right-0 mt-1.5 w-80 max-h-[calc(100vh-80px)] overflow-y-auto rounded-2xl border border-white/10 bg-[#0d0f17]/95 backdrop-blur-xl shadow-2xl p-3 z-50 select-none touch-manipulation animate-in fade-in zoom-in-95 duration-150">
+                    {renderSettingsBody(false)}
+                  </div>
+                </>
               )}
             </div>
           </div>
